@@ -1,7 +1,11 @@
 from collections.abc import Generator
+import copy
 from dataclasses import dataclass, field
 from functools import partial
+import itertools
+import multiprocessing as mp
 import os
+import pickle
 from typing import Union, Tuple, List, Dict, Any, Iterator, Callable, Optional
 
 import numpy as np
@@ -11,14 +15,16 @@ from scipy.stats import norm, multivariate_normal  # type: ignore
 import torch
 import torch.nn as nn
 import torch.optim as optim
-
 from torchtyping import TensorType
+from tqdm import tqdm
 
-n_ground_truth_components, n_features, dataset_size = None, None, None
+from utils import dotdict
+
+n_ground_truth_components, activation_dim, dataset_size = None, None, None
 
 @dataclass
 class RandomDatasetGenerator(Generator):
-    n_features: int
+    activation_dim: int
     n_ground_truth_components: int
     batch_size: int
     feature_num_nonzero: int
@@ -29,14 +35,13 @@ class RandomDatasetGenerator(Generator):
     
     frac_nonzero: float = field(init=False)
     decay: TensorType['n_ground_truth_components'] = field(init=False)
-    feats: TensorType['n_ground_truth_components', 'n_features'] = field(init=False)
+    feats: TensorType['n_ground_truth_components', 'activation_dim'] = field(init=False)
     corr_matrix: Optional[TensorType['n_ground_truth_components', 
                                      'n_ground_truth_components']] = field(init=False) 
     component_probs: Optional[TensorType['n_ground_truth_components']] = field(init=False)
 
     def __post_init__(self):
         self.frac_nonzero = self.feature_num_nonzero / self.n_ground_truth_components
-        print("Fraction of nonzero elements in the codes is ", self.frac_nonzero)
 
         # Define the probabilities of each component being included in the data
         self.decay = torch.tensor(
@@ -51,18 +56,14 @@ class RandomDatasetGenerator(Generator):
             self.component_probs = (
                 self.decay * self.frac_nonzero
             )  # Only if non-correlated
-            print(
-                "Mean component probabilities are ",
-                torch.mean(self.component_probs).item(),
-            )
         self.feats = generate_rand_feats(
-            self.n_features,
+            self.activation_dim,
             self.n_ground_truth_components,
             runs_share_feats=self.runs_share_feats,
             device=self.device,
         )
 
-    def send(self, ignored_arg: Any) -> TensorType['dataset_size', 'n_features']:
+    def send(self, ignored_arg: Any) -> TensorType['dataset_size', 'activation_dim']:
 
         if self.correlated:
             _, _, data = generate_correlated_dataset(
@@ -88,29 +89,34 @@ class RandomDatasetGenerator(Generator):
         raise StopIteration
 
 def generate_rand_dataset(
-    num_feats: int,
+    n_ground_truth_components: int, # 
     dataset_size: int,
     feature_probs: TensorType['n_ground_truth_components'],
-    feats: TensorType['n_ground_truth_components', 'n_features'],
+    feats: TensorType['n_ground_truth_components', 'activation_dim'],
     device: Union[torch.device, str],
 ) -> Tuple[
-      TensorType['n_ground_truth_components', 'n_features'], 
+      TensorType['n_ground_truth_components', 'activation_dim'], 
       TensorType['dataset_size','n_ground_truth_components'], 
-      TensorType['dataset_size', 'n_features']
+      TensorType['dataset_size', 'activation_dim']
     ]:
 
-    dataset_thresh = torch.rand(dataset_size, num_feats, device=device)
-    dataset_values = torch.rand(dataset_size, num_feats, device=device)
+    dataset_thresh = torch.rand(dataset_size, n_ground_truth_components, device=device)
+    dataset_values = torch.rand(dataset_size, n_ground_truth_components, device=device)
 
     data_zero = torch.zeros_like(dataset_thresh, device=device)
+
 
     dataset_codes = torch.where(
         dataset_thresh <= feature_probs,
         dataset_values,
         data_zero,
-    )
+    ) # dim: dataset_size x n_ground_truth_components
 
-    dataset = dataset_codes @ feats
+    # Multiply by a 2D random matrix of feature strengths
+    feature_strengths = torch.rand(dataset_size, n_ground_truth_components, device=device)
+    dataset = (dataset_codes * feature_strengths) @ feats
+
+    # dataset = dataset_codes @ feats
 
     return feats, dataset_codes, dataset
 
@@ -119,14 +125,14 @@ def generate_correlated_dataset(
     num_feats: int,
     dataset_size: int,
     corr_matrix: TensorType['n_ground_truth_components', 'n_ground_truth_components'],
-    feats: TensorType['n_ground_truth_components', 'n_features'],
+    feats: TensorType['n_ground_truth_components', 'activation_dim'],
     frac_nonzero: float,
     decay: TensorType['n_ground_truth_components'],
     device: Union[torch.device, str],
 ) -> Tuple[
-      TensorType['n_ground_truth_components', 'n_features'], 
+      TensorType['n_ground_truth_components', 'activation_dim'], 
       TensorType['dataset_size','n_ground_truth_components'], 
-      TensorType['dataset_size', 'n_features']
+      TensorType['dataset_size', 'activation_dim']
     ]:
 
     # Get a correlated gaussian sample
@@ -175,11 +181,10 @@ def generate_rand_feats(
     num_feats: int,
     runs_share_feats: bool,
     device: Union[torch.device, str],
-) -> TensorType['n_ground_truth_components', 'n_features']:
+) -> TensorType['n_ground_truth_components', 'activation_dim']:
     data_path = os.path.join(os.getcwd(), "data")
     data_filename = os.path.join(data_path, f"feats_{feat_dim}_{num_feats}.npy")
 
-    print("feat_dim is ", feat_dim, " and num_feats is ", num_feats)
     feats = np.random.multivariate_normal(
         np.zeros(feat_dim), np.eye(feat_dim), size=num_feats
     )
@@ -281,39 +286,39 @@ def mean_max_cosine_similarity(ground_truth_features, learned_dictionary, debug=
 
     return mmcs
 
-def main():    
-    activation_dim = 256
-    n_ground_truth_components = activation_dim * 2
-    n_components_dictionary = n_ground_truth_components * 1
+def get_n_dead_neurons(result):
+    # Estimate number of dead neurons
+    if len(result.hidden_acts_log) >= result.max_len_hidden_acts_log:
+        result.hidden_acts_log.pop()
+    result.hidden_acts_log.insert(0, result.hidden_acts.abs().mean(dim=0))
+    hidden_acts_means = torch.stack(result.hidden_acts_log)
+    hidden_acts_means = hidden_acts_means.mean(dim=0)
+    n_dead_neurons = sum(hidden_acts_means == 0)
+    return n_dead_neurons
 
+def analyse_result(result):
+    get_n_dead_neurons(result)
+
+def run_single_go(cfg: dotdict):
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    batch_size = 256
-    noise_std = 0.1
-    l1_alpha = 0.1
-    learning_rate=0.001
-    epochs = 50000
-
-    feature_prob_decay = 1.00
-    feature_num_nonzero = 5
-    correlated_components = False
-
+    
     data_generator = RandomDatasetGenerator(
-        n_features=activation_dim,
-        n_ground_truth_components=n_ground_truth_components,
-        batch_size=batch_size,
-        feature_num_nonzero=feature_num_nonzero,
-        feature_prob_decay=feature_prob_decay,
+        activation_dim=cfg.activation_dim,
+        n_ground_truth_components=cfg.n_ground_truth_components,
+        batch_size=cfg.batch_size,
+        feature_num_nonzero=cfg.feature_num_nonzero,
+        feature_prob_decay=cfg.feature_prob_decay,
         correlated=True,
         runs_share_feats=False,
         device=device,
     )
 
-    auto_encoder = AutoEncoder(activation_dim, n_components_dictionary).to(device)
+    auto_encoder = AutoEncoder(cfg.activation_dim, cfg.n_components_dictionary).to(device)
 
     ground_truth_features = data_generator.feats
     # Train the model
-    optimizer = optim.Adam(auto_encoder.parameters(), lr=learning_rate)
-    for epoch in range(epochs):
+    optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.learning_rate)
+    for epoch in range(cfg.epochs):
         epoch_loss = 0.0
 
         # for batch_index in range(dataset_size // batch_size):
@@ -321,7 +326,7 @@ def main():
             # batch = final_dataset[batch_index*batch_size:(batch_index+1)*batch_size].to(device)
             # batch = create_dataset(ground_truth_features, probabilities, batch_size).float().to(device)
         batch = next(data_generator)
-        batch = batch + 0.1 * torch.randn_like(batch)
+        batch = batch + cfg.noise_level * torch.randn_like(batch)
 
 
         optimizer.zero_grad()
@@ -330,10 +335,8 @@ def main():
         x_hat, c = auto_encoder(batch)
         
         # Compute the reconstruction loss and L1 regularization
-        l_reconstruction = (batch - x_hat).pow(2).sum(dim=1).sqrt().mean() / x_hat.size(1)
-        # l_reconstruction = torch.nn.MSELoss()(batch, x_hat)
-        # l_reconstruction = (batch - x_hat).pow(2).mean(dim=1).sqrt().mean() / x_hat.size(1)
-        l_l1 = l1_alpha * torch.norm(c,1, dim=1).mean() / c.size(1)
+        l_reconstruction = torch.nn.MSELoss()(batch, x_hat)
+        l_l1 = cfg.l1_alpha * torch.norm(c,1, dim=1).mean() / c.size(1)
         # l_l1 = l1_alpha * torch.norm(c,1, dim=1).sum() / c.size(1)
 
         # Compute the total loss
@@ -347,7 +350,7 @@ def main():
         # Add the loss for this batch to the total loss for this epoch
         epoch_loss += loss.item()
 
-        if epoch % 100 == 0:
+        if (epoch + 1) % 1000 == 0:
             # Calculate MMCS
             learned_dictionary = auto_encoder.decoder.weight.data.t()
             mmcs = mean_max_cosine_similarity(ground_truth_features.to(auto_encoder.device), learned_dictionary)
@@ -358,9 +361,54 @@ def main():
             # debug_sparsity_of_c(auto_encoder, ground_truth_features, probabilities, batch_size)
             
             if(True):
-                print(f"Epoch {epoch+1}/{epochs}: Reconstruction = {l_reconstruction:.6f} | l1: {l_l1:.6f}")
+                print(f"Epoch {epoch+1}/{cfg.epochs}: Reconstruction = {l_reconstruction:.6f} | l1: {l_l1:.6f}")
     # debug_sparsity_of_c(auto_encoder, ground_truth_features, probabilities, batch_size)
+
+    learned_dictionary = auto_encoder.decoder.weight.data.t()
+    mmcs = mean_max_cosine_similarity(ground_truth_features.to(auto_encoder.device), learned_dictionary)
     mmcs, max_cos = mean_max_cosine_similarity(ground_truth_features.to("cpu"), learned_dictionary.to("cpu"), debug=True)
+
+    return mmcs, max_cos
+
+def worker(cfg: dotdict):
+    print(f"starting with l1_alpha: {cfg.l1_alpha} | learned_dict_ratio: {cfg.learned_dict_ratio}")
+    mmcs, max_cos = run_single_go(cfg)
+    return mmcs
+
+def main():
+    cfg = dotdict()
+    cfg.activation_dim = 256
+    cfg.n_ground_truth_components = cfg.activation_dim * 2
+    cfg.learned_dict_ratio = 1.0
+    cfg.n_components_dictionary = int(cfg.n_ground_truth_components * cfg.learned_dict_ratio)
+
+    cfg.batch_size = 256
+    cfg.noise_std = 0.1
+    cfg.l1_alpha = 0.1
+    cfg.learning_rate=0.001
+    cfg.epochs = 20000
+    cfg.noise_level = 0.0
+
+    cfg.feature_prob_decay = 0.99
+    cfg.feature_num_nonzero = 5
+    cfg.correlated_components = False
+
+
+    l1_range = [10 ** (exp/4) for exp in range(-8, 9)] # replicate is (-8,9)
+    learned_dict_ratios = [2 ** exp for exp in range(-2, 6)] # replicate is (-2,6)
+    print(l1_range)
+    print(learned_dict_ratios)
+    mmsc_matrix = np.zeros((len(l1_range), len(learned_dict_ratios)))
+    for l1_alpha, learned_dict_ratio in tqdm(list(itertools.product(l1_range, learned_dict_ratios))):
+        cfg.l1_alpha = l1_alpha
+        cfg.learned_dict_ratio = learned_dict_ratio
+        cfg.n_components_dictionary = int(cfg.n_ground_truth_components * cfg.learned_dict_ratio)
+        mmsc, max_cov = run_single_go(cfg)
+        print(f"l1_alpha: {l1_alpha} | learned_dict_ratio: {learned_dict_ratio} | mmsc: {mmsc:.3f}")
+        mmsc_matrix[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = mmsc
+
+    print(mmsc_matrix)
+    pickle.dump(mmsc_matrix, open("mmsc_matrix.pkl", "wb"))
 
 if __name__ == "__main__":
     main()
