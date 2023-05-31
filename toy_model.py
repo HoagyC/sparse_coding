@@ -255,36 +255,29 @@ class AutoEncoder(nn.Module):
     @property
     def device(self):
         return next(self.parameters()).device
-    
+
+def cosine_sim(
+    vecs1: Union[torch.Tensor, torch.nn.parameter.Parameter],
+    vecs2: Union[torch.Tensor, torch.nn.parameter.Parameter],
+) -> np.ndarray:
+    vecs = [vecs1, vecs2]
+    for i in range(len(vecs)):
+        vecs[i] = vecs[i].detach().cpu().numpy()
+    vecs1, vecs2 = vecs
+    normalize = lambda v: (v.T / np.linalg.norm(v, axis=1)).T
+    vecs1_norm = normalize(vecs1)
+    vecs2_norm = normalize(vecs2)
+
+    return vecs1_norm @ vecs2_norm.T
+
 
 def mean_max_cosine_similarity(ground_truth_features, learned_dictionary, debug=False):
     # Calculate cosine similarity between all pairs of ground truth and learned features
-    cos_sim = torch.nn.functional.cosine_similarity(ground_truth_features.unsqueeze(1), learned_dictionary.unsqueeze(0),  dim=2)
-    
-    # Find the maximum cosine similarity for each ground truth feature
-    max_cos_sim, _ = torch.max(cos_sim, dim=1)
-
-    # Calculate the mean of the maximum cosine similarities
-    mmcs = torch.mean(max_cos_sim)
-
-    if(debug):
-        # Sort the tensor values
-        sorted_tensor, _ = torch.sort(max_cos_sim.cpu())
-
-        # Create the histogram
-        fig = go.Figure(data=[go.Histogram(x=sorted_tensor, nbinsx=10)])
-
-        fig.update_layout(
-            title="Histogram of Max Cosine Similarity",
-            xaxis=dict(title="Max Cosine Sim", range=[0, 1]),
-            yaxis=dict(title="Frequency")
-        )
-        fig.update_xaxes(range=[0, 1])
-
-        fig.show()
-        return mmcs, max_cos_sim
-
+    cos_sim = cosine_sim(ground_truth_features, learned_dictionary)
+    # Find the maximum cosine similarity for each ground truth feature, then average
+    mmcs = cos_sim.max(axis=1).mean()
     return mmcs
+
 
 def get_n_dead_neurons(result):
     # Estimate number of dead neurons
