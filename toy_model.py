@@ -292,19 +292,20 @@ def get_n_dead_neurons(result):
 def analyse_result(result):
     get_n_dead_neurons(result)
 
-def run_single_go(cfg: dotdict):
+def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]):
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     
-    data_generator = RandomDatasetGenerator(
-        activation_dim=cfg.activation_dim,
-        n_ground_truth_components=cfg.n_ground_truth_components,
-        batch_size=cfg.batch_size,
-        feature_num_nonzero=cfg.feature_num_nonzero,
-        feature_prob_decay=cfg.feature_prob_decay,
-        correlated=True,
-        runs_share_feats=False,
-        device=device,
-    )
+    if not data_generator:
+        data_generator = RandomDatasetGenerator(
+            activation_dim=cfg.activation_dim,
+            n_ground_truth_components=cfg.n_ground_truth_components,
+            batch_size=cfg.batch_size,
+            feature_num_nonzero=cfg.feature_num_nonzero,
+            feature_prob_decay=cfg.feature_prob_decay,
+            correlated=True,
+            runs_share_feats=False,
+            device=device,
+        )
 
     auto_encoder = AutoEncoder(cfg.activation_dim, cfg.n_components_dictionary).to(device)
 
@@ -359,9 +360,7 @@ def run_single_go(cfg: dotdict):
 
     learned_dictionary = auto_encoder.decoder.weight.data.t()
     mmcs = mean_max_cosine_similarity(ground_truth_features.to(auto_encoder.device), learned_dictionary)
-    mmcs, max_cos = mean_max_cosine_similarity(ground_truth_features.to("cpu"), learned_dictionary.to("cpu"), debug=True)
-
-    return mmcs, max_cos
+    return mmcs, learned_dictionary
 
 def worker(cfg: dotdict):
     print(f"starting with l1_alpha: {cfg.l1_alpha} | learned_dict_ratio: {cfg.learned_dict_ratio}")
@@ -392,16 +391,33 @@ def main():
     print(l1_range)
     print(learned_dict_ratios)
     mmsc_matrix = np.zeros((len(l1_range), len(learned_dict_ratios)))
+
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    data_generator = RandomDatasetGenerator(
+        activation_dim=cfg.activation_dim,
+        n_ground_truth_components=cfg.n_ground_truth_components,
+        batch_size=cfg.batch_size,
+        feature_num_nonzero=cfg.feature_num_nonzero,
+        feature_prob_decay=cfg.feature_prob_decay,
+        correlated=True,
+        runs_share_feats=False,
+        device=device,
+    )
+    # 2D array of learned dictionaries
+    learned_dicts = np.zeros((len(l1_range), len(learned_dict_ratios), cfg.n_ground_truth_components, cfg.n_components_dictionary))
+
     for l1_alpha, learned_dict_ratio in tqdm(list(itertools.product(l1_range, learned_dict_ratios))):
         cfg.l1_alpha = l1_alpha
         cfg.learned_dict_ratio = learned_dict_ratio
         cfg.n_components_dictionary = int(cfg.n_ground_truth_components * cfg.learned_dict_ratio)
-        mmsc, max_cov = run_single_go(cfg)
+        mmsc, learned_dict = run_single_go(cfg, data_generator)
         print(f"l1_alpha: {l1_alpha} | learned_dict_ratio: {learned_dict_ratio} | mmsc: {mmsc:.3f}")
         mmsc_matrix[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = mmsc
+        learned_dicts[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = learned_dict
 
     print(mmsc_matrix)
     pickle.dump(mmsc_matrix, open("mmsc_matrix.pkl", "wb"))
+    pickle.dump(learned_dicts, open("learned_dicts.pkl", "wb"))
 
 if __name__ == "__main__":
     main()
