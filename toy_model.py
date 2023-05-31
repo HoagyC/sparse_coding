@@ -403,8 +403,8 @@ def main():
         runs_share_feats=False,
         device=device,
     )
-    # 2D array of learned dictionaries
-    learned_dicts = np.zeros((len(l1_range), len(learned_dict_ratios), cfg.n_ground_truth_components, cfg.n_components_dictionary))
+    # 2D array of learned dictionaries, indexed by l1_alpha and learned_dict_ratio, start with Nones
+    learned_dicts = [[None for _ in range(len(learned_dict_ratios))] for _ in range(len(l1_range))]
 
     for l1_alpha, learned_dict_ratio in tqdm(list(itertools.product(l1_range, learned_dict_ratios))):
         cfg.l1_alpha = l1_alpha
@@ -413,7 +413,7 @@ def main():
         mmsc, learned_dict = run_single_go(cfg, data_generator)
         print(f"l1_alpha: {l1_alpha} | learned_dict_ratio: {learned_dict_ratio} | mmsc: {mmsc:.3f}")
         mmsc_matrix[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = mmsc
-        learned_dicts[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = learned_dict
+        learned_dicts[l1_range.index(l1_alpha)][learned_dict_ratios.index(learned_dict_ratio)] = learned_dict.cpu().numpy()
 
     print(mmsc_matrix)
     pickle.dump(mmsc_matrix, open("mmsc_matrix.pkl", "wb"))
