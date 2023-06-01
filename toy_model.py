@@ -8,6 +8,7 @@ import os
 import pickle
 from typing import Union, Tuple, List, Dict, Any, Iterator, Callable, Optional
 
+from matplotlib import pyplot as plt
 import numpy as np
 import plotly.graph_objects as go
 from scipy.stats import norm, multivariate_normal  # type: ignore
@@ -113,7 +114,7 @@ def generate_rand_dataset(
     ) # dim: dataset_size x n_ground_truth_components
 
     # Multiply by a 2D random matrix of feature strengths
-    feature_strengths = torch.rand(dataset_size, n_ground_truth_components, device=device)
+    feature_strengths = torch.rand((dataset_size, n_ground_truth_components), device=device)
     dataset = (dataset_codes * feature_strengths) @ feats
 
     # dataset = dataset_codes @ feats
@@ -122,7 +123,7 @@ def generate_rand_dataset(
 
 
 def generate_correlated_dataset(
-    num_feats: int,
+    n_ground_truth_components: int,
     dataset_size: int,
     corr_matrix: TensorType['n_ground_truth_components', 'n_ground_truth_components'],
     feats: TensorType['n_ground_truth_components', 'activation_dim'],
@@ -137,7 +138,7 @@ def generate_correlated_dataset(
 
     # Get a correlated gaussian sample
     mvn = torch.distributions.MultivariateNormal(
-        loc=torch.zeros(num_feats, device=device), covariance_matrix=corr_matrix
+        loc=torch.zeros(n_ground_truth_components, device=device), covariance_matrix=corr_matrix
     )
     corr_thresh = mvn.sample()
 
@@ -157,8 +158,8 @@ def generate_correlated_dataset(
     # So np.isclose(np.mean(component_probs), frac_nonzero) will be True
 
     # Generate sparse correlated codes
-    dataset_thresh = torch.rand(dataset_size, num_feats, device=device)
-    dataset_values = torch.rand(dataset_size, num_feats, device=device)
+    dataset_thresh = torch.rand(dataset_size, n_ground_truth_components, device=device)
+    dataset_values = torch.rand(dataset_size, n_ground_truth_components, device=device)
 
     data_zero = torch.zeros_like(corr_thresh, device=device)
     dataset_codes = torch.where(
@@ -168,10 +169,12 @@ def generate_correlated_dataset(
     )
     # Ensure there are no datapoints w/ 0 features
     zero_sample_index = (dataset_codes.count_nonzero(dim=1) == 0).nonzero()[:,0]
-    random_index = torch.randint(low=0, high=num_feats, size=(zero_sample_index.shape[0],)).to(dataset_codes.device)
+    random_index = torch.randint(low=0, high=n_ground_truth_components, size=(zero_sample_index.shape[0],)).to(dataset_codes.device)
     dataset_codes[zero_sample_index, random_index] = 1.0
 
-    dataset = dataset_codes @ feats
+    # Multiply by a 2D random matrix of feature strengths
+    feature_strengths = torch.rand((dataset_size, n_ground_truth_components), device=device)
+    dataset = (dataset_codes * feature_strengths) @ feats
 
     return feats, dataset_codes, dataset
 
@@ -367,6 +370,40 @@ def worker(cfg: dotdict):
     mmcs, max_cos = run_single_go(cfg)
     return mmcs
 
+def plot_mmsc_mat():
+    mmsc_mat = pickle.load(open("mmsc_matrix.pkl", "rb")).T
+    plt.imshow(mmsc_mat, interpolation="nearest")
+    x_labels = [f"{2**exp:.2f}" for exp in range(-8, 9)]
+    plt.xticks(range(len(x_labels)), x_labels)
+    plt.xlabel("l1_alpha")
+    y_labels = [f"{2**exp:.2f}" for exp in range(-2, 6)]
+    plt.yticks(range(len(y_labels)), y_labels)
+    plt.ylabel("learned_dict_ratio")
+    plt.colorbar()
+    plt.set_cmap('viridis')
+    plt.show()
+
+def compare_mmsc_with_larger_dicts(dict: np.array, larger_dicts: List[np.array]) -> float:
+    """
+    :param dict: The dict to compare to others. Shape (activation_dim, n_dict_elements)
+    :param larger_dicts: A list of dicts to compare to. Shape (activation_dim, n_dict_elements(variable)]) * n_larger_dicts
+    :return The mean max cosine similarity of the dict to the larger dicts
+
+    Takes a dict, and for each element finds the most similar element in each of the larger dicts, takes the average
+    Repeats this for all elements in the dict
+    """
+    n_larger_dicts = len(larger_dicts)
+    n_elements = dict.shape[0]
+    max_cosine_similarities = np.zeros(n_elements, n_larger_dicts)
+    for elem_ndx in range(n_elements):
+        element = dict[elem_ndx]
+        for dict_ndx, larger_dict in enumerate(larger_dicts):
+            cosine_sims = cosine_sim(element.unsqueeze(0), larger_dict)
+            max_cosine_similarity = max(cosine_sims)
+            max_cosine_similarities[elem_ndx, dict_ndx] = max_cosine_similarity
+    mean_max_cosine_similarity = max_cosine_similarities.mean()
+    return mean_max_cosine_similarity
+
 def main():
     cfg = dotdict()
     cfg.activation_dim = 256
@@ -420,4 +457,4 @@ def main():
     pickle.dump(learned_dicts, open("learned_dicts.pkl", "wb"))
 
 if __name__ == "__main__":
-    main()
+    plot_mmsc_mat()
