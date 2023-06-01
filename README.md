@@ -1,4 +1,6 @@
 
+*Work done with Logan Riggs who wrote the original replication notebook. Thanks to Pierre Peigne for the data generating code and Lee Sharkey for answering questions.*
+
 ## Sparse Coding
 
 `toy_model.py` contains code which allows for the replication of the first half of the post [Taking features out of superposition with sparse autoencoders](https://www.lesswrong.com/posts/z6QQJbtpkEAX3Aojj/interim-research-report-taking-features-out-of-superposition).
@@ -26,6 +28,9 @@ pip install torch numpy transformers datasets tiktoken wandb tqdm
 
 Change config/train_gpt2.py to have:
 ```
+import time
+wandb_project = 'sparsecode'
+wandb_run_name = 'supertiny-' + str(time.time())
 n_layer = 6 # (same as train_shakespeare and Lee's work)
 n_embd = 16 # (same as Lee's)
 n_head = 8 # (needs to divide n_embd)
@@ -38,8 +43,9 @@ Run the standard commands in the [nanoGPT readme](https://github.com/karpathy/na
 but in the run command change nproc_per_node to 1
 so:
 
-```
-python data/openwebtext/prepare.py
-torchrun --standalone --nproc_per_node=1 train.py config/train_gpt2.py
-```
+`python data/openwebtext/prepare.py`
 
+if using multiple gpus:
+`torchrun --standalone --nproc_per_node={N_GPU} train.py config/train_gpt2.py`
+else:
+`python train.py`
