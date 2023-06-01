@@ -1,6 +1,7 @@
 from collections.abc import Generator
 import copy
 from dataclasses import dataclass, field
+import datetime
 from functools import partial
 import itertools
 import multiprocessing as mp
@@ -381,24 +382,35 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
     n_dead_neurons = get_n_dead_neurons(auto_encoder, data_generator)
     return mmcs, learned_dictionary, n_dead_neurons, running_recon_loss
 
-def worker(cfg: dotdict):
-    print(f"starting with l1_alpha: {cfg.l1_alpha} | learned_dict_ratio: {cfg.learned_dict_ratio}")
-    mmcs, max_cos = run_single_go(cfg)
-    return mmcs
 
-def plot_mmsc_mat():
-    mmsc_mat = pickle.load(open("mmsc_matrix.pkl", "rb")).T
+def plot_mmsc_mat(mmsc_mat, l1_alphas, learned_dict_ratios, show_plots=True, save_path=None, title=None):
+    """
+    :param mmsc_mat: matrix of MMCS values
+    :param l1_alphas: list of l1_alphas
+    :param learned_dict_ratios: list of learned_dict_ratios
+    :param show_plots: whether to show the plot
+    :param save_path: path to save the plot
+    :param title: title of the plot
+    :return: None
+    """
+    mmsc_mat = mmsc_mat.T
+    assert mmsc_mat.shape == (len(l1_alphas), len(learned_dict_ratios))
     plt.imshow(mmsc_mat, interpolation="nearest")
-    x_labels = [f"{2**exp:.2f}" for exp in range(-8, 9)]
+    x_labels = [str(l1_alpha) for l1_alpha in l1_alphas]
     plt.xticks(range(len(x_labels)), x_labels)
     plt.xlabel("l1_alpha")
-    y_labels = [f"{2**exp:.2f}" for exp in range(-2, 6)]
+    y_labels = [str(learned_dict_ratio) for learned_dict_ratio in learned_dict_ratios]
     plt.yticks(range(len(y_labels)), y_labels)
     plt.ylabel("learned_dict_ratio")
     plt.colorbar()
     plt.set_cmap('viridis')
-    plt.show()
-
+    if show_plots:
+        plt.show()
+    
+    if save_path:
+        plt.savefig(os.path.join(save_path, title))
+        plt.close()
+        
 def compare_mmsc_with_larger_dicts(dict: np.array, larger_dicts: List[np.array]) -> float:
     """
     :param dict: The dict to compare to others. Shape (activation_dim, n_dict_elements)
@@ -438,14 +450,21 @@ def main():
     cfg.feature_num_nonzero = 5
     cfg.correlated_components = False
 
+    seed = 0
+    torch.manual_seed(seed)
+    np.random.seed(seed)
 
-    l1_range = [10 ** (exp/4) for exp in range(0, 9)] # replicate is (-8,9)
-    learned_dict_ratios = [2 ** exp for exp in range(2, 6)] # replicate is (-2,6)
-    print(l1_range)
-    print(learned_dict_ratios)
+    l1_range = [10 ** (exp/4) for exp in range(-8, 9)] # replicate is (-8,9)
+    learned_dict_ratios = [2 ** exp for exp in range(-2, 6)] # replicate is (-2,6)
+    print("Range of l1 values being used: ", l1_range)
+    print("Range of dict_sizes compared to ground truth being used:",  learned_dict_ratios)
     mmsc_matrix = np.zeros((len(l1_range), len(learned_dict_ratios)))
+    dead_neurons_matrix = np.zeros((len(l1_range), len(learned_dict_ratios)))
+    recon_loss_matrix = np.zeros((len(l1_range), len(learned_dict_ratios)))
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+    # Using a single data generator for all runs so that can compare learned dicts
     data_generator = RandomDatasetGenerator(
         activation_dim=cfg.activation_dim,
         n_ground_truth_components=cfg.n_ground_truth_components,
@@ -456,8 +475,10 @@ def main():
         runs_share_feats=False,
         device=device,
     )
+
     # 2D array of learned dictionaries, indexed by l1_alpha and learned_dict_ratio, start with Nones
     learned_dicts = [[None for _ in range(len(learned_dict_ratios))] for _ in range(len(l1_range))]
+
 
     for l1_alpha, learned_dict_ratio in tqdm(list(itertools.product(l1_range, learned_dict_ratios))):
         cfg.l1_alpha = l1_alpha
@@ -465,9 +486,35 @@ def main():
         cfg.n_components_dictionary = int(cfg.n_ground_truth_components * cfg.learned_dict_ratio)
         mmsc, learned_dict, n_dead_neurons, reconstruction_loss = run_single_go(cfg, data_generator)
         print(f"l1_alpha: {l1_alpha} | learned_dict_ratio: {learned_dict_ratio} | mmsc: {mmsc:.3f} | n_dead_neurons: {n_dead_neurons} | reconstruction_loss: {reconstruction_loss:.3f}")
-        mmsc_matrix[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = mmsc
-        learned_dicts[l1_range.index(l1_alpha)][learned_dict_ratios.index(learned_dict_ratio)] = learned_dict.cpu().numpy()
 
+        mmsc_matrix[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = mmsc
+        dead_neurons_matrix[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = n_dead_neurons
+        recon_loss_matrix[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = reconstruction_loss
+        learned_dicts[l1_range.index(l1_alpha)][learned_dict_ratios.index(learned_dict_ratio)] = learned_dict.cpu().numpy()
+    
+    outputs_folder = "outputs"
+    current_time = datetime.now().strftime("%Y%m%d-%H%M%S")
+    outputs_folder = os.path.join(outputs_folder, current_time)
+    os.makedirs(outputs_folder, exist_ok=True)
+
+    # Save the matrices and the data generator
+    plot_mmsc_mat(mmsc_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="mmsc_matrix.png")
+    plot_mmsc_mat(dead_neurons_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="dead_neurons_matrix.png")
+    plot_mmsc_mat(recon_loss_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="recon_loss_matrix.png")
+    with open(os.path.join(outputs_folder, "learned_dicts.pkl"), "wb") as f:
+        pickle.dump(learned_dicts, f)
+    with open(os.path.join(outputs_folder, "data_generator.pkl"), "wb") as f:
+        pickle.dump(data_generator, f)
+
+    # Compare each learned dictionary to the larger ones
+    av_mmsc_with_larger_dicts = np.zeros((len(l1_range), len(learned_dict_ratios)))
+    for l1_alpha, learned_dict_ratio in tqdm(list(itertools.product(l1_range, learned_dict_ratios))):
+        learned_dict = learned_dicts[l1_range.index(l1_alpha)][learned_dict_ratios.index(learned_dict_ratio)]
+        larger_dicts = [learned_dicts[l1_range.index(l1_alpha)][learned_dict_ratios.index(learned_dict_ratio)] for learned_dict_ratio in learned_dict_ratios if learned_dict_ratio > learned_dict_ratio]
+        mean_max_cosine_similarity = compare_mmsc_with_larger_dicts(learned_dict, larger_dicts)
+        av_mmsc_with_larger_dicts[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = mean_max_cosine_similarity
+    
+    plot_mmsc_mat(av_mmsc_with_larger_dicts, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="av_mmsc_with_larger_dicts")
 
 if __name__ == "__main__":
     main()
