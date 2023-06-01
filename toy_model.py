@@ -1,7 +1,8 @@
+import argparse
 from collections.abc import Generator
 import copy
 from dataclasses import dataclass, field
-import datetime
+from datetime import datetime
 from functools import partial
 import itertools
 import multiprocessing as mp
@@ -31,7 +32,6 @@ class RandomDatasetGenerator(Generator):
     batch_size: int
     feature_num_nonzero: int
     feature_prob_decay: float
-    runs_share_feats: bool
     correlated: bool
     device: Union[torch.device, str]
     
@@ -52,7 +52,7 @@ class RandomDatasetGenerator(Generator):
 
         if self.correlated:
             self.corr_matrix = generate_corr_matrix(
-                self.n_ground_truth_components, self.runs_share_feats, device=self.device
+                self.n_ground_truth_components, device=self.device
             )
         else:
             self.component_probs = (
@@ -61,7 +61,6 @@ class RandomDatasetGenerator(Generator):
         self.feats = generate_rand_feats(
             self.activation_dim,
             self.n_ground_truth_components,
-            runs_share_feats=self.runs_share_feats,
             device=self.device,
         )
 
@@ -183,7 +182,6 @@ def generate_correlated_dataset(
 def generate_rand_feats(
     feat_dim: int,
     num_feats: int,
-    runs_share_feats: bool,
     device: Union[torch.device, str],
 ) -> TensorType['n_ground_truth_components', 'activation_dim']:
     data_path = os.path.join(os.getcwd(), "data")
@@ -194,20 +192,13 @@ def generate_rand_feats(
     )
     feats = feats.T / np.linalg.norm(feats, axis=1)
     feats = feats.T
-    if runs_share_feats:
-        if os.path.exists(data_filename):
-            feats = np.load(data_filename)
-        else:
-            if not os.path.exists(data_path):
-                os.makedirs(data_path)
-            np.save(data_filename, feats)
 
     feats_tensor = torch.from_numpy(feats).to(device).float()
     return feats_tensor
 
 
 def generate_corr_matrix(
-    num_feats: int, runs_share_feats: bool, device: Union[torch.device, str]
+    num_feats: int, device: Union[torch.device, str]
 ) -> TensorType['n_ground_truth_components', 'n_ground_truth_components']:
     corr_mat_path = os.path.join(os.getcwd(), "data")
     corr_mat_filename = os.path.join(corr_mat_path, f"corr_mat_{num_feats}.npy")
@@ -221,13 +212,6 @@ def generate_corr_matrix(
             1.001 * min_eig * np.eye(corr_matrix.shape[0], corr_matrix.shape[1])
         )
 
-    if runs_share_feats:
-        if os.path.exists(corr_mat_filename):
-            corr_matrix = np.load(corr_mat_filename)
-        else:
-            if not os.path.exists(corr_mat_path):
-                os.makedirs(corr_mat_path)
-            np.save(corr_mat_filename, corr_matrix)
     corr_matrix_tensor = torch.from_numpy(corr_matrix).to(device).float()
 
     return corr_matrix_tensor
@@ -261,12 +245,13 @@ class AutoEncoder(nn.Module):
         return next(self.parameters()).device
 
 def cosine_sim(
-    vecs1: Union[torch.Tensor, torch.nn.parameter.Parameter],
-    vecs2: Union[torch.Tensor, torch.nn.parameter.Parameter],
+    vecs1: Union[torch.Tensor, torch.nn.parameter.Parameter, np.ndarray],
+    vecs2: Union[torch.Tensor, torch.nn.parameter.Parameter, np.ndarray],
 ) -> np.ndarray:
     vecs = [vecs1, vecs2]
     for i in range(len(vecs)):
-        vecs[i] = vecs[i].detach().cpu().numpy()
+        if isinstance(vecs[i], torch.Tensor) or isinstance(vecs[i], torch.nn.parameter.Parameter):
+            vecs[i] = vecs[i].detach().cpu().numpy()
     vecs1, vecs2 = vecs
     normalize = lambda v: (v.T / np.linalg.norm(v, axis=1)).T
     vecs1_norm = normalize(vecs1)
@@ -294,10 +279,10 @@ def get_n_dead_neurons(auto_encoder, data_generator, n_batches=10):
     outputs = []
     for i in range(n_batches):
         batch = next(data_generator)
-        x_hat, c = auto_encoder(batch)
+        x_hat, c = auto_encoder(batch) # x_hat: (batch_size, activation_dim), c: (batch_size, n_dict_components)
         outputs.append(c)
-    outputs = torch.cat(outputs)
-    mean_activations = outputs.mean(dim=0)  
+    outputs = torch.cat(outputs) # (n_batches * batch_size, n_dict_components)
+    mean_activations = outputs.mean(dim=0) # (n_dict_components), c is after the ReLU, no need to take abs
     n_dead_neurons = (mean_activations == 0).sum().item()
     return n_dead_neurons
 
@@ -314,8 +299,7 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
             batch_size=cfg.batch_size,
             feature_num_nonzero=cfg.feature_num_nonzero,
             feature_prob_decay=cfg.feature_prob_decay,
-            correlated=True,
-            runs_share_feats=False,
+            correlated=cfg.correlated_components,
             device=device,
         )
 
@@ -383,7 +367,7 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
     return mmcs, learned_dictionary, n_dead_neurons, running_recon_loss
 
 
-def plot_mmsc_mat(mmsc_mat, l1_alphas, learned_dict_ratios, show_plots=True, save_path=None, title=None):
+def plot_mmsc_mat(mmsc_mat, l1_alphas, learned_dict_ratios, show=True, save_folder=None, title=None):
     """
     :param mmsc_mat: matrix of MMCS values
     :param l1_alphas: list of l1_alphas
@@ -393,10 +377,11 @@ def plot_mmsc_mat(mmsc_mat, l1_alphas, learned_dict_ratios, show_plots=True, sav
     :param title: title of the plot
     :return: None
     """
-    mmsc_mat = mmsc_mat.T
     assert mmsc_mat.shape == (len(l1_alphas), len(learned_dict_ratios))
+    mmsc_mat = mmsc_mat.T
     plt.imshow(mmsc_mat, interpolation="nearest")
-    x_labels = [str(l1_alpha) for l1_alpha in l1_alphas]
+    # turn to str with 2 decimal places
+    x_labels = [f"{l1_alpha:.2f}" for l1_alpha in l1_alphas]
     plt.xticks(range(len(x_labels)), x_labels)
     plt.xlabel("l1_alpha")
     y_labels = [str(learned_dict_ratio) for learned_dict_ratio in learned_dict_ratios]
@@ -404,11 +389,11 @@ def plot_mmsc_mat(mmsc_mat, l1_alphas, learned_dict_ratios, show_plots=True, sav
     plt.ylabel("learned_dict_ratio")
     plt.colorbar()
     plt.set_cmap('viridis')
-    if show_plots:
+    if show:
         plt.show()
     
-    if save_path:
-        plt.savefig(os.path.join(save_path, title))
+    if save_folder:
+        plt.savefig(os.path.join(save_folder, title))
         plt.close()
         
 def compare_mmsc_with_larger_dicts(dict: np.array, larger_dicts: List[np.array]) -> float:
@@ -422,40 +407,49 @@ def compare_mmsc_with_larger_dicts(dict: np.array, larger_dicts: List[np.array])
     """
     n_larger_dicts = len(larger_dicts)
     n_elements = dict.shape[0]
-    max_cosine_similarities = np.zeros(n_elements, n_larger_dicts)
+    max_cosine_similarities = np.zeros((n_elements, n_larger_dicts))
     for elem_ndx in range(n_elements):
-        element = dict[elem_ndx]
+        element =  np.expand_dims(dict[elem_ndx], 0)
         for dict_ndx, larger_dict in enumerate(larger_dicts):
-            cosine_sims = cosine_sim(element.unsqueeze(0), larger_dict)
+            cosine_sims = cosine_sim(element, larger_dict).squeeze()
             max_cosine_similarity = max(cosine_sims)
             max_cosine_similarities[elem_ndx, dict_ndx] = max_cosine_similarity
     mean_max_cosine_similarity = max_cosine_similarities.mean()
     return mean_max_cosine_similarity
 
 def main():
-    cfg = dotdict()
-    cfg.activation_dim = 256
-    cfg.n_ground_truth_components = cfg.activation_dim * 2
-    cfg.learned_dict_ratio = 1.0
-    cfg.n_components_dictionary = int(cfg.n_ground_truth_components * cfg.learned_dict_ratio)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--activation_dim", type=int, default=256)
+    parser.add_argument("--n_ground_truth_components", type=int, default=512)
+    parser.add_argument("--learned_dict_ratio", type=float, default=1.0)
+    
+    parser.add_argument("--batch_size", type=int, default=256)
+    parser.add_argument("--noise_std", type=float, default=0.1)
+    parser.add_argument("--l1_alpha", type=float, default=0.1)
+    parser.add_argument("--learning_rate", type=float, default=0.001)
+    parser.add_argument("--epochs", type=int, default=20000)
+    parser.add_argument("--noise_level", type=float, default=0.0)
 
-    cfg.batch_size = 256
-    cfg.noise_std = 0.1
-    cfg.l1_alpha = 0.1
-    cfg.learning_rate=0.001
-    cfg.epochs = 8000
-    cfg.noise_level = 0.0
+    parser.add_argument("--feature_prob_decay", type=float, default=0.99)
+    parser.add_argument("--feature_num_nonzero", type=int, default=5)
+    parser.add_argument("--correlated_components", type=bool, default=True)
 
-    cfg.feature_prob_decay = 0.99
-    cfg.feature_num_nonzero = 5
-    cfg.correlated_components = False
+    parser.add_argument("--l1_exp_low", type=int, default=-8)
+    parser.add_argument("--l1_exp_high", type=int, default=9) # not inclusive
+    parser.add_argument("--dict_ratio_exp_low", type=int, default=-2)
+    parser.add_argument("--dict_ratio_exp_high", type=int, default=6) # not inclusive
 
-    seed = 0
-    torch.manual_seed(seed)
-    np.random.seed(seed)
+    parser.add_argument("--seed", type=int, default=0)
 
-    l1_range = [10 ** (exp/4) for exp in range(-8, 9)] # replicate is (-8,9)
-    learned_dict_ratios = [2 ** exp for exp in range(-2, 6)] # replicate is (-2,6)
+    args = parser.parse_args()
+    cfg = dotdict(vars(args)) # convert to dotdict via dict
+    cfg.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    torch.manual_seed(cfg.seed)
+    np.random.seed(cfg.seed)
+
+    l1_range = [10 ** (exp/4) for exp in range(cfg.l1_exp_low, cfg.l1_exp_high)] # replicate is (-8,9)
+    learned_dict_ratios = [2 ** exp for exp in range(cfg.dict_ratio_exp_low, cfg.dict_ratio_exp_high)] # replicate is (-2,6)
     print("Range of l1 values being used: ", l1_range)
     print("Range of dict_sizes compared to ground truth being used:",  learned_dict_ratios)
     mmsc_matrix = np.zeros((len(l1_range), len(learned_dict_ratios)))
@@ -471,8 +465,7 @@ def main():
         batch_size=cfg.batch_size,
         feature_num_nonzero=cfg.feature_num_nonzero,
         feature_prob_decay=cfg.feature_prob_decay,
-        correlated=True,
-        runs_share_feats=False,
+        correlated=cfg.correlated_components,
         device=device,
     )
 
@@ -505,14 +498,24 @@ def main():
         pickle.dump(learned_dicts, f)
     with open(os.path.join(outputs_folder, "data_generator.pkl"), "wb") as f:
         pickle.dump(data_generator, f)
+    with open(os.path.join(outputs_folder, "config.pkl"), "wb") as f:
+        pickle.dump(cfg, f)
 
     # Compare each learned dictionary to the larger ones
     av_mmsc_with_larger_dicts = np.zeros((len(l1_range), len(learned_dict_ratios)))
-    for l1_alpha, learned_dict_ratio in tqdm(list(itertools.product(l1_range, learned_dict_ratios))):
-        learned_dict = learned_dicts[l1_range.index(l1_alpha)][learned_dict_ratios.index(learned_dict_ratio)]
-        larger_dicts = [learned_dicts[l1_range.index(l1_alpha)][learned_dict_ratios.index(learned_dict_ratio)] for learned_dict_ratio in learned_dict_ratios if learned_dict_ratio > learned_dict_ratio]
-        mean_max_cosine_similarity = compare_mmsc_with_larger_dicts(learned_dict, larger_dicts)
-        av_mmsc_with_larger_dicts[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = mean_max_cosine_similarity
+    try:
+        for l1_alpha, learned_dict_ratio in tqdm(list(itertools.product(l1_range, learned_dict_ratios))):
+            l1_ndx = l1_range.index(l1_alpha)
+            ratio_ndx = learned_dict_ratios.index(learned_dict_ratio)
+            if ratio_ndx == len(learned_dict_ratios) - 1:
+                continue
+            learned_dict = learned_dicts[l1_ndx][ratio_ndx]
+            larger_dicts = [learned_dicts[l1_ndx][larger_ratio_ndx] for larger_ratio_ndx in range(ratio_ndx + 1, len(learned_dict_ratios))]
+            assert len(larger_dicts) > 0 
+            mean_max_cosine_similarity = compare_mmsc_with_larger_dicts(learned_dict, larger_dicts)
+            av_mmsc_with_larger_dicts[l1_ndx, ratio_ndx] = mean_max_cosine_similarity
+    except:
+        breakpoint()
     
     plot_mmsc_mat(av_mmsc_with_larger_dicts, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="av_mmsc_with_larger_dicts")
 
