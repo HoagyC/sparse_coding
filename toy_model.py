@@ -282,14 +282,22 @@ def mean_max_cosine_similarity(ground_truth_features, learned_dictionary, debug=
     return mmcs
 
 
-def get_n_dead_neurons(result):
-    # Estimate number of dead neurons
-    if len(result.hidden_acts_log) >= result.max_len_hidden_acts_log:
-        result.hidden_acts_log.pop()
-    result.hidden_acts_log.insert(0, result.hidden_acts.abs().mean(dim=0))
-    hidden_acts_means = torch.stack(result.hidden_acts_log)
-    hidden_acts_means = hidden_acts_means.mean(dim=0)
-    n_dead_neurons = sum(hidden_acts_means == 0)
+def get_n_dead_neurons(auto_encoder, data_generator, n_batches=10):
+    """
+    :param result_dict: dictionary containing the results of a single run
+    :return: number of dead neurons
+
+    Estimates the number of dead neurons in the network by running a few batches of data through the network and
+    calculating the mean activation of each neuron. If the mean activation is 0 for a neuron, it is considered dead.
+    """
+    outputs = []
+    for i in range(n_batches):
+        batch = next(data_generator)
+        x_hat, c = auto_encoder(batch)
+        outputs.append(c)
+    outputs = torch.cat(outputs)
+    mean_activations = outputs.mean(dim=0)  
+    n_dead_neurons = (mean_activations == 0).sum().item()
     return n_dead_neurons
 
 def analyse_result(result):
@@ -315,6 +323,10 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
     ground_truth_features = data_generator.feats
     # Train the model
     optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.learning_rate)
+    
+    # Hold a running average of the reconstruction loss
+    running_recon_loss = 0.0
+    time_horizon = 10
     for epoch in range(cfg.epochs):
         epoch_loss = 0.0
 
@@ -346,6 +358,8 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
 
         # Add the loss for this batch to the total loss for this epoch
         epoch_loss += loss.item()
+        running_recon_loss *= (time_horizon - 1) / time_horizon
+        running_recon_loss += loss.item() / time_horizon
 
         if (epoch + 1) % 1000 == 0:
             # Calculate MMCS
@@ -359,11 +373,13 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
             
             if(True):
                 print(f"Epoch {epoch+1}/{cfg.epochs}: Reconstruction = {l_reconstruction:.6f} | l1: {l_l1:.6f}")
+            
     # debug_sparsity_of_c(auto_encoder, ground_truth_features, probabilities, batch_size)
 
     learned_dictionary = auto_encoder.decoder.weight.data.t()
     mmcs = mean_max_cosine_similarity(ground_truth_features.to(auto_encoder.device), learned_dictionary)
-    return mmcs, learned_dictionary
+    n_dead_neurons = get_n_dead_neurons(auto_encoder, data_generator)
+    return mmcs, learned_dictionary, n_dead_neurons, running_recon_loss
 
 def worker(cfg: dotdict):
     print(f"starting with l1_alpha: {cfg.l1_alpha} | learned_dict_ratio: {cfg.learned_dict_ratio}")
@@ -415,7 +431,7 @@ def main():
     cfg.noise_std = 0.1
     cfg.l1_alpha = 0.1
     cfg.learning_rate=0.001
-    cfg.epochs = 20000
+    cfg.epochs = 8000
     cfg.noise_level = 0.0
 
     cfg.feature_prob_decay = 0.99
@@ -423,8 +439,8 @@ def main():
     cfg.correlated_components = False
 
 
-    l1_range = [10 ** (exp/4) for exp in range(-8, 9)] # replicate is (-8,9)
-    learned_dict_ratios = [2 ** exp for exp in range(-2, 6)] # replicate is (-2,6)
+    l1_range = [10 ** (exp/4) for exp in range(0, 9)] # replicate is (-8,9)
+    learned_dict_ratios = [2 ** exp for exp in range(2, 6)] # replicate is (-2,6)
     print(l1_range)
     print(learned_dict_ratios)
     mmsc_matrix = np.zeros((len(l1_range), len(learned_dict_ratios)))
@@ -447,14 +463,11 @@ def main():
         cfg.l1_alpha = l1_alpha
         cfg.learned_dict_ratio = learned_dict_ratio
         cfg.n_components_dictionary = int(cfg.n_ground_truth_components * cfg.learned_dict_ratio)
-        mmsc, learned_dict = run_single_go(cfg, data_generator)
-        print(f"l1_alpha: {l1_alpha} | learned_dict_ratio: {learned_dict_ratio} | mmsc: {mmsc:.3f}")
+        mmsc, learned_dict, n_dead_neurons, reconstruction_loss = run_single_go(cfg, data_generator)
+        print(f"l1_alpha: {l1_alpha} | learned_dict_ratio: {learned_dict_ratio} | mmsc: {mmsc:.3f} | n_dead_neurons: {n_dead_neurons} | reconstruction_loss: {reconstruction_loss:.3f}")
         mmsc_matrix[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = mmsc
         learned_dicts[l1_range.index(l1_alpha)][learned_dict_ratios.index(learned_dict_ratio)] = learned_dict.cpu().numpy()
 
-    print(mmsc_matrix)
-    pickle.dump(mmsc_matrix, open("mmsc_matrix.pkl", "wb"))
-    pickle.dump(learned_dicts, open("learned_dicts.pkl", "wb"))
 
 if __name__ == "__main__":
-    plot_mmsc_mat()
+    main()
