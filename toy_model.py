@@ -367,9 +367,9 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
     return mmcs, learned_dictionary, n_dead_neurons, running_recon_loss
 
 
-def plot_mmsc_mat(mmsc_mat, l1_alphas, learned_dict_ratios, show=True, save_folder=None, title=None):
+def plot_mat(mat, l1_alphas, learned_dict_ratios, show=True, save_folder=None, save_name=None, title=None):
     """
-    :param mmsc_mat: matrix of MMCS values
+    :param mmsc_mat: matrix values
     :param l1_alphas: list of l1_alphas
     :param learned_dict_ratios: list of learned_dict_ratios
     :param show_plots: whether to show the plot
@@ -377,9 +377,9 @@ def plot_mmsc_mat(mmsc_mat, l1_alphas, learned_dict_ratios, show=True, save_fold
     :param title: title of the plot
     :return: None
     """
-    assert mmsc_mat.shape == (len(l1_alphas), len(learned_dict_ratios))
-    mmsc_mat = mmsc_mat.T
-    plt.imshow(mmsc_mat, interpolation="nearest")
+    assert mat.shape == (len(l1_alphas), len(learned_dict_ratios))
+    mat = mat.T
+    plt.imshow(mat, interpolation="nearest")
     # turn to str with 2 decimal places
     x_labels = [f"{l1_alpha:.2f}" for l1_alpha in l1_alphas]
     plt.xticks(range(len(x_labels)), x_labels)
@@ -389,11 +389,14 @@ def plot_mmsc_mat(mmsc_mat, l1_alphas, learned_dict_ratios, show=True, save_fold
     plt.ylabel("learned_dict_ratio")
     plt.colorbar()
     plt.set_cmap('viridis')
+    if title:
+        plt.title(title)
+
     if show:
         plt.show()
     
     if save_folder:
-        plt.savefig(os.path.join(save_folder, title))
+        plt.savefig(os.path.join(save_folder, save_name))
         plt.close()
         
 def compare_mmsc_with_larger_dicts(dict: np.array, larger_dicts: List[np.array]) -> float:
@@ -416,6 +419,30 @@ def compare_mmsc_with_larger_dicts(dict: np.array, larger_dicts: List[np.array])
             max_cosine_similarities[elem_ndx, dict_ndx] = max_cosine_similarity
     mean_max_cosine_similarity = max_cosine_similarities.mean()
     return mean_max_cosine_similarity
+
+def recalculate_results(auto_encoder, data_generator):
+    """Take a fully trained auto_encoder and a data_generator and return the results of the auto_encoder on the data_generator"""
+    time_horizon = 10
+    recon_loss = 0
+    for epoch in range(time_horizon):
+        # Get a batch of data
+        batch = data_generator.get_batch()
+        batch = torch.from_numpy(batch).to(auto_encoder.device)
+
+        # Forward pass
+        c, x_hat = auto_encoder(batch)
+
+        # Compute the reconstruction loss
+        l_reconstruction = torch.norm(x_hat - batch, 2, dim=1).sum() / batch.size(1)
+
+        # Add the loss for this batch to the total loss for this epoch
+        recon_loss += l_reconstruction.item() / time_horizon
+
+    ground_truth_features = data_generator.feats
+    learned_dictionary = auto_encoder.decoder.weight.data.t()
+    mmcs = mean_max_cosine_similarity(ground_truth_features.to(auto_encoder.device), learned_dictionary)   
+    n_dead_neurons = get_n_dead_neurons(auto_encoder, data_generator)
+    return mmcs, learned_dictionary, n_dead_neurons, recon_loss
 
 def main():
     parser = argparse.ArgumentParser()
@@ -491,9 +518,11 @@ def main():
     os.makedirs(outputs_folder, exist_ok=True)
 
     # Save the matrices and the data generator
-    plot_mmsc_mat(mmsc_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="mmsc_matrix.png")
-    plot_mmsc_mat(dead_neurons_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="dead_neurons_matrix.png")
-    plot_mmsc_mat(recon_loss_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="recon_loss_matrix.png")
+    plot_mat(mmsc_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Mean Max Cosine Similarity w/ True", save_name="mmsc_matrix.png")
+    # clamp dead_neurons to 0-100 for better visualisation
+    dead_neurons_matrix = np.clip(dead_neurons_matrix, 0, 100)
+    plot_mat(dead_neurons_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Dead Neurons", save_name="dead_neurons_matrix.png")
+    plot_mat(recon_loss_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Reconstruction Loss", save_name="recon_loss_matrix.png")
     with open(os.path.join(outputs_folder, "learned_dicts.pkl"), "wb") as f:
         pickle.dump(learned_dicts, f)
     with open(os.path.join(outputs_folder, "data_generator.pkl"), "wb") as f:
@@ -510,14 +539,14 @@ def main():
             if ratio_ndx == len(learned_dict_ratios) - 1:
                 continue
             learned_dict = learned_dicts[l1_ndx][ratio_ndx]
-            larger_dicts = [learned_dicts[l1_ndx][larger_ratio_ndx] for larger_ratio_ndx in range(ratio_ndx + 1, len(learned_dict_ratios))]
+            larger_dicts = [learned_dicts[l1_ndx][larger_ratio_ndx] for larger_ratio_ndx in range(ratio_ndx + 1, len(learned_dict_ratios))][:2]
             assert len(larger_dicts) > 0 
             mean_max_cosine_similarity = compare_mmsc_with_larger_dicts(learned_dict, larger_dicts)
             av_mmsc_with_larger_dicts[l1_ndx, ratio_ndx] = mean_max_cosine_similarity
     except:
         breakpoint()
     
-    plot_mmsc_mat(av_mmsc_with_larger_dicts, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="av_mmsc_with_larger_dicts")
+    plot_mat(av_mmsc_with_larger_dicts, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Average MMSC with larger dicts", save_name="av_mmsc_with_larger_dicts.png")
 
 if __name__ == "__main__":
     main()
