@@ -3,7 +3,7 @@ import transformer_lens
 from transformer_lens import HookedTransformerConfig, HookedTransformer
 import transformer_lens.utils as utils
 
-loaded_model = torch.load(open("models/ckpt.pt", "rb"), map_location="cpu")
+loaded_model = torch.load(open("models/17kckpt.pt", "rb"), map_location="cpu")
 
 # Example layer of model keys
 # _orig_mod.transformer.h.5.ln_1.weight
@@ -66,7 +66,7 @@ for layer_n in range(n_layers):
     new_model_dict[f"blocks.{layer_n}.attn.W_O"] = model_dict[f"_orig_mod.transformer.h.{layer_n}.attn.c_proj.weight"].view(n_heads, dims_per_head, embed_dim)
     new_model_dict[f"blocks.{layer_n}.mlp.W_in"] = model_dict[f"_orig_mod.transformer.h.{layer_n}.mlp.c_fc.weight"].T
     new_model_dict[f"blocks.{layer_n}.mlp.W_out"] = model_dict[f"_orig_mod.transformer.h.{layer_n}.mlp.c_proj.weight"].T
-    new_model_dict[f"blocks.{layer_n}.attn.mask"] = torch.zeros(context_length, context_length)
+    new_model_dict[f"blocks.{layer_n}.attn.mask"] = torch.ones(context_length, context_length)
     new_model_dict[f"blocks.{layer_n}.attn.b_Q"] = torch.zeros(n_heads, dims_per_head)
     new_model_dict[f"blocks.{layer_n}.attn.b_K"] = torch.zeros(n_heads, dims_per_head)
     new_model_dict[f"blocks.{layer_n}.attn.b_V"] = torch.zeros(n_heads, dims_per_head)
@@ -109,6 +109,7 @@ while len(sentence_list) < n:
         continue
     sentence_list.append(sentence)
 
+
 # Encode the sentences with GPT2 tokenizer
 from transformers import GPT2Tokenizer
 tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
@@ -124,6 +125,36 @@ for i in range(sentence_len):
     partial_sentence = tokenizer.decode(partial_tokens)
     predicted_token = tokenizer.decode(output.argmax(dim=-1)[0][i])
     print(partial_sentence, " -- ", predicted_token)
+
+
+# Now test auto-regression
+# Start with just a BOS token
+n_tokens = 40
+temperature = 0.8
+n_samples = 5
+top_k = 200
+for sample_ndx in range(n_samples):
+    text = ""
+    bos_id = 50256
+    for i in range(n_tokens):
+        tokens = tokenizer(text, return_tensors="pt")["input_ids"]
+        # Add the BOS token
+        tokens = torch.cat([torch.tensor([[bos_id]]), tokens], dim=-1).int()
+        output = model(tokens)
+
+        # Get the logits for the last token
+        logits = output[0][-1]
+        # Apply top-k filtering by setting all logits below the top-k to -inf
+        logits[logits.argsort()[:-top_k]] = -float("inf")
+        # Apply temperature
+        logits = logits / temperature
+        # Sample from the distribution
+        new_token = torch.multinomial(logits.softmax(dim=-1), num_samples=1)
+
+        new_text = tokenizer.decode(new_token)
+        text += new_text
+    
+    print(repr(text))
 
 
 
