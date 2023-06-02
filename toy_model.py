@@ -364,7 +364,7 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
     learned_dictionary = auto_encoder.decoder.weight.data.t()
     mmcs = mean_max_cosine_similarity(ground_truth_features.to(auto_encoder.device), learned_dictionary)
     n_dead_neurons = get_n_dead_neurons(auto_encoder, data_generator)
-    return mmcs, learned_dictionary, n_dead_neurons, running_recon_loss
+    return mmcs, auto_encoder, n_dead_neurons, running_recon_loss
 
 
 def plot_mat(mat, l1_alphas, learned_dict_ratios, show=True, save_folder=None, save_name=None, title=None):
@@ -389,6 +389,8 @@ def plot_mat(mat, l1_alphas, learned_dict_ratios, show=True, save_folder=None, s
     plt.ylabel("learned_dict_ratio")
     plt.colorbar()
     plt.set_cmap('viridis')
+    # turn x labels 90 degrees
+    plt.xticks(rotation=90)
     if title:
         plt.title(title)
 
@@ -463,7 +465,7 @@ def main():
 
     parser.add_argument("--l1_exp_low", type=int, default=-8)
     parser.add_argument("--l1_exp_high", type=int, default=9) # not inclusive
-    parser.add_argument("--dict_ratio_exp_low", type=int, default=-2)
+    parser.add_argument("--dict_ratio_exp_low", type=int, default=-3)
     parser.add_argument("--dict_ratio_exp_high", type=int, default=6) # not inclusive
 
     parser.add_argument("--seed", type=int, default=0)
@@ -497,20 +499,21 @@ def main():
     )
 
     # 2D array of learned dictionaries, indexed by l1_alpha and learned_dict_ratio, start with Nones
+    auto_encoders = [[None for _ in range(len(learned_dict_ratios))] for _ in range(len(l1_range))]
     learned_dicts = [[None for _ in range(len(learned_dict_ratios))] for _ in range(len(l1_range))]
-
 
     for l1_alpha, learned_dict_ratio in tqdm(list(itertools.product(l1_range, learned_dict_ratios))):
         cfg.l1_alpha = l1_alpha
         cfg.learned_dict_ratio = learned_dict_ratio
         cfg.n_components_dictionary = int(cfg.n_ground_truth_components * cfg.learned_dict_ratio)
-        mmsc, learned_dict, n_dead_neurons, reconstruction_loss = run_single_go(cfg, data_generator)
+        mmsc, auto_encoder, n_dead_neurons, reconstruction_loss = run_single_go(cfg, data_generator)
         print(f"l1_alpha: {l1_alpha} | learned_dict_ratio: {learned_dict_ratio} | mmsc: {mmsc:.3f} | n_dead_neurons: {n_dead_neurons} | reconstruction_loss: {reconstruction_loss:.3f}")
 
         mmsc_matrix[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = mmsc
         dead_neurons_matrix[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = n_dead_neurons
         recon_loss_matrix[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = reconstruction_loss
-        learned_dicts[l1_range.index(l1_alpha)][learned_dict_ratios.index(learned_dict_ratio)] = learned_dict.cpu().numpy()
+        auto_encoders[l1_range.index(l1_alpha)][learned_dict_ratios.index(learned_dict_ratio)] = auto_encoder.cpu()
+        learned_dicts[l1_range.index(l1_alpha)][learned_dict_ratios.index(learned_dict_ratio)] = auto_encoder.decoder.weight.detach().cpu().data.t()
     
     outputs_folder = "outputs"
     current_time = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -523,8 +526,8 @@ def main():
     dead_neurons_matrix = np.clip(dead_neurons_matrix, 0, 100)
     plot_mat(dead_neurons_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Dead Neurons", save_name="dead_neurons_matrix.png")
     plot_mat(recon_loss_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Reconstruction Loss", save_name="recon_loss_matrix.png")
-    with open(os.path.join(outputs_folder, "learned_dicts.pkl"), "wb") as f:
-        pickle.dump(learned_dicts, f)
+    with open(os.path.join(outputs_folder, "auto_encoders.pkl"), "wb") as f:
+        pickle.dump(auto_encoders, f)
     with open(os.path.join(outputs_folder, "data_generator.pkl"), "wb") as f:
         pickle.dump(data_generator, f)
     with open(os.path.join(outputs_folder, "config.pkl"), "wb") as f:
