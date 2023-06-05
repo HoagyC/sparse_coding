@@ -9,22 +9,7 @@ from nanoGPT_model import GPT, cfg
 
 loaded_model = torch.load(open("models/17kckpt.pt", "rb"), map_location="cpu")
 
-n_sentences = 10
-sentence_list = []
-dataset = load_dataset("NeelNanda/pile-10k")
-while len(sentence_list) < n_sentences:
-    sentence = dataset["train"][random.randint(0, len(dataset["train"]))]["text"]
-    # Cut off after a maximum of 20 words
-    sentence = " ".join(sentence.split(" ")[:20])
-    # If it contains non-ascii characters, skip it
-    if not all(ord(c) < 128 for c in sentence) or len(sentence) < 20:
-        continue
-    sentence_list.append(sentence)
-
-
-# Encode the sentences with GPT2 tokenizer
 tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-encoded_sentences = tokenizer(sentence_list, padding=False, truncation=True, return_tensors="pt")
 
 model = GPT(cfg)
 model_dict = loaded_model["model"]
