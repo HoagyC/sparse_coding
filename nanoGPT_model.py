@@ -1,4 +1,6 @@
 """
+Taken from github.com/karpathy/nanoGPT to load a checkpoint as a PyTorch module.
+
 Full definition of a GPT Language Model, all of it in this single file.
 References:
 1) the official GPT-2 TensorFlow implementation released by OpenAI:
@@ -358,8 +360,8 @@ cfg.batch_size = 64 # if gradient_accumulation_steps > 1, this is the micro-batc
 cfg.block_size = 256
 # model
 cfg.n_layer = 6
-cfg.n_head = 8
-cfg.n_embd = 16
+cfg.n_head = 4
+cfg.n_embd = 32
 cfg.dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 cfg.bias = False # do we use bias inside LayerNorm and Linear layers?
 # adamw optimizer

@@ -2,8 +2,8 @@ import subprocess
 import sys
 from typing import Optional
 
-VAST_NUM = 4
-VAST_PORT = 37398
+VAST_NUM = 5
+VAST_PORT = 13270
 SSH_DIRECTORY = "sparse_coding"
 dest_addr = f"root@ssh{VAST_NUM}.vast.ai"
 

@@ -695,7 +695,6 @@ def run_real_data_model(cfg):
     # cfg.model_name = "EleutherAI/pythia-70m-deduped"
     model = HookedTransformer.from_pretrained(cfg.model_name, device=cfg.device)
 
-
     dataset = load_dataset(cfg.dataset_name, split="train")
     dataset, bits_per_byte = chunk_and_tokenize(dataset, model.tokenizer, max_length=2048)
     dataset = DataLoader(dataset, batch_size=cfg.batch_size, shuffle=True)
@@ -712,7 +711,7 @@ def run_real_data_model(cfg):
     auto_encoders = [[None for _ in range(len(dict_sizes))] for _ in range(len(l1_range))]
     learned_dicts = [[None for _ in range(len(dict_sizes))] for _ in range(len(l1_range))]
 
-    for l1_ndx, dict_size_ndx in tqdm(list(itertools.product(len(l1_range), len(dict_sizes)))):
+    for l1_ndx, dict_size_ndx in tqdm(list(itertools.product(range(len(l1_range)), range(len(dict_sizes))))):
         l1_loss = l1_range[l1_ndx]
         dict_size = dict_sizes[dict_size_ndx]
 
@@ -746,7 +745,7 @@ def run_real_data_model(cfg):
 
     # Compare each learned dictionary to the larger ones
     av_mmsc_with_larger_dicts = np.zeros((len(l1_range), len(dict_sizes)))
-    for l1_ndx, dict_size_ndx in tqdm(list(itertools.product(len(l1_range), len(dict_sizes)))):
+    for l1_ndx, dict_size_ndx in tqdm(list(itertools.product(range(len(l1_range)), range(len(dict_sizes))))):
         l1_loss = l1_range[l1_ndx]
         dict_size = dict_sizes[dict_size_ndx]
         if dict_size_ndx == len(dict_sizes) - 1:
@@ -756,7 +755,7 @@ def run_real_data_model(cfg):
         assert len(larger_dicts) > 0 
         mean_max_cosine_similarity = compare_mmsc_with_larger_dicts(learned_dict, larger_dicts)
         av_mmsc_with_larger_dicts[l1_ndx, dict_size_ndx] = mean_max_cosine_similarity
-        
+
     with open(os.path.join(outputs_folder, "larger_dict_compare.pkl"), "wb") as f:
         pickle.dump(av_mmsc_with_larger_dicts, f)
     
