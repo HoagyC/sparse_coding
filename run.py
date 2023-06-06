@@ -17,7 +17,7 @@ from transformer_lens import HookedTransformer
 from torch.utils.data import DataLoader
 from utils import dotdict
 import math
-from multiprocessing import cpu_count
+import multiprocessing as mp
 from datasets import Dataset, DatasetDict, load_dataset
 from transformers import PreTrainedTokenizerBase
 from einops import rearrange
@@ -32,7 +32,7 @@ def chunk_and_tokenize(
     tokenizer: PreTrainedTokenizerBase,
     *,
     format: str = "torch",
-    num_proc: int = min(cpu_count() // 2, 8),
+    num_proc: int = min(mp.cpu_count() // 2, 8),
     text_key: str = "text",
     max_length: int = 2048,
     return_final_batch: bool = False,
@@ -409,8 +409,7 @@ def get_n_dead_neurons(auto_encoder, data_generator, n_batches=10, device="cuda"
     outputs = []
     
     for batch_ndx, batch in enumerate(data_generator):
-        input = batch["input_ids"].to(device).to(torch.float16)
-        breakpoint()
+        input = batch.to(device).to(torch.float16)
         with torch.no_grad():
             x_hat, c = auto_encoder=(input)
         outputs.append(c)
@@ -450,30 +449,20 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
     for epoch in range(cfg.epochs):
         epoch_loss = 0.0
 
-        # for batch_index in range(dataset_size // batch_size):
-            # Generate a batch of samples
-            # batch = final_dataset[batch_index*batch_size:(batch_index+1)*batch_size].to(device)
-            # batch = create_dataset(ground_truth_features, probabilities, batch_size).float().to(device)
         batch = next(data_generator)
         batch = batch + cfg.noise_level * torch.randn_like(batch)
 
-
         optimizer.zero_grad()
-
         # Forward pass
         x_hat, c = auto_encoder(batch)
-        
         # Compute the reconstruction loss and L1 regularization
         l_reconstruction = torch.nn.MSELoss()(batch, x_hat)
         l_l1 = cfg.l1_alpha * torch.norm(c,1, dim=1).mean() / c.size(1)
-        # l_l1 = l1_alpha * torch.norm(c,1, dim=1).sum() / c.size(1)
-
         # Compute the total loss
         loss = l_reconstruction + l_l1
 
         # Backward pass
         loss.backward()
-
         optimizer.step()
 
         # Add the loss for this batch to the total loss for this epoch
@@ -486,16 +475,10 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
             learned_dictionary = auto_encoder.decoder.weight.data.t()
             mmcs = mean_max_cosine_similarity(ground_truth_features.to(auto_encoder.device), learned_dictionary)
             print(f"Mean Max Cosine Similarity: {mmcs:.3f}")
-
-            # Compute the average loss for this epoch
-            # epoch_loss /= (dataset_size // batch_size)
-            # debug_sparsity_of_c(auto_encoder, ground_truth_features, probabilities, batch_size)
             
             if(True):
                 print(f"Epoch {epoch+1}/{cfg.epochs}: Reconstruction = {l_reconstruction:.6f} | l1: {l_l1:.6f}")
             
-    # debug_sparsity_of_c(auto_encoder, ground_truth_features, probabilities, batch_size)
-
     learned_dictionary = auto_encoder.decoder.weight.data.t()
     mmcs = mean_max_cosine_similarity(ground_truth_features.to(auto_encoder.device), learned_dictionary)
     n_dead_neurons = get_n_dead_neurons(auto_encoder, data_generator)
@@ -567,7 +550,7 @@ def recalculate_results(auto_encoder, data_generator):
         batch = torch.from_numpy(batch).to(auto_encoder.device)
 
         # Forward pass
-        c, x_hat = auto_encoder(batch)
+        x_hat, feat_levels = auto_encoder(batch)
 
         # Compute the reconstruction loss
         l_reconstruction = torch.norm(x_hat - batch, 2, dim=1).sum() / batch.size(1)
@@ -661,6 +644,7 @@ def run_toy_model(cfg):
     
     plot_mat(av_mmsc_with_larger_dicts, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Average MMSC with larger dicts", save_name="av_mmsc_with_larger_dicts.png")
 
+
 def run_single_go_with_real_data(cfg, dataset_folder, model):
     neurons = model.W_in.shape[-1] # Neurons is number of neurons in MLP
     auto_encoder = AutoEncoder(neurons, cfg.n_components_dictionary).to(cfg.device)
@@ -669,11 +653,12 @@ def run_single_go_with_real_data(cfg, dataset_folder, model):
     time_horizon = 1000
     # torch.autograd.set_detect_anomaly(True)
     n_chunks_in_folder = len(os.listdir(dataset_folder))
+    
     for epoch in range(cfg.epochs):
         chunk_order = np.random.permutation(n_chunks_in_folder)
-        for chunk_ndx in chunk_order:
-            chunk = pickle.load(open(os.path.join(dataset_folder, f"{chunk_ndx}.pkl"), "rb"))
-            dataset = DataLoader(chunk, batch_size=cfg.batch_size, shuffle=True)
+        for chunk_ndx, chunk_id in enumerate(chunk_order):
+            chunk_loc = os.path.join(dataset_folder, f"{chunk_id}.pkl")
+            dataset = DataLoader(pickle.load(open(chunk_loc, "rb")), batch_size=cfg.batch_size, shuffle=True)
             for batch_idx, batch in enumerate(dataset):
                 batch = batch[0].to(cfg.device)
                 optimizer.zero_grad()
@@ -685,11 +670,14 @@ def run_single_go_with_real_data(cfg, dataset_folder, model):
                 loss.backward()
                 optimizer.step()
                 
-                running_recon_loss *= (time_horizon - 1) / time_horizon
-                running_recon_loss += loss.item() / time_horizon
+                if running_recon_loss == 0.0:
+                    running_recon_loss = loss.item()
+                else:
+                    running_recon_loss *= (time_horizon - 1) / time_horizon
+                    running_recon_loss += loss.item() / time_horizon
 
                 if (batch_idx + 1) % 10 == 0:
-                    print(f"Batch: {batch_idx+1}/{len(dataset)} | Chunk: {chunk_ndx} | Reconstruction loss: {running_recon_loss:.6f} | l1: {l_l1:.6f}")
+                    print(f"Batch: {batch_idx+1}/{len(dataset)} | Chunk: {chunk_ndx} | Epoch: {epoch} | Reconstruction loss: {running_recon_loss:.6f} | l1: {l_l1:.6f}")
             
     n_dead_neurons = get_n_dead_neurons(auto_encoder, dataset)
     return auto_encoder, n_dead_neurons, running_recon_loss
@@ -711,13 +699,15 @@ def make_activation_dataset(cfg, sentence_dataset, model, dataset_folder):
         dataset.append(mlp_activation_data)
         if len(dataset) >= max_chunks:
             # Need to save, restart the list
-            dataset = torch.cat(dataset, dim=0)
+            dataset = torch.cat(dataset, dim=0).to("cpu")
             dataset = torch.utils.data.TensorDataset(dataset)
             with open(dataset_folder + "/" + str(n_saved_chunks) + ".pkl", "wb") as f:
                 pickle.dump(dataset, f)
             n_saved_chunks += 1
             print(f"Saved chunk {n_saved_chunks} of activations")
             dataset = []
+            if n_saved_chunks == cfg.n_chunks:
+                break
 
 
 def run_real_data_model(cfg):
@@ -726,7 +716,7 @@ def run_real_data_model(cfg):
 
     sentence_dataset = load_dataset(cfg.dataset_name, split="train")
     sentence_dataset, bits_per_byte = chunk_and_tokenize(sentence_dataset, model.tokenizer, max_length=1024)
-    sentence_dataset = DataLoader(sentence_dataset, batch_size=cfg.batch_size, shuffle=True)
+    sentence_dataset = DataLoader(sentence_dataset, batch_size=cfg.model_batch_size, shuffle=True)
 
     # Check if we have already run this model and got the activations
     dataset_name = cfg.dataset_name.split("/")[-1] + "-" + cfg.model_name + "-" + str(cfg.layer)
@@ -811,7 +801,7 @@ def main():
     parser.add_argument("--noise_std", type=float, default=0.1)
     parser.add_argument("--l1_alpha", type=float, default=0.1)
     parser.add_argument("--learning_rate", type=float, default=0.001)
-    parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--noise_level", type=float, default=0.0)
 
     parser.add_argument("--feature_prob_decay", type=float, default=0.99)
@@ -831,6 +821,7 @@ def main():
 
     parser.add_argument("--outputs_folder", type=str, default="outputs")
     parser.add_argument("--datasets_folder", type=str, default="datasets")
+    parser.add_argument("--n_chunks", type=int, default=400)
 
     args = parser.parse_args()
     cfg = dotdict(vars(args)) # convert to dotdict via dict
