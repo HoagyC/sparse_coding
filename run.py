@@ -63,7 +63,7 @@ def chunk_and_tokenize(
     """
 
     def _tokenize_fn(x: dict[str, list]):
-        chunk_size = min(tokenizer.model_max_length, max_length)
+        chunk_size = min(tokenizer.model_max_length, max_length) # tokenizer max length is 1024 for gpt2
         sep = tokenizer.eos_token or "<|endoftext|>"
         joined_text = sep.join([""] + x[text_key])
         output = tokenizer(
@@ -350,15 +350,16 @@ def generate_corr_matrix(
 class AutoEncoder(nn.Module):
     def __init__(self, activation_size, n_dict_components):
         super(AutoEncoder, self).__init__()
-
-        self.encoder = nn.Sequential(
-            nn.Linear(activation_size, n_dict_components),
-            nn.ReLU()
-        )
+        # create decoder using float16 to save memory
         self.decoder = nn.Linear(n_dict_components, activation_size, bias=False)
-
         # Initialize the decoder weights orthogonally
         nn.init.orthogonal_(self.decoder.weight)
+        self.decoder = self.decoder.to(torch.float16)
+
+        self.encoder = nn.Sequential(
+            nn.Linear(activation_size, n_dict_components).to(torch.float16),
+            nn.ReLU()
+        )
         
     def forward(self, x):
         c = self.encoder(x)
@@ -397,7 +398,7 @@ def mean_max_cosine_similarity(ground_truth_features, learned_dictionary, debug=
     return mmcs
 
 
-def get_n_dead_neurons(auto_encoder, data_generator, n_batches=10):
+def get_n_dead_neurons(auto_encoder, data_generator, n_batches=10, device="cuda"):
     """
     :param result_dict: dictionary containing the results of a single run
     :return: number of dead neurons
@@ -406,10 +407,15 @@ def get_n_dead_neurons(auto_encoder, data_generator, n_batches=10):
     calculating the mean activation of each neuron. If the mean activation is 0 for a neuron, it is considered dead.
     """
     outputs = []
-    for i in range(n_batches):
-        batch = next(data_generator)
-        x_hat, c = auto_encoder(batch) # x_hat: (batch_size, activation_dim), c: (batch_size, n_dict_components)
+    
+    for batch_ndx, batch in enumerate(data_generator):
+        input = batch["input_ids"].to(device).to(torch.float16)
+        breakpoint()
+        with torch.no_grad():
+            x_hat, c = auto_encoder=(input)
         outputs.append(c)
+        if batch_ndx >= n_batches:
+            break
     outputs = torch.cat(outputs) # (n_batches * batch_size, n_dict_components)
     mean_activations = outputs.mean(dim=0) # (n_dict_components), c is after the ReLU, no need to take abs
     n_dead_neurons = (mean_activations == 0).sum().item()
@@ -655,53 +661,85 @@ def run_toy_model(cfg):
     
     plot_mat(av_mmsc_with_larger_dicts, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Average MMSC with larger dicts", save_name="av_mmsc_with_larger_dicts.png")
 
-def run_single_go_with_real_data(cfg, dataset, model):
+def run_single_go_with_real_data(cfg, dataset_folder, model):
     neurons = model.W_in.shape[-1] # Neurons is number of neurons in MLP
-    layer = 2 # TODO: set this to the layer you want to use
-
     auto_encoder = AutoEncoder(neurons, cfg.n_components_dictionary).to(cfg.device)
-    optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.learning_rate)
+    optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.learning_rate, eps=1e-4)
     running_recon_loss = 0.0
-    time_horizon = 10
-    for batch_idx, batch in enumerate(dataset):
-        batch_loss = 0.0
-        batch = batch["input_ids"].to(cfg.device)
-        with torch.no_grad():
-            _, cache = model.run_with_cache(batch)
-        mlp_activation_data = cache[f"blocks.{layer}.mlp.hook_post"].to(cfg.device) # NOTE: could do all layers at once, but currently just doing 1 layer
-        mlp_activation_data = rearrange(mlp_activation_data, 'b s n -> (b s) n')
+    time_horizon = 1000
+    # torch.autograd.set_detect_anomaly(True)
+    n_chunks_in_folder = len(os.listdir(dataset_folder))
+    for epoch in range(cfg.epochs):
+        chunk_order = np.random.permutation(n_chunks_in_folder)
+        for chunk_ndx in chunk_order:
+            chunk = pickle.load(open(os.path.join(dataset_folder, f"{chunk_ndx}.pkl"), "rb"))
+            dataset = DataLoader(chunk, batch_size=cfg.batch_size, shuffle=True)
+            for batch_idx, batch in enumerate(dataset):
+                batch = batch[0].to(cfg.device)
+                optimizer.zero_grad()
+                # Run through auto_encoder
+                x_hat, dict_levels = auto_encoder(batch)
+                l_reconstruction = torch.nn.MSELoss()(batch, x_hat)
+                l_l1 = cfg.l1_alpha * torch.norm(dict_levels, 1, dim=1).mean() / dict_levels.size(1)
+                loss = l_reconstruction + l_l1
+                loss.backward()
+                optimizer.step()
+                
+                running_recon_loss *= (time_horizon - 1) / time_horizon
+                running_recon_loss += loss.item() / time_horizon
 
-        optimizer.zero_grad()
-        # Run through auto_encoder
-        x_hat, c = auto_encoder(mlp_activation_data)
-        l_reconstruction = torch.nn.MSELoss()(mlp_activation_data, x_hat)
-        l_l1 = cfg.l1_alpha * torch.norm(c,1, dim=1).mean() / c.size(1)
-        loss = l_reconstruction + l_l1
-        loss.backward()
-        optimizer.step()
-
-        batch_loss += loss.item()
-        running_recon_loss *= (time_horizon - 1) / time_horizon
-        running_recon_loss += loss.item() / time_horizon
-
-        if (batch_idx + 1) % 10 == 0:
-            print(f"Batch {batch_idx+1}/?: Reconstruction = {l_reconstruction:.6f} | l1: {l_l1:.6f}")
-    
+                if (batch_idx + 1) % 10 == 0:
+                    print(f"Batch: {batch_idx+1}/{len(dataset)} | Chunk: {chunk_ndx} | Reconstruction loss: {running_recon_loss:.6f} | l1: {l_l1:.6f}")
+            
     n_dead_neurons = get_n_dead_neurons(auto_encoder, dataset)
     return auto_encoder, n_dead_neurons, running_recon_loss
 
-def run_real_data_model(cfg):
+def make_activation_dataset(cfg, sentence_dataset, model, dataset_folder):
+    print(f"Running model and saving activations to {dataset_folder}")
+    chunk_size = 2 * (2 ** 30) # 2GB
+    activation_size = 4 * 768 * 2 * cfg.model_batch_size * 1024 # 3072 mlp activations, 2 bytes per half, 1024 context window
+    max_chunks = chunk_size // activation_size
+    dataset = []
+    n_saved_chunks = 0
+    for batch_idx, batch in enumerate(sentence_dataset):
+        batch = batch["input_ids"].to(cfg.device)
+        with torch.no_grad():
+            _, cache = model.run_with_cache(batch)
+        mlp_activation_data = cache[f"blocks.{cfg.layer}.mlp.hook_post"].to(cfg.device).to(torch.float16) # NOTE: could do all layers at once, but currently just doing 1 layer
+        mlp_activation_data = rearrange(mlp_activation_data, 'b s n -> (b s) n')
+        print(batch_idx, batch_idx * activation_size)
+        dataset.append(mlp_activation_data)
+        if len(dataset) >= max_chunks:
+            # Need to save, restart the list
+            dataset = torch.cat(dataset, dim=0)
+            dataset = torch.utils.data.TensorDataset(dataset)
+            with open(dataset_folder + "/" + str(n_saved_chunks) + ".pkl", "wb") as f:
+                pickle.dump(dataset, f)
+            n_saved_chunks += 1
+            print(f"Saved chunk {n_saved_chunks} of activations")
+            dataset = []
 
+
+def run_real_data_model(cfg):
     # cfg.model_name = "EleutherAI/pythia-70m-deduped"
     model = HookedTransformer.from_pretrained(cfg.model_name, device=cfg.device)
 
-    dataset = load_dataset(cfg.dataset_name, split="train")
-    dataset, bits_per_byte = chunk_and_tokenize(dataset, model.tokenizer, max_length=2048)
-    dataset = DataLoader(dataset, batch_size=cfg.batch_size, shuffle=True)
+    sentence_dataset = load_dataset(cfg.dataset_name, split="train")
+    sentence_dataset, bits_per_byte = chunk_and_tokenize(sentence_dataset, model.tokenizer, max_length=1024)
+    sentence_dataset = DataLoader(sentence_dataset, batch_size=cfg.batch_size, shuffle=True)
 
-    # TODO: update below for real GPU stuff
+    # Check if we have already run this model and got the activations
+    dataset_name = cfg.dataset_name.split("/")[-1] + "-" + cfg.model_name + "-" + str(cfg.layer)
+    dataset_folder = os.path.join(cfg.datasets_folder, dataset_name)
+    os.makedirs(dataset_folder, exist_ok=True)
+    if len(os.listdir(dataset_folder)) == 0:
+        make_activation_dataset(cfg, sentence_dataset, model, dataset_folder)
+    else:
+        print(f"Activations in {dataset_folder} already exist, loading them")
+
     l1_range = [1.0]
-    dict_sizes = [128, 256, 512, 1024, 2048, 4096, 8192]
+    gpt_2_mlp_dim = 768 * 4
+    dict_sizes = [gpt_2_mlp_dim * (2 ** i) for i in range(1, 5)]
     print("Range of l1 values being used: ", l1_range)
     print("Range of dict_sizes being used:",  dict_sizes)
     dead_neurons_matrix = np.zeros((len(l1_range), len(dict_sizes)))
@@ -717,7 +755,7 @@ def run_real_data_model(cfg):
 
         cfg.l1_alpha = l1_loss
         cfg.n_components_dictionary = dict_size
-        auto_encoder, n_dead_neurons, reconstruction_loss = run_single_go_with_real_data(cfg, dataset, model)
+        auto_encoder, n_dead_neurons, reconstruction_loss = run_single_go_with_real_data(cfg, dataset_folder, model)
         print(f"l1: {l1_loss} | dict_size: {dict_size} | n_dead_neurons: {n_dead_neurons} | reconstruction_loss: {reconstruction_loss:.3f}")
 
         dead_neurons_matrix[l1_ndx, dict_size_ndx] = n_dead_neurons
@@ -725,9 +763,8 @@ def run_real_data_model(cfg):
         auto_encoders[l1_ndx][dict_size_ndx] = auto_encoder.cpu()
         learned_dicts[l1_ndx][dict_size_ndx] = auto_encoder.decoder.weight.detach().cpu().data.t()
     
-    outputs_folder = "outputs"
     current_time = datetime.now().strftime("%Y%m%d-%H%M%S")
-    outputs_folder = os.path.join(outputs_folder, current_time)
+    outputs_folder = os.path.join(cfg.outputs_folder, current_time)
     os.makedirs(outputs_folder, exist_ok=True)
 
     # clamp dead_neurons to 0-100 for better visualisation
@@ -769,11 +806,12 @@ def main():
     parser.add_argument("--n_ground_truth_components", type=int, default=512)
     parser.add_argument("--learned_dict_ratio", type=float, default=1.0)
     
+    parser.add_argument("--model_batch_size", type=int, default=4)
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--noise_std", type=float, default=0.1)
     parser.add_argument("--l1_alpha", type=float, default=0.1)
     parser.add_argument("--learning_rate", type=float, default=0.001)
-    parser.add_argument("--epochs", type=int, default=20000)
+    parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--noise_level", type=float, default=0.0)
 
     parser.add_argument("--feature_prob_decay", type=float, default=0.99)
@@ -785,11 +823,14 @@ def main():
     parser.add_argument("--dict_ratio_exp_low", type=int, default=-3)
     parser.add_argument("--dict_ratio_exp_high", type=int, default=6) # not inclusive
 
-
     parser.add_argument("--run_toy", type=bool, default=False)
     parser.add_argument("--model_name", type=str, default="gpt2")
     parser.add_argument("--dataset_name", type=str, default="NeelNanda/pile-10k")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--layer", type=int, default=2) # layer to extract mlp-post-non-lin features from, only if using real model
+
+    parser.add_argument("--outputs_folder", type=str, default="outputs")
+    parser.add_argument("--datasets_folder", type=str, default="datasets")
 
     args = parser.parse_args()
     cfg = dotdict(vars(args)) # convert to dotdict via dict

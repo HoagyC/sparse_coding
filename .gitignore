@@ -2,5 +2,7 @@ __pycache__/**
 
 .env
 outputs
+datasets
 models
 nanoGPTtoTL.py
+tl_simple.py
