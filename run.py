@@ -703,8 +703,8 @@ def make_activation_dataset(cfg, sentence_dataset: DataLoader, model: HookedTran
                 with Trace(model, tensor_name) as ret:
                     _ = model(batch)
                     mlp_activation_data = ret.output
-                    mlp_activation_data = rearrange(mlp_activation_data, 'b s n -> (b s) n').to(torch.float16)
-                    # breakpoint()
+                    mlp_activation_data = rearrange(mlp_activation_data, 'b s n -> (b s) n').to(torch.float16).to(cfg.device)
+                    mlp_activation_data = nn.functional.gelu(mlp_activation_data)
             else:       
                 _, cache = model.run_with_cache(batch)
                 mlp_activation_data = cache[tensor_name].to(cfg.device).to(torch.float16) # NOTE: could do all layers at once, but currently just doing 1 layer
@@ -772,8 +772,10 @@ def run_real_data_model(cfg):
         cfg.mlp_width = dataset.tensors[0][0].shape[-1]
         del dataset
 
-    l1_range = [1.0]
-    dict_sizes = [cfg.mlp_width * (2 ** i) for i in range(1, 7)]
+    l1_range = [10 ** (exp/4) for exp in range(cfg.l1_exp_low, cfg.l1_exp_high)]
+    dict_ratios = [2 ** exp for exp in range(cfg.dict_ratio_exp_low, cfg.dict_ratio_exp_high)]
+    dict_sizes = [int(cfg.mlp_width * ratio) for ratio in dict_ratios]
+
     print("Range of l1 values being used: ", l1_range)
     print("Range of dict_sizes being used:",  dict_sizes)
     dead_neurons_matrix = np.zeros((len(l1_range), len(dict_sizes)))
@@ -822,7 +824,7 @@ def run_real_data_model(cfg):
         if dict_size_ndx == len(dict_sizes) - 1:
             continue
         learned_dict = learned_dicts[l1_ndx][dict_size_ndx]
-        larger_dicts = [learned_dicts[l1_ndx][larger_ratio_ndx] for larger_ratio_ndx in range(dict_size_ndx + 1, len(dict_size_ndx))][:2]
+        larger_dicts = [learned_dicts[l1_ndx][larger_ratio_ndx] for larger_ratio_ndx in range(dict_size_ndx + 1, len(dict_sizes))][:2]
         assert len(larger_dicts) > 0 
         mean_max_cosine_similarity = compare_mmsc_with_larger_dicts(learned_dict, larger_dicts)
         av_mmsc_with_larger_dicts[l1_ndx, dict_size_ndx] = mean_max_cosine_similarity
@@ -836,7 +838,7 @@ def run_real_data_model(cfg):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--activation_dim", type=int, default=256)
+    parser.add_argument("--activation_dim", type=int, default=128)
     parser.add_argument("--n_ground_truth_components", type=int, default=512)
     parser.add_argument("--learned_dict_ratio", type=float, default=1.0)
     parser.add_argument("--max_length", type=int, default=256) # when tokenizing, truncate to this length, basically the context size
@@ -853,10 +855,10 @@ def main():
     parser.add_argument("--feature_num_nonzero", type=int, default=5)
     parser.add_argument("--correlated_components", type=bool, default=True)
 
-    parser.add_argument("--l1_exp_low", type=int, default=-8)
-    parser.add_argument("--l1_exp_high", type=int, default=9) # not inclusive
-    parser.add_argument("--dict_ratio_exp_low", type=int, default=-3)
-    parser.add_argument("--dict_ratio_exp_high", type=int, default=6) # not inclusive
+    parser.add_argument("--l1_exp_low", type=int, default=-6)
+    parser.add_argument("--l1_exp_high", type=int, default=7) # not inclusive
+    parser.add_argument("--dict_ratio_exp_low", type=int, default=1)
+    parser.add_argument("--dict_ratio_exp_high", type=int, default=7) # not inclusive
 
     parser.add_argument("--run_toy", type=bool, default=False)
     parser.add_argument("--model_name", type=str, default="nanoGPT")
