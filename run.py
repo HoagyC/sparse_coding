@@ -414,9 +414,9 @@ def get_n_dead_neurons(auto_encoder, data_generator, n_batches=10, device="cuda"
     outputs = []
     
     for batch_ndx, batch in enumerate(data_generator):
-        input = batch.to(device).to(torch.float16)
+        input = batch[0].to(device).to(torch.float16)
         with torch.no_grad():
-            x_hat, c = auto_encoder=(input)
+            x_hat, c = auto_encoder(input)
         outputs.append(c)
         if batch_ndx >= n_batches:
             break
@@ -680,8 +680,10 @@ def run_single_go_with_real_data(cfg, dataset_folder: str):
                 else:
                     running_recon_loss *= (time_horizon - 1) / time_horizon
                     running_recon_loss += loss.item() / time_horizon
-                if (batch_idx + 1) % 10 == 0:
-                    print(f"Batch: {batch_idx+1}/{len(dataset)} | Chunk: {chunk_ndx+1}/{n_chunks_in_folder} | Epoch: {epoch+1}/{cfg.epochs} | Reconstruction loss: {running_recon_loss:.6f} | l1: {l_l1:.6f}")
+                if (batch_idx + 1) % 100 == 0:
+                    print(f"L1 Coef: {cfg.l1_alpha} | Dict ratio: {cfg.n_components_dictionary / cfg.activation_dim} | " + \
+                            f"Batch: {batch_idx+1}/{len(dataset)} | Chunk: {chunk_ndx+1}/{n_chunks_in_folder} | " + \
+                            f"Epoch: {epoch+1}/{cfg.epochs} | Reconstruction loss: {running_recon_loss:.6f} | l1: {l_l1:.6f}")
             
     n_dead_neurons = get_n_dead_neurons(auto_encoder, dataset)
     return auto_encoder, n_dead_neurons, running_recon_loss
