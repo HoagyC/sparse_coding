@@ -724,7 +724,7 @@ def run_real_data_model(cfg):
     # cfg.model_name = "EleutherAI/pythia-70m-deduped"
     model = HookedTransformer.from_pretrained(cfg.model_name, device=cfg.device)
 
-    sentence_dataset = load_dataset(cfg.dataset_name, split="train[:80]")
+    sentence_dataset = load_dataset(cfg.dataset_name, split="train")
     sentence_dataset, bits_per_byte = chunk_and_tokenize(sentence_dataset, model.tokenizer, max_length=1024)
     sentence_dataset = DataLoader(sentence_dataset, batch_size=cfg.model_batch_size, shuffle=True)
 
