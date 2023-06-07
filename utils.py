@@ -3,7 +3,7 @@ import sys
 from typing import Optional
 
 VAST_NUM = 4
-VAST_PORT = 14734
+VAST_PORT = 18792
 SSH_DIRECTORY = "sparse_coding"
 dest_addr = f"root@ssh{VAST_NUM}.vast.ai"
 
