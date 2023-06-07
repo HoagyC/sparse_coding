@@ -753,7 +753,7 @@ def run_real_data_model(cfg):
     dataset_folder = os.path.join(cfg.datasets_folder, dataset_name)
     os.makedirs(dataset_folder, exist_ok=True)
     if len(os.listdir(dataset_folder)) == 0:
-        if cfg.model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]":
+        if cfg.model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]:
             tensor_name = f"blocks.{cfg.layer}.mlp.hook_post"
             cfg.mlp_width = 3072
         elif cfg.model_name == "nanoGPT":
