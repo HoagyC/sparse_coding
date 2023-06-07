@@ -213,7 +213,7 @@ class RandomDatasetGenerator(Generator):
                 self.feats,
                 self.device,
             )
-        return data
+        return data.to(torch.float16)
 
     def throw(self, type: Any = None, value: Any = None, traceback: Any = None) -> None:
         raise StopIteration
