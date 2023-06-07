@@ -2,25 +2,30 @@ import argparse
 from collections.abc import Generator
 from dataclasses import dataclass, field
 from datetime import datetime
+import importlib
 import itertools
+import math
+import multiprocessing as mp
 import os
 import pickle
 from typing import Union, Tuple, List, Any, Optional, TypeVar
+
+from baukit import Trace
+from datasets import Dataset, DatasetDict, load_dataset
+from einops import rearrange
 from matplotlib import pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.utils.data import DataLoader
 from torchtyping import TensorType
 from tqdm import tqdm
 from transformer_lens import HookedTransformer
-from torch.utils.data import DataLoader
+from transformers import PreTrainedTokenizerBase, GPT2Tokenizer
+
 from utils import dotdict
-import math
-import multiprocessing as mp
-from datasets import Dataset, DatasetDict, load_dataset
-from transformers import PreTrainedTokenizerBase
-from einops import rearrange
+from nanoGPT_model import GPT
 
 n_ground_truth_components, activation_dim, dataset_size = None, None, None
 T = TypeVar("T", bound=Union[Dataset, DatasetDict])
@@ -645,9 +650,8 @@ def run_toy_model(cfg):
     plot_mat(av_mmsc_with_larger_dicts, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Average MMSC with larger dicts", save_name="av_mmsc_with_larger_dicts.png")
 
 
-def run_single_go_with_real_data(cfg, dataset_folder, model):
-    neurons = model.W_in.shape[-1] # Neurons is number of neurons in MLP
-    auto_encoder = AutoEncoder(neurons, cfg.n_components_dictionary).to(cfg.device)
+def run_single_go_with_real_data(cfg, dataset_folder: str):
+    auto_encoder = AutoEncoder(cfg.activation_dim, cfg.n_components_dictionary).to(cfg.device)
     optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.learning_rate, eps=1e-4)
     running_recon_loss = 0.0
     time_horizon = 1000
@@ -663,6 +667,7 @@ def run_single_go_with_real_data(cfg, dataset_folder, model):
                 batch = batch[0].to(cfg.device)
                 optimizer.zero_grad()
                 # Run through auto_encoder
+
                 x_hat, dict_levels = auto_encoder(batch)
                 l_reconstruction = torch.nn.MSELoss()(batch, x_hat)
                 l_l1 = cfg.l1_alpha * torch.norm(dict_levels, 1, dim=1).mean() / dict_levels.size(1)
@@ -675,47 +680,72 @@ def run_single_go_with_real_data(cfg, dataset_folder, model):
                 else:
                     running_recon_loss *= (time_horizon - 1) / time_horizon
                     running_recon_loss += loss.item() / time_horizon
-
                 if (batch_idx + 1) % 10 == 0:
-                    print(f"Batch: {batch_idx+1}/{len(dataset)} | Chunk: {chunk_ndx} | Epoch: {epoch} | Reconstruction loss: {running_recon_loss:.6f} | l1: {l_l1:.6f}")
+                    print(f"Batch: {batch_idx+1}/{len(dataset)} | Chunk: {chunk_ndx+1}/{n_chunks_in_folder} | Epoch: {epoch+1}/{cfg.epochs} | Reconstruction loss: {running_recon_loss:.6f} | l1: {l_l1:.6f}")
             
     n_dead_neurons = get_n_dead_neurons(auto_encoder, dataset)
     return auto_encoder, n_dead_neurons, running_recon_loss
 
-def make_activation_dataset(cfg, sentence_dataset, model, dataset_folder):
+def make_activation_dataset(cfg, sentence_dataset: DataLoader, model: HookedTransformer, tensor_name: str, dataset_folder: str, baukit: bool = False):
     print(f"Running model and saving activations to {dataset_folder}")
-    chunk_size = 2 * (2 ** 30) # 2GB
-    activation_size = 4 * 768 * 2 * cfg.model_batch_size * 1024 # 3072 mlp activations, 2 bytes per half, 1024 context window
-    max_chunks = chunk_size // activation_size
-    dataset = []
-    n_saved_chunks = 0
-    for batch_idx, batch in enumerate(sentence_dataset):
-        batch = batch["input_ids"].to(cfg.device)
-        with torch.no_grad():
-            _, cache = model.run_with_cache(batch)
-        mlp_activation_data = cache[f"blocks.{cfg.layer}.mlp.hook_post"].to(cfg.device).to(torch.float16) # NOTE: could do all layers at once, but currently just doing 1 layer
-        mlp_activation_data = rearrange(mlp_activation_data, 'b s n -> (b s) n')
-        print(batch_idx, batch_idx * activation_size)
-        dataset.append(mlp_activation_data)
-        if len(dataset) >= max_chunks:
-            # Need to save, restart the list
-            dataset = torch.cat(dataset, dim=0).to("cpu")
-            dataset = torch.utils.data.TensorDataset(dataset)
-            with open(dataset_folder + "/" + str(n_saved_chunks) + ".pkl", "wb") as f:
-                pickle.dump(dataset, f)
-            n_saved_chunks += 1
-            print(f"Saved chunk {n_saved_chunks} of activations")
-            dataset = []
-            if n_saved_chunks == cfg.n_chunks:
-                break
-
+    with torch.no_grad():
+        chunk_size =  2 * (2 ** 30) # 2GB
+        activation_size = cfg.mlp_width * 2 * cfg.model_batch_size * cfg.max_length # 3072 mlp activations, 2 bytes per half, 1024 context window
+        max_chunks = chunk_size // activation_size
+        dataset = []
+        n_saved_chunks = 0
+        for batch_idx, batch in enumerate(sentence_dataset):
+            batch = batch["input_ids"].to(cfg.device)
+            if baukit:
+                # Don't have nanoGPT models integrated with transformer_lens so using baukit for activations
+                with Trace(model, tensor_name) as ret:
+                    _ = model(batch)
+                    mlp_activation_data = ret.output
+                    mlp_activation_data = rearrange(mlp_activation_data, 'b s n -> (b s) n').to(torch.float16)
+                    # breakpoint()
+            else:       
+                _, cache = model.run_with_cache(batch)
+                mlp_activation_data = cache[tensor_name].to(cfg.device).to(torch.float16) # NOTE: could do all layers at once, but currently just doing 1 layer
+                mlp_activation_data = rearrange(mlp_activation_data, 'b s n -> (b s) n')
+            print(batch_idx, batch_idx * activation_size)
+            dataset.append(mlp_activation_data)
+            if len(dataset) >= max_chunks:
+                # Need to save, restart the list
+                dataset = torch.cat(dataset, dim=0).to("cpu")
+                dataset = torch.utils.data.TensorDataset(dataset)
+                with open(dataset_folder + "/" + str(n_saved_chunks) + ".pkl", "wb") as f:
+                    pickle.dump(dataset, f)
+                n_saved_chunks += 1
+                print(f"Saved chunk {n_saved_chunks} of activations")
+                dataset = []
+                if n_saved_chunks == cfg.n_chunks:
+                    break
 
 def run_real_data_model(cfg):
     # cfg.model_name = "EleutherAI/pythia-70m-deduped"
-    model = HookedTransformer.from_pretrained(cfg.model_name, device=cfg.device)
+    if cfg.model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]:
+        model = HookedTransformer.from_pretrained(cfg.model_name, device=cfg.device)
+        use_baukit = False
+    elif cfg.model_name == "nanoGPT":
+        model_dict = torch.load(open(cfg.model_path, "rb"), map_location="cpu")["model"]
+        model_dict = {k.replace("_orig_mod.", ""): v for k, v in model_dict.items()}
+        cfg_loc = cfg.model_path[:-3] + "cfg" # cfg loc is same as model_loc but with .pt replaced with cfg.py
+        cfg_loc = cfg_loc.replace("/", ".")
+        model_cfg = importlib.import_module(cfg_loc).model_cfg
+        model = GPT(model_cfg).to(cfg.device)
+        model.load_state_dict(model_dict)
+        use_baukit = True
+    else:
+        raise ValueError("Model name not recognised")
 
     sentence_dataset = load_dataset(cfg.dataset_name, split="train")
-    sentence_dataset, bits_per_byte = chunk_and_tokenize(sentence_dataset, model.tokenizer, max_length=1024)
+    if hasattr(model, "tokenizer"):
+        tokenizer = model.tokenizer
+    else:
+        print("Using default tokenizer from gpt2")
+        tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+
+    sentence_dataset, bits_per_byte = chunk_and_tokenize(sentence_dataset, tokenizer, max_length=cfg.max_length)
     sentence_dataset = DataLoader(sentence_dataset, batch_size=cfg.model_batch_size, shuffle=True)
 
     # Check if we have already run this model and got the activations
@@ -723,13 +753,25 @@ def run_real_data_model(cfg):
     dataset_folder = os.path.join(cfg.datasets_folder, dataset_name)
     os.makedirs(dataset_folder, exist_ok=True)
     if len(os.listdir(dataset_folder)) == 0:
-        make_activation_dataset(cfg, sentence_dataset, model, dataset_folder)
+        if cfg.model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]":
+            tensor_name = f"blocks.{cfg.layer}.mlp.hook_post"
+            cfg.mlp_width = 3072
+        elif cfg.model_name == "nanoGPT":
+            tensor_name = f"transformer.h.{cfg.layer}.mlp.c_fc"
+            cfg.mlp_width = 128
+        else:
+            raise NotImplementedError(f"Model {cfg.model_name} not supported")
+        make_activation_dataset(cfg, sentence_dataset, model, tensor_name, dataset_folder, use_baukit)
     else:
         print(f"Activations in {dataset_folder} already exist, loading them")
+        # get mlp_width from first file
+        with open(os.path.join(dataset_folder, "0.pkl"), "rb") as f:
+            dataset = pickle.load(f)
+        cfg.mlp_width = dataset.tensors[0][0].shape[-1]
+        del dataset
 
     l1_range = [1.0]
-    gpt_2_mlp_dim = 768 * 4
-    dict_sizes = [gpt_2_mlp_dim * (2 ** i) for i in range(1, 5)]
+    dict_sizes = [cfg.mlp_width * (2 ** i) for i in range(1, 7)]
     print("Range of l1 values being used: ", l1_range)
     print("Range of dict_sizes being used:",  dict_sizes)
     dead_neurons_matrix = np.zeros((len(l1_range), len(dict_sizes)))
@@ -745,7 +787,7 @@ def run_real_data_model(cfg):
 
         cfg.l1_alpha = l1_loss
         cfg.n_components_dictionary = dict_size
-        auto_encoder, n_dead_neurons, reconstruction_loss = run_single_go_with_real_data(cfg, dataset_folder, model)
+        auto_encoder, n_dead_neurons, reconstruction_loss = run_single_go_with_real_data(cfg, dataset_folder)
         print(f"l1: {l1_loss} | dict_size: {dict_size} | n_dead_neurons: {n_dead_neurons} | reconstruction_loss: {reconstruction_loss:.3f}")
 
         dead_neurons_matrix[l1_ndx, dict_size_ndx] = n_dead_neurons
@@ -795,13 +837,14 @@ def main():
     parser.add_argument("--activation_dim", type=int, default=256)
     parser.add_argument("--n_ground_truth_components", type=int, default=512)
     parser.add_argument("--learned_dict_ratio", type=float, default=1.0)
+    parser.add_argument("--max_length", type=int, default=256) # when tokenizing, truncate to this length, basically the context size
     
     parser.add_argument("--model_batch_size", type=int, default=4)
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--noise_std", type=float, default=0.1)
     parser.add_argument("--l1_alpha", type=float, default=0.1)
     parser.add_argument("--learning_rate", type=float, default=0.001)
-    parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--noise_level", type=float, default=0.0)
 
     parser.add_argument("--feature_prob_decay", type=float, default=0.99)
@@ -814,7 +857,8 @@ def main():
     parser.add_argument("--dict_ratio_exp_high", type=int, default=6) # not inclusive
 
     parser.add_argument("--run_toy", type=bool, default=False)
-    parser.add_argument("--model_name", type=str, default="gpt2")
+    parser.add_argument("--model_name", type=str, default="nanoGPT")
+    parser.add_argument("--model_path", type=str, default="models/32d70k.pt")
     parser.add_argument("--dataset_name", type=str, default="NeelNanda/pile-10k")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--layer", type=int, default=2) # layer to extract mlp-post-non-lin features from, only if using real model
