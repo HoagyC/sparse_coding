@@ -628,31 +628,12 @@ def run_toy_model(cfg):
 
     # Compare each learned dictionary to the larger ones
     av_mmsc_with_larger_dicts = np.zeros((len(l1_range), len(learned_dict_ratios)))
-    try:
-        for l1_alpha, learned_dict_ratio in tqdm(list(itertools.product(l1_range, learned_dict_ratios))):
-            l1_ndx = l1_range.index(l1_alpha)
-            ratio_ndx = learned_dict_ratios.index(learned_dict_ratio)
-            if ratio_ndx == len(learned_dict_ratios) - 1:
-                continue
-            learned_dict = learned_dicts[l1_ndx][ratio_ndx]
-            larger_dicts = [learned_dicts[l1_ndx][larger_ratio_ndx] for larger_ratio_ndx in range(ratio_ndx + 1, len(learned_dict_ratios))][:2]
-            assert len(larger_dicts) > 0 
-            mean_max_cosine_similarity = compare_mmsc_with_larger_dicts(learned_dict, larger_dicts)
-            av_mmsc_with_larger_dicts[l1_ndx, ratio_ndx] = mean_max_cosine_similarity
-    except:
-        breakpoint()
-    
-    plot_mat(av_mmsc_with_larger_dicts, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Average MMSC with larger dicts", save_name="av_mmsc_with_larger_dicts.png")
-
-    # Compare each learned dictionary to the larger ones
-    av_mmsc_with_larger_dicts = np.zeros((len(l1_range), len(learned_dict_ratios)))
     percentage_above_threshold_mmsc_with_larger_dicts = np.zeros((len(l1_range), len(learned_dict_ratios)))
     for l1_ndx, dict_size_ndx in tqdm(list(itertools.product(range(len(l1_range)), range(len(learned_dict_ratios))))):
         if dict_size_ndx == len(learned_dict_ratios) - 1:
             continue
         smaller_dict = learned_dicts[l1_ndx][dict_size_ndx]
         larger_dict = learned_dicts[l1_ndx][dict_size_ndx+1]
-        # mean_max_cosine_similarity = compare_mmsc_with_larger_dicts(learned_dict.to(cfg.device), larger_dicts.to(cfg.device))
         smaller_dict_features, shared_vector_size = smaller_dict.shape
         # larger_dict_features, shared_vector_size = larger_dict.shape
         max_cosine_similarities = np.zeros((smaller_dict_features))
@@ -676,9 +657,6 @@ def run_toy_model(cfg):
 def run_single_go_with_real_data(cfg, dataset_folder, model):
     neurons = model.W_in.shape[-1] # Neurons is number of neurons in MLP
     auto_encoder = AutoEncoder(neurons, cfg.n_components_dictionary).to(cfg.device)
-    # Allocate a running count of dead neurons, at least 4k of size cfg.n_components_dictionary
-    dead_neuron_shape = 10000 // cfg.batch_size
-    dead_neuron_running_count = torch.zeros((dead_neuron_shape, cfg.n_components_dictionary)).to("cpu")
 
     optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.learning_rate, eps=1e-4)
     running_recon_loss = 0.0
@@ -707,11 +685,6 @@ def run_single_go_with_real_data(cfg, dataset_folder, model):
                 else:
                     running_recon_loss *= (time_horizon - 1) / time_horizon
                     running_recon_loss += loss.item() / time_horizon
-
-                # Convert each _idx into the "currency" of the next one by multiplying by the length of the lower-level iterator
-                dead_neuron_ind = (epoch*n_chunks_in_folder*len(dataset) + chunk_ndx*len(dataset) + batch_idx) % dead_neuron_shape
-                dead_neurons_current = dict_levels.mean(dim=0).detach().cpu()
-                dead_neuron_running_count[dead_neuron_ind, :] = dead_neurons_current
 
                 if (batch_idx + 1) % 10 == 0:
                     print(f"Batch: {batch_idx+1}/{len(dataset)} | Chunk: {chunk_ndx} | Epoch: {epoch} | Reconstruction loss: {running_recon_loss:.6f} | l1: {l_l1:.6f}")
@@ -817,7 +790,6 @@ def run_real_data_model(cfg):
             continue
         smaller_dict = learned_dicts[l1_ndx][dict_size_ndx]
         larger_dict = learned_dicts[l1_ndx][dict_size_ndx+1]
-        # mean_max_cosine_similarity = compare_mmsc_with_larger_dicts(learned_dict.to(cfg.device), larger_dicts.to(cfg.device))
         smaller_dict_features, shared_vector_size = smaller_dict.shape
         # larger_dict_features, shared_vector_size = larger_dict.shape
         max_cosine_similarities = np.zeros((smaller_dict_features))
