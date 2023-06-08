@@ -475,7 +475,7 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
         # Add the loss for this batch to the total loss for this epoch
         epoch_loss += loss.item()
         running_recon_loss *= (time_horizon - 1) / time_horizon
-        running_recon_loss += loss.item() / time_horizon
+        running_recon_loss += l_reconstruction.item() / time_horizon
 
         if (epoch + 1) % 1000 == 0:
             # Calculate MMCS
@@ -687,10 +687,10 @@ def run_single_go_with_real_data(cfg, dataset_folder: str):
                 optimizer.step()
                 
                 if running_recon_loss == 0.0:
-                    running_recon_loss = loss.item()
+                    running_recon_loss = l_reconstruction.item()
                 else:
                     running_recon_loss *= (time_horizon - 1) / time_horizon
-                    running_recon_loss += loss.item() / time_horizon
+                    running_recon_loss += l_reconstruction.item() / time_horizon
                 if (batch_idx + 1) % 1000 == 0:
                     print(f"L1 Coef: {cfg.l1_alpha:.3f} | Dict ratio: {cfg.n_components_dictionary / cfg.activation_dim} | " + \
                             f"Batch: {batch_idx+1}/{len(dataset)} | Chunk: {chunk_ndx+1}/{n_chunks_in_folder} | " + \
