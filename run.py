@@ -218,7 +218,7 @@ class RandomDatasetGenerator(Generator):
                 self.feats,
                 self.device,
             )
-        return data
+        return data.to(torch.float16)
 
     def throw(self, type: Any = None, value: Any = None, traceback: Any = None) -> None:
         raise StopIteration
@@ -633,23 +633,35 @@ def run_toy_model(cfg):
 
     # Compare each learned dictionary to the larger ones
     av_mmsc_with_larger_dicts = np.zeros((len(l1_range), len(learned_dict_ratios)))
-    try:
-        for l1_alpha, learned_dict_ratio in tqdm(list(itertools.product(l1_range, learned_dict_ratios))):
-            l1_ndx = l1_range.index(l1_alpha)
-            ratio_ndx = learned_dict_ratios.index(learned_dict_ratio)
-            if ratio_ndx == len(learned_dict_ratios) - 1:
-                continue
-            learned_dict = learned_dicts[l1_ndx][ratio_ndx]
-            larger_dicts = [learned_dicts[l1_ndx][larger_ratio_ndx] for larger_ratio_ndx in range(ratio_ndx + 1, len(learned_dict_ratios))][:2]
-            assert len(larger_dicts) > 0 
-            mean_max_cosine_similarity = compare_mmsc_with_larger_dicts(learned_dict, larger_dicts)
-            av_mmsc_with_larger_dicts[l1_ndx, ratio_ndx] = mean_max_cosine_similarity
-    except:
-        breakpoint()
+    percentage_above_threshold_mmsc_with_larger_dicts = np.zeros((len(l1_range), len(learned_dict_ratios)))
+    for l1_ndx, dict_size_ndx in tqdm(list(itertools.product(range(len(l1_range)), range(len(learned_dict_ratios))))):
+        if dict_size_ndx == len(learned_dict_ratios) - 1:
+            continue
+        smaller_dict = learned_dicts[l1_ndx][dict_size_ndx]
+        larger_dict = learned_dicts[l1_ndx][dict_size_ndx+1]
+        smaller_dict_features, shared_vector_size = smaller_dict.shape
+        # larger_dict_features, shared_vector_size = larger_dict.shape
+        max_cosine_similarities = np.zeros((smaller_dict_features))
+        larger_dict = larger_dict.to(cfg.device)
+        for i, vector in enumerate(smaller_dict):
+            max_cosine_similarities[i] = torch.nn.functional.cosine_similarity(vector.to(cfg.device), larger_dict, dim=1).max()
+        av_mmsc_with_larger_dicts[l1_ndx, dict_size_ndx] = max_cosine_similarities.mean().item()
+        threshold = 0.9
+        percentage_above_threshold_mmsc_with_larger_dicts[l1_ndx, dict_size_ndx] = (max_cosine_similarities > threshold).sum().item()
+
+    with open(os.path.join(outputs_folder, "larger_dict_compare.pkl"), "wb") as f:
+        pickle.dump(av_mmsc_with_larger_dicts, f)
+    with open(os.path.join(outputs_folder, "larger_dict_threshold.pkl"), "wb") as f:
+        pickle.dump(percentage_above_threshold_mmsc_with_larger_dicts, f)
     
     plot_mat(av_mmsc_with_larger_dicts, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Average MMSC with larger dicts", save_name="av_mmsc_with_larger_dicts.png")
+    plot_mat(percentage_above_threshold_mmsc_with_larger_dicts, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title=f"MMSC with larger dicts above {threshold}", save_name="percentage_above_threshold_mmsc_with_larger_dicts.png")
 
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> loganriggs-main
 def run_single_go_with_real_data(cfg, dataset_folder: str):
     auto_encoder = AutoEncoder(cfg.activation_dim, cfg.n_components_dictionary).to(cfg.device)
     optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.learning_rate, eps=1e-4)
@@ -703,8 +715,13 @@ def make_activation_dataset(cfg, sentence_dataset: DataLoader, model: HookedTran
                 with Trace(model, tensor_name) as ret:
                     _ = model(batch)
                     mlp_activation_data = ret.output
+<<<<<<< HEAD
                     mlp_activation_data = rearrange(mlp_activation_data, 'b s n -> (b s) n').to(torch.float16).to(cfg.device)
                     mlp_activation_data = nn.functional.gelu(mlp_activation_data)
+=======
+                    mlp_activation_data = rearrange(mlp_activation_data, 'b s n -> (b s) n').to(torch.float16)
+                    # breakpoint()
+>>>>>>> loganriggs-main
             else:       
                 _, cache = model.run_with_cache(batch)
                 mlp_activation_data = cache[tensor_name].to(cfg.device).to(torch.float16) # NOTE: could do all layers at once, but currently just doing 1 layer
@@ -755,7 +772,11 @@ def run_real_data_model(cfg):
     dataset_folder = os.path.join(cfg.datasets_folder, dataset_name)
     os.makedirs(dataset_folder, exist_ok=True)
     if len(os.listdir(dataset_folder)) == 0:
+<<<<<<< HEAD
         if cfg.model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]:
+=======
+        if cfg.model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]":
+>>>>>>> loganriggs-main
             tensor_name = f"blocks.{cfg.layer}.mlp.hook_post"
             cfg.mlp_width = 3072
         elif cfg.model_name == "nanoGPT":
@@ -771,11 +792,17 @@ def run_real_data_model(cfg):
             dataset = pickle.load(f)
         cfg.mlp_width = dataset.tensors[0][0].shape[-1]
         del dataset
+<<<<<<< HEAD
 
     l1_range = [10 ** (exp/4) for exp in range(cfg.l1_exp_low, cfg.l1_exp_high)]
     dict_ratios = [2 ** exp for exp in range(cfg.dict_ratio_exp_low, cfg.dict_ratio_exp_high)]
     dict_sizes = [int(cfg.mlp_width * ratio) for ratio in dict_ratios]
 
+=======
+
+    l1_range = [1.0]
+    dict_sizes = [cfg.mlp_width * (2 ** i) for i in range(1, 7)]
+>>>>>>> loganriggs-main
     print("Range of l1 values being used: ", l1_range)
     print("Range of dict_sizes being used:",  dict_sizes)
     dead_neurons_matrix = np.zeros((len(l1_range), len(dict_sizes)))
@@ -818,21 +845,39 @@ def run_real_data_model(cfg):
 
     # Compare each learned dictionary to the larger ones
     av_mmsc_with_larger_dicts = np.zeros((len(l1_range), len(dict_sizes)))
+    percentage_above_threshold_mmsc_with_larger_dicts = np.zeros((len(l1_range), len(dict_sizes)))
     for l1_ndx, dict_size_ndx in tqdm(list(itertools.product(range(len(l1_range)), range(len(dict_sizes))))):
         l1_loss = l1_range[l1_ndx]
         dict_size = dict_sizes[dict_size_ndx]
         if dict_size_ndx == len(dict_sizes) - 1:
             continue
+<<<<<<< HEAD
         learned_dict = learned_dicts[l1_ndx][dict_size_ndx]
         larger_dicts = [learned_dicts[l1_ndx][larger_ratio_ndx] for larger_ratio_ndx in range(dict_size_ndx + 1, len(dict_sizes))][:2]
         assert len(larger_dicts) > 0 
         mean_max_cosine_similarity = compare_mmsc_with_larger_dicts(learned_dict, larger_dicts)
         av_mmsc_with_larger_dicts[l1_ndx, dict_size_ndx] = mean_max_cosine_similarity
+=======
+        smaller_dict = learned_dicts[l1_ndx][dict_size_ndx]
+        larger_dict = learned_dicts[l1_ndx][dict_size_ndx+1]
+        smaller_dict_features, shared_vector_size = smaller_dict.shape
+        # larger_dict_features, shared_vector_size = larger_dict.shape
+        max_cosine_similarities = np.zeros((smaller_dict_features))
+        larger_dict = larger_dict.to(cfg.device)
+        for i, vector in enumerate(smaller_dict):
+            max_cosine_similarities[i] = torch.nn.functional.cosine_similarity(vector.to(cfg.device), larger_dict, dim=1).max()
+        av_mmsc_with_larger_dicts[l1_ndx, dict_size_ndx] = max_cosine_similarities.mean().item()
+        threshold = 0.9
+        percentage_above_threshold_mmsc_with_larger_dicts[l1_ndx, dict_size_ndx] = (max_cosine_similarities > threshold).sum().item()
+>>>>>>> loganriggs-main
 
     with open(os.path.join(outputs_folder, "larger_dict_compare.pkl"), "wb") as f:
         pickle.dump(av_mmsc_with_larger_dicts, f)
+    with open(os.path.join(outputs_folder, "larger_dict_threshold.pkl"), "wb") as f:
+        pickle.dump(percentage_above_threshold_mmsc_with_larger_dicts, f)
     
     plot_mat(av_mmsc_with_larger_dicts, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="Average MMSC with larger dicts", save_name="av_mmsc_with_larger_dicts.png")
+    plot_mat(percentage_above_threshold_mmsc_with_larger_dicts, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title=f"MMSC with larger dicts above {threshold}", save_name="percentage_above_threshold_mmsc_with_larger_dicts.png")
 
 
 
