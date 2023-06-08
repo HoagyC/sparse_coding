@@ -695,8 +695,8 @@ def run_single_go_with_real_data(cfg, dataset_folder: str):
                     print(f"L1 Coef: {cfg.l1_alpha:.3f} | Dict ratio: {cfg.n_components_dictionary / cfg.activation_dim} | " + \
                             f"Batch: {batch_idx+1}/{len(dataset)} | Chunk: {chunk_ndx+1}/{n_chunks_in_folder} | " + \
                             f"Epoch: {epoch+1}/{cfg.epochs} | Reconstruction loss: {running_recon_loss:.6f} | l1: {l_l1:.6f}")
-                    
-                    wandb.log({"reconstruction_loss": running_recon_loss, "l1_loss": l_l1, "epoch": epoch, "batch": batch_idx, "chunk": chunk_ndx, "dict_size": cfg.n_components_dictionary, "l1_coef": cfg.l1_alpha})
+                    if cfg.use_wandb:
+                        wandb.log({"reconstruction_loss": running_recon_loss, "l1_loss": l_l1, "epoch": epoch, "batch": batch_idx, "chunk": chunk_ndx, "dict_size": cfg.n_components_dictionary, "l1_coef": cfg.l1_alpha})
             
     n_dead_neurons = get_n_dead_neurons(auto_encoder, dataset)
     return auto_encoder, n_dead_neurons, running_recon_loss
@@ -808,10 +808,11 @@ def run_real_data_model(cfg):
     auto_encoders = [[None for _ in range(len(dict_sizes))] for _ in range(len(l1_range))]
     learned_dicts = [[None for _ in range(len(dict_sizes))] for _ in range(len(l1_range))]
 
-    secrets = json.load(open("secrets.json"))
-    wandb.login(key=secrets["wandb_key"])
     start_time = datetime.now().strftime("%Y%m%d-%H%M%S")
-    wandb_group_name = f"{cfg.model_name}_{start_time[4:-2]}" # trim year and seconds
+    if cfg.use_wandb:
+        secrets = json.load(open("secrets.json"))
+        wandb.login(key=secrets["wandb_key"])
+        wandb_group_name = f"{cfg.model_name}_{start_time[4:-2]}" # trim year and seconds
 
     for l1_ndx, dict_size_ndx in tqdm(list(itertools.product(range(len(l1_range)), range(len(dict_sizes))))):
         l1_loss = l1_range[l1_ndx]
@@ -819,8 +820,8 @@ def run_real_data_model(cfg):
 
         cfg.l1_alpha = l1_loss
         cfg.n_components_dictionary = dict_size
-
-        wandb.init(project="sparse coding", config=cfg.__dict__, group=wandb_group_name, name=f"l1_{l1_loss:.3}_dict_size_{dict_size}")
+        if cfg.use_wandb:
+            wandb.init(project="sparse coding", config=cfg.__dict__, group=wandb_group_name, name=f"l1_{l1_loss:.3}_dict_size_{dict_size}")
 
         auto_encoder, n_dead_neurons, reconstruction_loss = run_single_go_with_real_data(cfg, dataset_folder)
         print(f"l1: {l1_loss} | dict_size: {dict_size} | n_dead_neurons: {n_dead_neurons} | reconstruction_loss: {reconstruction_loss:.3f}")
@@ -830,7 +831,8 @@ def run_real_data_model(cfg):
         auto_encoders[l1_ndx][dict_size_ndx] = auto_encoder.cpu()
         learned_dicts[l1_ndx][dict_size_ndx] = auto_encoder.decoder.weight.detach().cpu().data.t()
 
-        wandb.finish()
+        if cfg.use_wandb:
+            wandb.finish()
     
     outputs_folder = os.path.join(cfg.outputs_folder, start_time)
     os.makedirs(outputs_folder, exist_ok=True)
@@ -878,6 +880,7 @@ def run_real_data_model(cfg):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--use_wandb", type=bool, default=True)
     parser.add_argument("--activation_dim", type=int, default=128)
     parser.add_argument("--n_ground_truth_components", type=int, default=512)
     parser.add_argument("--learned_dict_ratio", type=float, default=1.0)
