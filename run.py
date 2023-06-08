@@ -492,7 +492,7 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
 
 def plot_mat(mat, l1_alphas, learned_dict_ratios, show=True, save_folder=None, save_name=None, title=None):
     """
-    :param mmsc_mat: matrix values
+    :param mmcs_mat: matrix values
     :param l1_alphas: list of l1_alphas
     :param learned_dict_ratios: list of learned_dict_ratios
     :param show_plots: whether to show the plot
@@ -524,7 +524,7 @@ def plot_mat(mat, l1_alphas, learned_dict_ratios, show=True, save_folder=None, s
         plt.savefig(os.path.join(save_folder, save_name))
         plt.close()
         
-def compare_mmsc_with_larger_dicts(dict: np.array, larger_dicts: List[np.array]) -> float:
+def compare_mmcs_with_larger_dicts(dict: np.array, larger_dicts: List[np.array]) -> float:
     """
     :param dict: The dict to compare to others. Shape (activation_dim, n_dict_elements)
     :param larger_dicts: A list of dicts to compare to. Shape (activation_dim, n_dict_elements(variable)]) * n_larger_dicts
@@ -585,7 +585,7 @@ def run_toy_model(cfg):
     learned_dict_ratios = [2 ** exp for exp in range(cfg.dict_ratio_exp_low, cfg.dict_ratio_exp_high)] # replicate is (-2,6)
     print("Range of l1 values being used: ", l1_range)
     print("Range of dict_sizes compared to ground truth being used:",  learned_dict_ratios)
-    mmsc_matrix = np.zeros((len(l1_range), len(learned_dict_ratios)))
+    mmcs_matrix = np.zeros((len(l1_range), len(learned_dict_ratios)))
     dead_neurons_matrix = np.zeros((len(l1_range), len(learned_dict_ratios)))
     recon_loss_matrix = np.zeros((len(l1_range), len(learned_dict_ratios)))
 
@@ -598,10 +598,10 @@ def run_toy_model(cfg):
         cfg.l1_alpha = l1_alpha
         cfg.learned_dict_ratio = learned_dict_ratio
         cfg.n_components_dictionary = int(cfg.n_ground_truth_components * cfg.learned_dict_ratio)
-        mmsc, auto_encoder, n_dead_neurons, reconstruction_loss = run_single_go(cfg, data_generator)
-        print(f"l1_alpha: {l1_alpha} | learned_dict_ratio: {learned_dict_ratio} | mmsc: {mmsc:.3f} | n_dead_neurons: {n_dead_neurons} | reconstruction_loss: {reconstruction_loss:.3f}")
+        mmcs, auto_encoder, n_dead_neurons, reconstruction_loss = run_single_go(cfg, data_generator)
+        print(f"l1_alpha: {l1_alpha} | learned_dict_ratio: {learned_dict_ratio} | mmcs: {mmcs:.3f} | n_dead_neurons: {n_dead_neurons} | reconstruction_loss: {reconstruction_loss:.3f}")
 
-        mmsc_matrix[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = mmsc
+        mmcs_matrix[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = mmcs
         dead_neurons_matrix[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = n_dead_neurons
         recon_loss_matrix[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = reconstruction_loss
         auto_encoders[l1_range.index(l1_alpha)][learned_dict_ratios.index(learned_dict_ratio)] = auto_encoder.cpu()
@@ -613,7 +613,7 @@ def run_toy_model(cfg):
     os.makedirs(outputs_folder, exist_ok=True)
 
     # Save the matrices and the data generator
-    plot_mat(mmsc_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Mean Max Cosine Similarity w/ True", save_name="mmsc_matrix.png")
+    plot_mat(mmcs_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Mean Max Cosine Similarity w/ True", save_name="mmcs_matrix.png")
     # clamp dead_neurons to 0-100 for better visualisation
     dead_neurons_matrix = np.clip(dead_neurons_matrix, 0, 100)
     plot_mat(dead_neurons_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Dead Neurons", save_name="dead_neurons_matrix.png")
@@ -624,16 +624,16 @@ def run_toy_model(cfg):
         pickle.dump(cfg, f)
     with open(os.path.join(outputs_folder, "data_generator.pkl"), "wb") as f:
         pickle.dump(data_generator, f)
-    with open(os.path.join(outputs_folder, "mmsc_matrix.pkl"), "wb") as f:
-        pickle.dump(mmsc_matrix, f)
+    with open(os.path.join(outputs_folder, "mmcs_matrix.pkl"), "wb") as f:
+        pickle.dump(mmcs_matrix, f)
     with open(os.path.join(outputs_folder, "dead_neurons.pkl"), "wb") as f:
         pickle.dump(dead_neurons_matrix, f)
     with open(os.path.join(outputs_folder, "recon_loss.pkl"), "wb") as f:
         pickle.dump(recon_loss_matrix, f)
 
     # Compare each learned dictionary to the larger ones
-    av_mmsc_with_larger_dicts = np.zeros((len(l1_range), len(learned_dict_ratios)))
-    percentage_above_threshold_mmsc_with_larger_dicts = np.zeros((len(l1_range), len(learned_dict_ratios)))
+    av_mmcs_with_larger_dicts = np.zeros((len(l1_range), len(learned_dict_ratios)))
+    percentage_above_threshold_mmcs_with_larger_dicts = np.zeros((len(l1_range), len(learned_dict_ratios)))
     for l1_ndx, dict_size_ndx in tqdm(list(itertools.product(range(len(l1_range)), range(len(learned_dict_ratios))))):
         if dict_size_ndx == len(learned_dict_ratios) - 1:
             continue
@@ -645,17 +645,17 @@ def run_toy_model(cfg):
         larger_dict = larger_dict.to(cfg.device)
         for i, vector in enumerate(smaller_dict):
             max_cosine_similarities[i] = torch.nn.functional.cosine_similarity(vector.to(cfg.device), larger_dict, dim=1).max()
-        av_mmsc_with_larger_dicts[l1_ndx, dict_size_ndx] = max_cosine_similarities.mean().item()
+        av_mmcs_with_larger_dicts[l1_ndx, dict_size_ndx] = max_cosine_similarities.mean().item()
         threshold = 0.9
-        percentage_above_threshold_mmsc_with_larger_dicts[l1_ndx, dict_size_ndx] = (max_cosine_similarities > threshold).sum().item()
+        percentage_above_threshold_mmcs_with_larger_dicts[l1_ndx, dict_size_ndx] = (max_cosine_similarities > threshold).sum().item()
 
     with open(os.path.join(outputs_folder, "larger_dict_compare.pkl"), "wb") as f:
-        pickle.dump(av_mmsc_with_larger_dicts, f)
+        pickle.dump(av_mmcs_with_larger_dicts, f)
     with open(os.path.join(outputs_folder, "larger_dict_threshold.pkl"), "wb") as f:
-        pickle.dump(percentage_above_threshold_mmsc_with_larger_dicts, f)
+        pickle.dump(percentage_above_threshold_mmcs_with_larger_dicts, f)
     
-    plot_mat(av_mmsc_with_larger_dicts, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Average MMSC with larger dicts", save_name="av_mmsc_with_larger_dicts.png")
-    plot_mat(percentage_above_threshold_mmsc_with_larger_dicts, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title=f"MMSC with larger dicts above {threshold}", save_name="percentage_above_threshold_mmsc_with_larger_dicts.png")
+    plot_mat(av_mmcs_with_larger_dicts, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Average MMCS with larger dicts", save_name="av_mmcs_with_larger_dicts.png")
+    plot_mat(percentage_above_threshold_mmcs_with_larger_dicts, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title=f"MMCS with larger dicts above {threshold}", save_name="percentage_above_threshold_mmcs_with_larger_dicts.png")
 
 
 def run_single_go_with_real_data(cfg, dataset_folder: str):
@@ -695,6 +695,16 @@ def run_single_go_with_real_data(cfg, dataset_folder: str):
             
     n_dead_neurons = get_n_dead_neurons(auto_encoder, dataset)
     return auto_encoder, n_dead_neurons, running_recon_loss
+
+
+def get_top_k_activations_from_dataset(cfg, feature_dict: torch.Tensor,  k: int = 100):
+    """
+    Takes a dict of features and returns the top k activations for each feature in pile10k
+    """
+    sentence_dataset = load_dataset(cfg.dataset_name)
+
+
+
 
 def make_activation_dataset(cfg, sentence_dataset: DataLoader, model: HookedTransformer, tensor_name: str, dataset_folder: str, baukit: bool = False):
     print(f"Running model and saving activations to {dataset_folder}")
@@ -825,8 +835,8 @@ def run_real_data_model(cfg):
         pickle.dump(recon_loss_matrix, f)
 
     # Compare each learned dictionary to the larger ones
-    av_mmsc_with_larger_dicts = np.zeros((len(l1_range), len(dict_sizes)))
-    percentage_above_threshold_mmsc_with_larger_dicts = np.zeros((len(l1_range), len(dict_sizes)))
+    av_mmcs_with_larger_dicts = np.zeros((len(l1_range), len(dict_sizes)))
+    percentage_above_threshold_mmcs_with_larger_dicts = np.zeros((len(l1_range), len(dict_sizes)))
     for l1_ndx, dict_size_ndx in tqdm(list(itertools.product(range(len(l1_range)), range(len(dict_sizes))))):
         l1_loss = l1_range[l1_ndx]
         dict_size = dict_sizes[dict_size_ndx]
@@ -840,17 +850,17 @@ def run_real_data_model(cfg):
         larger_dict = larger_dict.to(cfg.device)
         for i, vector in enumerate(smaller_dict):
             max_cosine_similarities[i] = torch.nn.functional.cosine_similarity(vector.to(cfg.device), larger_dict, dim=1).max()
-        av_mmsc_with_larger_dicts[l1_ndx, dict_size_ndx] = max_cosine_similarities.mean().item()
+        av_mmcs_with_larger_dicts[l1_ndx, dict_size_ndx] = max_cosine_similarities.mean().item()
         threshold = 0.9
-        percentage_above_threshold_mmsc_with_larger_dicts[l1_ndx, dict_size_ndx] = (max_cosine_similarities > threshold).sum().item()
+        percentage_above_threshold_mmcs_with_larger_dicts[l1_ndx, dict_size_ndx] = (max_cosine_similarities > threshold).sum().item()
 
     with open(os.path.join(outputs_folder, "larger_dict_compare.pkl"), "wb") as f:
-        pickle.dump(av_mmsc_with_larger_dicts, f)
+        pickle.dump(av_mmcs_with_larger_dicts, f)
     with open(os.path.join(outputs_folder, "larger_dict_threshold.pkl"), "wb") as f:
-        pickle.dump(percentage_above_threshold_mmsc_with_larger_dicts, f)
+        pickle.dump(percentage_above_threshold_mmcs_with_larger_dicts, f)
     
-    plot_mat(av_mmsc_with_larger_dicts, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="Average MMSC with larger dicts", save_name="av_mmsc_with_larger_dicts.png")
-    plot_mat(percentage_above_threshold_mmsc_with_larger_dicts, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title=f"MMSC with larger dicts above {threshold}", save_name="percentage_above_threshold_mmsc_with_larger_dicts.png")
+    plot_mat(av_mmcs_with_larger_dicts, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="Average mmcs with larger dicts", save_name="av_mmcs_with_larger_dicts.png")
+    plot_mat(percentage_above_threshold_mmcs_with_larger_dicts, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title=f"MMCS with larger dicts above {threshold}", save_name="percentage_above_threshold_mmcs_with_larger_dicts.png")
 
 
 
