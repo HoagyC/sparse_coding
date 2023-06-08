@@ -345,7 +345,7 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
         # Add the loss for this batch to the total loss for this epoch
         epoch_loss += loss.item()
         running_recon_loss *= (time_horizon - 1) / time_horizon
-        running_recon_loss += loss.item() / time_horizon
+        running_recon_loss += l_reconstruction.item() / time_horizon
 
         if (epoch + 1) % 1000 == 0:
             # Calculate MMCS
