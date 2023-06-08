@@ -7,3 +7,4 @@ models
 nanoGPTtoTL.py
 tl_simple.py
 scratchpad.py
+secrets.json

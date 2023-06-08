@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 import importlib
 import itertools
+import json
 import math
 import multiprocessing as mp
 import os
@@ -23,6 +24,7 @@ from torchtyping import TensorType
 from tqdm import tqdm
 from transformer_lens import HookedTransformer
 from transformers import PreTrainedTokenizerBase, GPT2Tokenizer
+import wandb
 
 from utils import dotdict
 from nanoGPT_model import GPT
@@ -594,6 +596,8 @@ def run_toy_model(cfg):
     auto_encoders = [[None for _ in range(len(learned_dict_ratios))] for _ in range(len(l1_range))]
     learned_dicts = [[None for _ in range(len(learned_dict_ratios))] for _ in range(len(l1_range))]
 
+    start_time = datetime.now().strftime("%Y%m%d-%H%M%S")
+
     for l1_alpha, learned_dict_ratio in tqdm(list(itertools.product(l1_range, learned_dict_ratios))):
         cfg.l1_alpha = l1_alpha
         cfg.learned_dict_ratio = learned_dict_ratio
@@ -608,8 +612,7 @@ def run_toy_model(cfg):
         learned_dicts[l1_range.index(l1_alpha)][learned_dict_ratios.index(learned_dict_ratio)] = auto_encoder.decoder.weight.detach().cpu().data.t()
     
     outputs_folder = f"outputs_{cfg.model_name}"
-    current_time = datetime.now().strftime("%Y%m%d-%H%M%S")
-    outputs_folder = os.path.join(outputs_folder, current_time)
+    outputs_folder = os.path.join(outputs_folder, start_time)
     os.makedirs(outputs_folder, exist_ok=True)
 
     # Save the matrices and the data generator
@@ -692,6 +695,8 @@ def run_single_go_with_real_data(cfg, dataset_folder: str):
                     print(f"L1 Coef: {cfg.l1_alpha:.3f} | Dict ratio: {cfg.n_components_dictionary / cfg.activation_dim} | " + \
                             f"Batch: {batch_idx+1}/{len(dataset)} | Chunk: {chunk_ndx+1}/{n_chunks_in_folder} | " + \
                             f"Epoch: {epoch+1}/{cfg.epochs} | Reconstruction loss: {running_recon_loss:.6f} | l1: {l_l1:.6f}")
+                    
+                    wandb.log({"reconstruction_loss": running_recon_loss, "l1_loss": l_l1, "epoch": epoch, "batch": batch_idx, "chunk": chunk_ndx, "dict_size": cfg.n_components_dictionary, "l1_coef": cfg.l1_alpha})
             
     n_dead_neurons = get_n_dead_neurons(auto_encoder, dataset)
     return auto_encoder, n_dead_neurons, running_recon_loss
@@ -790,8 +795,8 @@ def run_real_data_model(cfg):
         cfg.mlp_width = dataset.tensors[0][0].shape[-1]
         del dataset
 
-    l1_range = [10 ** (exp/4) for exp in range(cfg.l1_exp_low, cfg.l1_exp_high)]
-    dict_ratios = [2 ** exp for exp in range(cfg.dict_ratio_exp_low, cfg.dict_ratio_exp_high)]
+    l1_range = [cfg.l1_exp_base ** exp for exp in range(cfg.l1_exp_low, cfg.l1_exp_high)]
+    dict_ratios = [cfg.dict_ratio_exp_base ** exp for exp in range(cfg.dict_ratio_exp_low, cfg.dict_ratio_exp_high)]
     dict_sizes = [int(cfg.mlp_width * ratio) for ratio in dict_ratios]
 
     print("Range of l1 values being used: ", l1_range)
@@ -803,12 +808,20 @@ def run_real_data_model(cfg):
     auto_encoders = [[None for _ in range(len(dict_sizes))] for _ in range(len(l1_range))]
     learned_dicts = [[None for _ in range(len(dict_sizes))] for _ in range(len(l1_range))]
 
+    secrets = json.load(open("secrets.json"))
+    wandb.login(key=secrets["wandb_key"])
+    start_time = datetime.now().strftime("%Y%m%d-%H%M%S")
+    wandb_group_name = f"{cfg.model_name}_{start_time[4:-2]}" # trim year and seconds
+
     for l1_ndx, dict_size_ndx in tqdm(list(itertools.product(range(len(l1_range)), range(len(dict_sizes))))):
         l1_loss = l1_range[l1_ndx]
         dict_size = dict_sizes[dict_size_ndx]
 
         cfg.l1_alpha = l1_loss
         cfg.n_components_dictionary = dict_size
+
+        wandb.init(project="sparse coding", config=cfg.__dict__, group=wandb_group_name, name=f"l1_{l1_loss:.3}_dict_size_{dict_size}")
+
         auto_encoder, n_dead_neurons, reconstruction_loss = run_single_go_with_real_data(cfg, dataset_folder)
         print(f"l1: {l1_loss} | dict_size: {dict_size} | n_dead_neurons: {n_dead_neurons} | reconstruction_loss: {reconstruction_loss:.3f}")
 
@@ -816,9 +829,10 @@ def run_real_data_model(cfg):
         recon_loss_matrix[l1_ndx, dict_size_ndx] = reconstruction_loss
         auto_encoders[l1_ndx][dict_size_ndx] = auto_encoder.cpu()
         learned_dicts[l1_ndx][dict_size_ndx] = auto_encoder.decoder.weight.detach().cpu().data.t()
+
+        wandb.finish()
     
-    current_time = datetime.now().strftime("%Y%m%d-%H%M%S")
-    outputs_folder = os.path.join(cfg.outputs_folder, current_time)
+    outputs_folder = os.path.join(cfg.outputs_folder, start_time)
     os.makedirs(outputs_folder, exist_ok=True)
 
     # clamp dead_neurons to 0-100 for better visualisation
@@ -862,8 +876,6 @@ def run_real_data_model(cfg):
     plot_mat(av_mmcs_with_larger_dicts, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="Average mmcs with larger dicts", save_name="av_mmcs_with_larger_dicts.png")
     plot_mat(percentage_above_threshold_mmcs_with_larger_dicts, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title=f"MMCS with larger dicts above {threshold}", save_name="percentage_above_threshold_mmcs_with_larger_dicts.png")
 
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--activation_dim", type=int, default=128)
@@ -883,10 +895,12 @@ def main():
     parser.add_argument("--feature_num_nonzero", type=int, default=5)
     parser.add_argument("--correlated_components", type=bool, default=True)
 
-    parser.add_argument("--l1_exp_low", type=int, default=-6)
-    parser.add_argument("--l1_exp_high", type=int, default=7) # not inclusive
+    parser.add_argument("--l1_exp_low", type=int, default=-1)
+    parser.add_argument("--l1_exp_high", type=int, default=0) # not inclusive
+    parser.add_argument("--l1_exp_base", type=int, default=10 ** (1/4))
     parser.add_argument("--dict_ratio_exp_low", type=int, default=5)
-    parser.add_argument("--dict_ratio_exp_high", type=int, default=8) # not inclusive
+    parser.add_argument("--dict_ratio_exp_high", type=int, default=7) # not inclusive
+    parser.add_argument("--dict_ratio_exp_base", type=int, default=2)
 
     parser.add_argument("--run_toy", type=bool, default=False)
     parser.add_argument("--model_name", type=str, default="nanoGPT")
