@@ -3,9 +3,9 @@
 
 ## Sparse Coding
 
-`toy_model.py` contains code which allows for the replication of the first half of the post [Taking features out of superposition with sparse autoencoders](https://www.lesswrong.com/posts/z6QQJbtpkEAX3Aojj/interim-research-report-taking-features-out-of-superposition).
+`python replicate_toy_models.py` runs code which allows for the replication of the first half of the post [Taking features out of superposition with sparse autoencoders](https://www.lesswrong.com/posts/z6QQJbtpkEAX3Aojj/interim-research-report-taking-features-out-of-superposition).
 
-Run `python toy_model.py` to copy the l1 / dict_size sweep in the original post.
+`run.py` contains a more flexible set of functions for generating datasets using Pile10k and then running sparse coding activations on real models, incluidng gpt-2-small and custom models.
 
 The repo also contains utils for running code on vast.ai computers which can speed up these sweeps.
 
@@ -39,13 +39,14 @@ block_size = 256 # (just to make faster?)
 batch_size = 64
 ```
 
-Run the standard commands in the [nanoGPT readme](https://github.com/karpathy/nanoGPT/)
-but in the run command change nproc_per_node to 1
-so:
+To set up the dataset run:
 
 `python data/openwebtext/prepare.py`
 
-if using multiple gpus:
+Then if using multiple gpus, run:
+
 `torchrun --standalone --nproc_per_node={N_GPU} train.py config/train_gpt2.py`
-else:
+
+else simply run:
+
 `python train.py`
