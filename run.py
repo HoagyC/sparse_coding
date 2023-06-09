@@ -705,7 +705,7 @@ def run_single_go_with_real_data(cfg, dataset_folder: str):
     return auto_encoder, n_dead_neurons, running_recon_loss
 
 
-def get_top_k_activations_from_dataset(cfg, model: HookedTransformer, feature_dict: torch.Tensor,  k: int = 100, use_baukit: bool = False, max_sentences: int = 10000):
+def make_feature_activation_dataset(cfg, model: HookedTransformer, feature_dict: torch.Tensor, use_baukit: bool = False, max_sentences: int = 10000):
     """
     Takes a dict of features and returns the top k activations for each feature in pile10k
     """
@@ -830,9 +830,6 @@ def run_real_data_model(cfg):
     else:
         print("Using default tokenizer from gpt2")
         tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-
-    feature_dict = pickle.load(open("outputs/tinybatch_sweep/auto_encoders.pkl", "rb"))[0][0].decoder.weight.detach().cpu()
-    get_top_k_activations_from_dataset(cfg, model, feature_dict, k=10, use_baukit=use_baukit, max_sentences=100)
 
     sentence_dataset, bits_per_byte = chunk_and_tokenize(sentence_dataset, tokenizer, max_length=cfg.max_length)
     sentence_dataset = DataLoader(sentence_dataset, batch_size=cfg.model_batch_size, shuffle=True)
