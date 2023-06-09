@@ -436,7 +436,7 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
     
     if not data_generator:
         data_generator = RandomDatasetGenerator(
-            activation_dim=cfg.activation_dim,
+            activation_dim=cfg.mlp_width,
             n_ground_truth_components=cfg.n_ground_truth_components,
             batch_size=cfg.batch_size,
             feature_num_nonzero=cfg.feature_num_nonzero,
@@ -446,7 +446,7 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
         )
 
     t_type = torch.float16 if device == "cuda" else torch.float32
-    auto_encoder = AutoEncoder(cfg.activation_dim, cfg.n_components_dictionary, t_type).to(device)
+    auto_encoder = AutoEncoder(cfg.mlp_width, cfg.n_components_dictionary, t_type).to(device)
 
     ground_truth_features = data_generator.feats
     # Train the model
@@ -577,7 +577,7 @@ def recalculate_results(auto_encoder, data_generator):
 def run_toy_model(cfg):
     # Using a single data generator for all runs so that can compare learned dicts
     data_generator = RandomDatasetGenerator(
-        activation_dim=cfg.activation_dim,
+        activation_dim=cfg.mlp_width,
         n_ground_truth_components=cfg.n_ground_truth_components,
         batch_size=cfg.batch_size,
         feature_num_nonzero=cfg.feature_num_nonzero,
@@ -665,7 +665,7 @@ def run_toy_model(cfg):
 
 
 def run_single_go_with_real_data(cfg, auto_encoder: Optional[AutoEncoder] = None):
-    auto_encoder = AutoEncoder(cfg.activation_dim, cfg.n_components_dictionary).to(cfg.device)
+    auto_encoder = AutoEncoder(cfg.mlp_width, cfg.n_components_dictionary).to(cfg.device)
     optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.learning_rate, eps=1e-4)
     running_recon_loss = 0.0
     time_horizon = 1000
@@ -695,7 +695,7 @@ def run_single_go_with_real_data(cfg, auto_encoder: Optional[AutoEncoder] = None
                     running_recon_loss *= (time_horizon - 1) / time_horizon
                     running_recon_loss += l_reconstruction.item() / time_horizon
                 if (batch_idx + 1) % 1000 == 0:
-                    print(f"L1 Coef: {cfg.l1_alpha:.3f} | Dict ratio: {cfg.n_components_dictionary / cfg.activation_dim} | " + \
+                    print(f"L1 Coef: {cfg.l1_alpha:.3f} | Dict ratio: {cfg.n_components_dictionary / cfg.mlp_width} | " + \
                             f"Batch: {batch_idx+1}/{len(dataset)} | Chunk: {chunk_ndx+1}/{n_chunks_in_folder} | " + \
                             f"Epoch: {epoch+1}/{cfg.epochs} | Reconstruction loss: {running_recon_loss:.6f} | l1: {l_l1:.6f}")
                     if cfg.use_wandb:
@@ -938,7 +938,6 @@ def run_real_data_model(cfg):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--use_wandb", type=bool, default=True)
-    parser.add_argument("--activation_dim", type=int, default=128)
     parser.add_argument("--n_ground_truth_components", type=int, default=512)
     parser.add_argument("--learned_dict_ratio", type=float, default=1.0)
     parser.add_argument("--max_length", type=int, default=256) # when tokenizing, truncate to this length, basically the context size
