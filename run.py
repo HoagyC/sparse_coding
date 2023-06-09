@@ -466,7 +466,7 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
         x_hat, c = auto_encoder(batch)
         # Compute the reconstruction loss and L1 regularization
         l_reconstruction = torch.nn.MSELoss()(batch, x_hat)
-        l_l1 = cfg.l1_alpha * torch.norm(c,1, dim=1).mean() / c.size(1)
+        l_l1 = cfg.l1_alpha * torch.norm(c,1, dim=1).mean()
         # Compute the total loss
         loss = l_reconstruction + l_l1
 
@@ -597,7 +597,6 @@ def run_toy_model(cfg):
 
     # 2D array of learned dictionaries, indexed by l1_alpha and learned_dict_ratio, start with Nones
     auto_encoders = [[None for _ in range(len(learned_dict_ratios))] for _ in range(len(l1_range))]
-    learned_dicts = [[None for _ in range(len(learned_dict_ratios))] for _ in range(len(l1_range))]
 
     start_time = datetime.now().strftime("%Y%m%d-%H%M%S")
 
@@ -612,7 +611,6 @@ def run_toy_model(cfg):
         dead_neurons_matrix[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = n_dead_neurons
         recon_loss_matrix[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = reconstruction_loss
         auto_encoders[l1_range.index(l1_alpha)][learned_dict_ratios.index(learned_dict_ratio)] = auto_encoder.cpu()
-        learned_dicts[l1_range.index(l1_alpha)][learned_dict_ratios.index(learned_dict_ratio)] = auto_encoder.decoder.weight.detach().cpu().data.t()
     
     outputs_folder = f"outputs"
     outputs_folder = os.path.join(outputs_folder, start_time)
@@ -640,6 +638,7 @@ def run_toy_model(cfg):
     # Compare each learned dictionary to the larger ones
     av_mmcs_with_larger_dicts = np.zeros((len(l1_range), len(learned_dict_ratios)))
     percentage_above_threshold_mmcs_with_larger_dicts = np.zeros((len(l1_range), len(learned_dict_ratios)))
+    learned_dicts = [[auto_e.decoder.weight.detach().cpu().data.t() for auto_e in l1] for l1 in auto_encoders]
     for l1_ndx, dict_size_ndx in tqdm(list(itertools.product(range(len(l1_range)), range(len(learned_dict_ratios))))):
         if dict_size_ndx == len(learned_dict_ratios) - 1:
             continue
@@ -664,27 +663,30 @@ def run_toy_model(cfg):
     plot_mat(percentage_above_threshold_mmcs_with_larger_dicts, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title=f"MMCS with larger dicts above {threshold}", save_name="percentage_above_threshold_mmcs_with_larger_dicts.png")
 
 
-def run_single_go_with_real_data(cfg, auto_encoder: Optional[AutoEncoder] = None):
-    auto_encoder = AutoEncoder(cfg.mlp_width, cfg.n_components_dictionary).to(cfg.device)
+def run_with_real_data(cfg, auto_encoder: AutoEncoder):
     optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.learning_rate, eps=1e-4)
     running_recon_loss = 0.0
     time_horizon = 1000
     # torch.autograd.set_detect_anomaly(True)
     n_chunks_in_folder = len(os.listdir(cfg.dataset_folder))
+    wb_tag = f"l1{cfg.l1_alpha:.5f}_ds{cfg.n_components_dictionary}"
     
+    max_batches = 1000
+    n_batches = 0
     for epoch in range(cfg.epochs):
         chunk_order = np.random.permutation(n_chunks_in_folder)
         for chunk_ndx, chunk_id in enumerate(chunk_order):
             chunk_loc = os.path.join(cfg.dataset_folder, f"{chunk_id}.pkl")
             dataset = DataLoader(pickle.load(open(chunk_loc, "rb")), batch_size=cfg.batch_size, shuffle=True)
             for batch_idx, batch in enumerate(dataset):
+                n_batches += 1
                 batch = batch[0].to(cfg.device)
                 optimizer.zero_grad()
                 # Run through auto_encoder
 
                 x_hat, dict_levels = auto_encoder(batch)
                 l_reconstruction = torch.nn.MSELoss()(batch, x_hat)
-                l_l1 = cfg.l1_alpha * torch.norm(dict_levels, 1, dim=1).mean() / dict_levels.size(1)
+                l_l1 = cfg.l1_alpha * torch.norm(dict_levels, 1, dim=1).mean()
                 loss = l_reconstruction + l_l1
                 loss.backward()
                 optimizer.step()
@@ -699,10 +701,21 @@ def run_single_go_with_real_data(cfg, auto_encoder: Optional[AutoEncoder] = None
                             f"Batch: {batch_idx+1}/{len(dataset)} | Chunk: {chunk_ndx+1}/{n_chunks_in_folder} | " + \
                             f"Epoch: {epoch+1}/{cfg.epochs} | Reconstruction loss: {running_recon_loss:.6f} | l1: {l_l1:.6f}")
                     if cfg.use_wandb:
-                        wandb.log({"reconstruction_loss": running_recon_loss, "l1_loss": l_l1, "epoch": epoch, "batch": batch_idx, "chunk": chunk_ndx, "dict_size": cfg.n_components_dictionary, "l1_coef": cfg.l1_alpha})
-            
+                        wandb.log({f"{wb_tag}.reconstruction_loss": running_recon_loss, 
+                                   f"{wb_tag}.l1_loss": l_l1,
+                                   f"{wb_tag}.epoch": epoch, 
+                                   f"{wb_tag}.batch": batch_idx, 
+                                   f"{wb_tag}.chunk": chunk_ndx})
+                
+                if n_batches >= max_batches:
+                    n_dead_neurons = get_n_dead_neurons(auto_encoder, dataset)
+                    return auto_encoder, n_dead_neurons, running_recon_loss
+                
     n_dead_neurons = get_n_dead_neurons(auto_encoder, dataset)
     return auto_encoder, n_dead_neurons, running_recon_loss
+
+            
+
 
 
 def make_feature_activation_dataset(cfg, model: HookedTransformer, feature_dict: torch.Tensor, use_baukit: bool = False, max_sentences: int = 10000):
@@ -862,35 +875,33 @@ def run_real_data_model(cfg):
     recon_loss_matrix = np.zeros((len(l1_range), len(dict_sizes)))
 
     # 2D array of learned dictionaries, indexed by l1_alpha and learned_dict_ratio, start with Nones
-    auto_encoders = [[None for _ in range(len(dict_sizes))] for _ in range(len(l1_range))]
+    auto_encoders = [[AutoEncoder(cfg.activation_dim, n_feats).to(cfg.device) for n_feats in dict_sizes] for _ in range(len(l1_range))]
     learned_dicts = [[None for _ in range(len(dict_sizes))] for _ in range(len(l1_range))]
 
     start_time = datetime.now().strftime("%Y%m%d-%H%M%S")
     if cfg.use_wandb:
         secrets = json.load(open("secrets.json"))
         wandb.login(key=secrets["wandb_key"])
-        wandb_group_name = f"{cfg.model_name}_{start_time[4:-2]}" # trim year and seconds
+        wandb_run_name = f"{cfg.model_name}_{start_time[4:-2]}" # trim year and seconds
+        wandb.init(project="sparse coding", config=cfg.__dict__, name=wandb_run_name)
 
-    for l1_ndx, dict_size_ndx in tqdm(list(itertools.product(range(len(l1_range)), range(len(dict_sizes))))):
-        l1_loss = l1_range[l1_ndx]
-        dict_size = dict_sizes[dict_size_ndx]
+    for mini_run in tqdm(range(5)):
+        for l1_ndx, dict_size_ndx in list(itertools.product(range(len(l1_range)), range(len(dict_sizes)))):
+            l1_loss = l1_range[l1_ndx]
+            dict_size = dict_sizes[dict_size_ndx]
 
-        cfg.l1_alpha = l1_loss
-        cfg.n_components_dictionary = dict_size
-        if cfg.use_wandb:
-            wandb.init(project="sparse coding", config=cfg.__dict__, group=wandb_group_name, name=f"l1_{l1_loss:.3}_dict_size_{dict_size}")
+            cfg.l1_alpha = l1_loss
+            cfg.n_components_dictionary = dict_size
 
-        auto_encoder, n_dead_neurons, reconstruction_loss = run_single_go_with_real_data(cfg)
-        print(f"l1: {l1_loss} | dict_size: {dict_size} | n_dead_neurons: {n_dead_neurons} | reconstruction_loss: {reconstruction_loss:.3f}")
+            auto_encoder = auto_encoders[l1_ndx][dict_size_ndx]
+            auto_encoder, n_dead_neurons, reconstruction_loss = run_with_real_data(cfg, auto_encoder)
 
-        dead_neurons_matrix[l1_ndx, dict_size_ndx] = n_dead_neurons
-        recon_loss_matrix[l1_ndx, dict_size_ndx] = reconstruction_loss
-        auto_encoders[l1_ndx][dict_size_ndx] = auto_encoder.cpu()
-        learned_dicts[l1_ndx][dict_size_ndx] = auto_encoder.decoder.weight.detach().cpu().data.t()
+            dead_neurons_matrix[l1_ndx, dict_size_ndx] = n_dead_neurons
+            recon_loss_matrix[l1_ndx, dict_size_ndx] = reconstruction_loss
 
-        if cfg.use_wandb:
-            wandb.finish()
-    
+    if cfg.use_wandb:
+        wandb.finish()
+
     outputs_folder = os.path.join(cfg.outputs_folder, start_time)
     os.makedirs(outputs_folder, exist_ok=True)
 
@@ -910,6 +921,8 @@ def run_real_data_model(cfg):
     # Compare each learned dictionary to the larger ones
     av_mmcs_with_larger_dicts = np.zeros((len(l1_range), len(dict_sizes)))
     percentage_above_threshold_mmcs_with_larger_dicts = np.zeros((len(l1_range), len(dict_sizes)))
+
+    learned_dicts = [[auto_e.decoder.weight.detach().cpu().data.t() for auto_e in l1] for l1 in auto_encoders]
     for l1_ndx, dict_size_ndx in tqdm(list(itertools.product(range(len(l1_range)), range(len(dict_sizes))))):
         l1_loss = l1_range[l1_ndx]
         dict_size = dict_sizes[dict_size_ndx]
