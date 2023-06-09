@@ -9,7 +9,7 @@ import math
 import multiprocessing as mp
 import os
 import pickle
-from typing import Union, Tuple, List, Any, Optional, TypeVar
+from typing import Union, Tuple, List, Any, Optional, TypeVar, Dict
 
 from baukit import Trace
 from datasets import Dataset, DatasetDict, load_dataset
@@ -199,6 +199,7 @@ class RandomDatasetGenerator(Generator):
             self.n_ground_truth_components,
             device=self.device,
         )
+        self.t_type = torch.float16 if self.device == "cuda" else torch.float32
 
     def send(self, ignored_arg: Any) -> TensorType['dataset_size', 'activation_dim']:
 
@@ -220,7 +221,7 @@ class RandomDatasetGenerator(Generator):
                 self.feats,
                 self.device,
             )
-        return data.to(torch.float16)
+        return data.to(self.t_type)
 
     def throw(self, type: Any = None, value: Any = None, traceback: Any = None) -> None:
         raise StopIteration
@@ -355,22 +356,21 @@ def generate_corr_matrix(
 
 # AutoEncoder Definition
 class AutoEncoder(nn.Module):
-    def __init__(self, activation_size, n_dict_components):
+    def __init__(self, activation_size, n_dict_components, t_type=torch.float16):
         super(AutoEncoder, self).__init__()
         # create decoder using float16 to save memory
         self.decoder = nn.Linear(n_dict_components, activation_size, bias=False)
         # Initialize the decoder weights orthogonally
         nn.init.orthogonal_(self.decoder.weight)
-        self.decoder = self.decoder.to(torch.float16)
+        self.decoder = self.decoder.to(t_type)
 
         self.encoder = nn.Sequential(
-            nn.Linear(activation_size, n_dict_components).to(torch.float16),
+            nn.Linear(activation_size, n_dict_components).to(t_type),
             nn.ReLU()
         )
         
     def forward(self, x):
         c = self.encoder(x)
-
         # Apply unit norm constraint to the decoder weights
         self.decoder.weight.data = nn.functional.normalize(self.decoder.weight.data, dim=0)
     
@@ -413,10 +413,10 @@ def get_n_dead_neurons(auto_encoder, data_generator, n_batches=10, device="cuda"
     Estimates the number of dead neurons in the network by running a few batches of data through the network and
     calculating the mean activation of each neuron. If the mean activation is 0 for a neuron, it is considered dead.
     """
+    t_type = torch.float16 if device == "cuda" else torch.float32
     outputs = []
-    
     for batch_ndx, batch in enumerate(data_generator):
-        input = batch[0].to(device).to(torch.float16)
+        input = batch[0].to(device).to(t_type)
         with torch.no_grad():
             x_hat, c = auto_encoder(input)
         outputs.append(c)
@@ -444,7 +444,8 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
             device=device,
         )
 
-    auto_encoder = AutoEncoder(cfg.activation_dim, cfg.n_components_dictionary).to(device)
+    t_type = torch.float16 if device == "cuda" else torch.float32
+    auto_encoder = AutoEncoder(cfg.activation_dim, cfg.n_components_dictionary, t_type).to(device)
 
     ground_truth_features = data_generator.feats
     # Train the model
@@ -488,11 +489,11 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
             
     learned_dictionary = auto_encoder.decoder.weight.data.t()
     mmcs = mean_max_cosine_similarity(ground_truth_features.to(auto_encoder.device), learned_dictionary)
-    n_dead_neurons = get_n_dead_neurons(auto_encoder, data_generator)
+    n_dead_neurons = get_n_dead_neurons(auto_encoder, data_generator, device=device)
     return mmcs, auto_encoder, n_dead_neurons, running_recon_loss
 
 
-def plot_mat(mat, l1_alphas, learned_dict_ratios, show=True, save_folder=None, save_name=None, title=None):
+def plot_mat(mat, l1_alphas, learned_dict_ratios, show: bool = True, save_folder: str = None, save_name: str = None, title: str = None, col_range: Optional[Tuple[float, float]] = None):
     """
     :param mmcs_mat: matrix values
     :param l1_alphas: list of l1_alphas
@@ -514,14 +515,15 @@ def plot_mat(mat, l1_alphas, learned_dict_ratios, show=True, save_folder=None, s
     plt.ylabel("learned_dict_ratio")
     plt.colorbar()
     plt.set_cmap('viridis')
-    # turn x labels 90 degrees
-    plt.xticks(rotation=90)
+    if col_range:
+        # set the colour range
+        plt.clim(*col_range)
+
+    plt.xticks(rotation=90) # turn x labels 90 degrees
     if title:
         plt.title(title)
-
     if show:
         plt.show()
-    
     if save_folder:
         plt.savefig(os.path.join(save_folder, save_name))
         plt.close()
@@ -611,12 +613,12 @@ def run_toy_model(cfg):
         auto_encoders[l1_range.index(l1_alpha)][learned_dict_ratios.index(learned_dict_ratio)] = auto_encoder.cpu()
         learned_dicts[l1_range.index(l1_alpha)][learned_dict_ratios.index(learned_dict_ratio)] = auto_encoder.decoder.weight.detach().cpu().data.t()
     
-    outputs_folder = f"outputs_{cfg.model_name}"
+    outputs_folder = f"outputs"
     outputs_folder = os.path.join(outputs_folder, start_time)
     os.makedirs(outputs_folder, exist_ok=True)
 
     # Save the matrices and the data generator
-    plot_mat(mmcs_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Mean Max Cosine Similarity w/ True", save_name="mmcs_matrix.png")
+    plot_mat(mmcs_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Mean Max Cosine Similarity w/ True", save_name="mmcs_matrix.png", col_range=(0., 1.))
     # clamp dead_neurons to 0-100 for better visualisation
     dead_neurons_matrix = np.clip(dead_neurons_matrix, 0, 100)
     plot_mat(dead_neurons_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Dead Neurons", save_name="dead_neurons_matrix.png")
@@ -875,7 +877,7 @@ def run_real_data_model(cfg):
     with open(os.path.join(outputs_folder, "larger_dict_threshold.pkl"), "wb") as f:
         pickle.dump(percentage_above_threshold_mmcs_with_larger_dicts, f)
     
-    plot_mat(av_mmcs_with_larger_dicts, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="Average mmcs with larger dicts", save_name="av_mmcs_with_larger_dicts.png")
+    plot_mat(av_mmcs_with_larger_dicts, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="Average mmcs with larger dicts", save_name="av_mmcs_with_larger_dicts.png", col_range=(0., 1.))
     plot_mat(percentage_above_threshold_mmcs_with_larger_dicts, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title=f"MMCS with larger dicts above {threshold}", save_name="percentage_above_threshold_mmcs_with_larger_dicts.png")
 
 def main():
@@ -900,7 +902,7 @@ def main():
 
     parser.add_argument("--l1_exp_low", type=int, default=-1)
     parser.add_argument("--l1_exp_high", type=int, default=0) # not inclusive
-    parser.add_argument("--l1_exp_base", type=int, default=10 ** (1/4))
+    parser.add_argument("--l1_exp_base", type=float, default=10 ** (1/4))
     parser.add_argument("--dict_ratio_exp_low", type=int, default=5)
     parser.add_argument("--dict_ratio_exp_high", type=int, default=7) # not inclusive
     parser.add_argument("--dict_ratio_exp_base", type=int, default=2)
