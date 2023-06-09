@@ -106,8 +106,6 @@ def generate_rand_dataset(
     dataset_values = torch.rand(dataset_size, n_ground_truth_components, device=device)
 
     data_zero = torch.zeros_like(dataset_thresh, device=device)
-
-
     dataset_codes = torch.where(
         dataset_thresh <= feature_probs,
         dataset_values,
@@ -312,7 +310,7 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
     
     # Hold a running average of the reconstruction loss
     running_recon_loss = 0.0
-    time_horizon = 10
+    time_horizon = 1000
     for epoch in range(cfg.epochs):
         epoch_loss = 0.0
 
@@ -536,19 +534,17 @@ def main():
 
     # Compare each learned dictionary to the larger ones
     av_mmcs_with_larger_dicts = np.zeros((len(l1_range), len(learned_dict_ratios)))
-    try:
-        for l1_alpha, learned_dict_ratio in tqdm(list(itertools.product(l1_range, learned_dict_ratios))):
-            l1_ndx = l1_range.index(l1_alpha)
-            ratio_ndx = learned_dict_ratios.index(learned_dict_ratio)
-            if ratio_ndx == len(learned_dict_ratios) - 1:
-                continue
-            learned_dict = learned_dicts[l1_ndx][ratio_ndx]
-            larger_dicts = [learned_dicts[l1_ndx][larger_ratio_ndx] for larger_ratio_ndx in range(ratio_ndx + 1, len(learned_dict_ratios))][:2]
-            assert len(larger_dicts) > 0 
-            mean_max_cosine_similarity = compare_mmcs_with_larger_dicts(learned_dict, larger_dicts)
-            av_mmcs_with_larger_dicts[l1_ndx, ratio_ndx] = mean_max_cosine_similarity
-    except:
-        breakpoint()
+    for l1_ndx, dict_size_ndx in tqdm(list(itertools.product(range(len(l1_range)), range(len(learned_dict_ratios))))):
+        if dict_size_ndx == len(learned_dict_ratios) - 1:
+            continue
+        smaller_dict = learned_dicts[l1_ndx][dict_size_ndx]
+        larger_dict = learned_dicts[l1_ndx][dict_size_ndx+1]
+        smaller_dict_features, shared_vector_size = smaller_dict.shape
+
+        max_cosine_similarities = np.zeros((smaller_dict_features))
+        for i, vector in enumerate(smaller_dict):
+            max_cosine_similarities[i] = torch.nn.functional.cosine_similarity(vector.to(cfg.device), larger_dict.to(cfg.device), dim=1).max()
+        av_mmcs_with_larger_dicts[l1_ndx, dict_size_ndx] = max_cosine_similarities.mean().item()
     
     plot_mat(av_mmcs_with_larger_dicts, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Average mmcs with larger dicts", save_name="av_mmcs_with_larger_dicts.png")
 
