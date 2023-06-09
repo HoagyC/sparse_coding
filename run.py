@@ -664,18 +664,18 @@ def run_toy_model(cfg):
     plot_mat(percentage_above_threshold_mmcs_with_larger_dicts, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title=f"MMCS with larger dicts above {threshold}", save_name="percentage_above_threshold_mmcs_with_larger_dicts.png")
 
 
-def run_single_go_with_real_data(cfg, dataset_folder: str):
+def run_single_go_with_real_data(cfg, auto_encoder: Optional[AutoEncoder] = None):
     auto_encoder = AutoEncoder(cfg.activation_dim, cfg.n_components_dictionary).to(cfg.device)
     optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.learning_rate, eps=1e-4)
     running_recon_loss = 0.0
     time_horizon = 1000
     # torch.autograd.set_detect_anomaly(True)
-    n_chunks_in_folder = len(os.listdir(dataset_folder))
+    n_chunks_in_folder = len(os.listdir(cfg.dataset_folder))
     
     for epoch in range(cfg.epochs):
         chunk_order = np.random.permutation(n_chunks_in_folder)
         for chunk_ndx, chunk_id in enumerate(chunk_order):
-            chunk_loc = os.path.join(dataset_folder, f"{chunk_id}.pkl")
+            chunk_loc = os.path.join(cfg.dataset_folder, f"{chunk_id}.pkl")
             dataset = DataLoader(pickle.load(open(chunk_loc, "rb")), batch_size=cfg.batch_size, shuffle=True)
             for batch_idx, batch in enumerate(dataset):
                 batch = batch[0].to(cfg.device)
@@ -760,8 +760,8 @@ def make_feature_activation_dataset(cfg, model: HookedTransformer, feature_dict:
     return df
 
             
-def make_activation_dataset(cfg, sentence_dataset: DataLoader, model: HookedTransformer, tensor_name: str, dataset_folder: str, baukit: bool = False) -> pd.DataFrame:
-    print(f"Running model and saving activations to {dataset_folder}")
+def make_activation_dataset(cfg, sentence_dataset: DataLoader, model: HookedTransformer, tensor_name: str, baukit: bool = False) -> pd.DataFrame:
+    print(f"Running model and saving activations to {cfg.dataset_folder}")
     with torch.no_grad():
         chunk_size =  2 * (2 ** 30) # 2GB
         activation_size = cfg.mlp_width * 2 * cfg.model_batch_size * cfg.max_length # 3072 mlp activations, 2 bytes per half, 1024 context window
@@ -787,7 +787,7 @@ def make_activation_dataset(cfg, sentence_dataset: DataLoader, model: HookedTran
                 # Need to save, restart the list
                 dataset = torch.cat(dataset, dim=0).to("cpu")
                 dataset = torch.utils.data.TensorDataset(dataset)
-                with open(dataset_folder + "/" + str(n_saved_chunks) + ".pkl", "wb") as f:
+                with open(cfg.dataset_folder + "/" + str(n_saved_chunks) + ".pkl", "wb") as f:
                     pickle.dump(dataset, f)
                 n_saved_chunks += 1
                 print(f"Saved chunk {n_saved_chunks} of activations")
@@ -798,7 +798,10 @@ def make_activation_dataset(cfg, sentence_dataset: DataLoader, model: HookedTran
 def make_tensor_name(cfg):
     if cfg.model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]:
         tensor_name = f"blocks.{cfg.layer}.mlp.hook_post"
-        cfg.mlp_width = 3072
+        if cfg.model_name == "gpt2":
+            cfg.mlp_width = 3072
+        elif cfg.model_name == "EleutherAI/pythia-70m-deduped":
+            cfg.mlp_width = 2048
     elif cfg.model_name == "nanoGPT":
         tensor_name = f"transformer.h.{cfg.layer}.mlp.c_fc"
         cfg.mlp_width = 128
@@ -836,15 +839,15 @@ def run_real_data_model(cfg):
 
     # Check if we have already run this model and got the activations
     dataset_name = cfg.dataset_name.split("/")[-1] + "-" + cfg.model_name + "-" + str(cfg.layer)
-    dataset_folder = os.path.join(cfg.datasets_folder, dataset_name)
-    os.makedirs(dataset_folder, exist_ok=True)
-    if len(os.listdir(dataset_folder)) == 0:
+    cfg.dataset_folder = os.path.join(cfg.datasets_folder, dataset_name)
+    os.makedirs(cfg.dataset_folder, exist_ok=True)
+    if len(os.listdir(cfg.dataset_folder)) == 0:
         tensor_name = make_tensor_name(cfg)
-        make_activation_dataset(cfg, sentence_dataset, model, tensor_name, dataset_folder, use_baukit)
+        make_activation_dataset(cfg, sentence_dataset, model, tensor_name, use_baukit)
     else:
-        print(f"Activations in {dataset_folder} already exist, loading them")
+        print(f"Activations in {cfg.dataset_folder} already exist, loading them")
         # get mlp_width from first file
-        with open(os.path.join(dataset_folder, "0.pkl"), "rb") as f:
+        with open(os.path.join(cfg.dataset_folder, "0.pkl"), "rb") as f:
             dataset = pickle.load(f)
         cfg.mlp_width = dataset.tensors[0][0].shape[-1]
         del dataset
@@ -877,7 +880,7 @@ def run_real_data_model(cfg):
         if cfg.use_wandb:
             wandb.init(project="sparse coding", config=cfg.__dict__, group=wandb_group_name, name=f"l1_{l1_loss:.3}_dict_size_{dict_size}")
 
-        auto_encoder, n_dead_neurons, reconstruction_loss = run_single_go_with_real_data(cfg, dataset_folder)
+        auto_encoder, n_dead_neurons, reconstruction_loss = run_single_go_with_real_data(cfg)
         print(f"l1: {l1_loss} | dict_size: {dict_size} | n_dead_neurons: {n_dead_neurons} | reconstruction_loss: {reconstruction_loss:.3f}")
 
         dead_neurons_matrix[l1_ndx, dict_size_ndx] = n_dead_neurons
