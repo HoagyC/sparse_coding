@@ -12,7 +12,7 @@ import pickle
 from typing import Union, Tuple, List, Any, Optional, TypeVar, Dict
 
 from baukit import Trace
-from datasets import Dataset, DatasetDict, load_dataset  # type: ignore
+from datasets import Dataset, DatasetDict, load_dataset # mypy: ignore-errors
 from einops import rearrange
 from matplotlib import pyplot as plt
 import pandas as pd
@@ -389,8 +389,8 @@ def cosine_sim(
 ) -> np.ndarray:
     vecs = [vecs1, vecs2]
     for i in range(len(vecs)):
-        if type(vecs[i]) is not np.ndarray:
-            vecs[i] = vecs[i].detach().cpu().numpy()  # type: ignore
+        if not isinstance(vecs[i], np.ndarray):
+            vecs[i] = vecs[i].detach().cpu().numpy() # type: ignore
     vecs1, vecs2 = vecs
     normalize = lambda v: (v.T / np.linalg.norm(v, axis=1)).T
     vecs1_norm = normalize(vecs1)
@@ -448,10 +448,12 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
 
     t_type = torch.float16 if device == "cuda" else torch.float32
     auto_encoder = AutoEncoder(cfg.mlp_width, cfg.n_components_dictionary, t_type).to(device)
+    t_type = torch.float32
+    auto_encoder = AutoEncoder(cfg.activation_dim, cfg.n_components_dictionary, t_type).to(device)
 
     ground_truth_features = data_generator.feats
     # Train the model
-    optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.learning_rate, eps=1e-4)
+    optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.learning_rate)
     
     # Hold a running average of the reconstruction loss
     running_recon_loss = 0.0
@@ -664,26 +666,15 @@ def run_toy_model(cfg):
     plot_mat(percentage_above_threshold_mmcs_with_larger_dicts, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title=f"MMCS with larger dicts above {threshold}", save_name="percentage_above_threshold_mmcs_with_larger_dicts.png")
 
 
-<<<<<<< HEAD
-def run_with_real_data(cfg, auto_encoder: AutoEncoder):
-=======
 def run_with_real_data(cfg, auto_encoder: AutoEncoder, dataset_folder: str, completed_batches: int = 0):
->>>>>>> fd235e2 (Add sweep-as-inner capability.)
-    optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.learning_rate, eps=1e-4)
+    optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.learning_rate)
     running_recon_loss = 0.0
     running_l1_loss = 0.0
     time_horizon = 1000
     # torch.autograd.set_detect_anomaly(True)
-<<<<<<< HEAD
-    n_chunks_in_folder = len(os.listdir(cfg.dataset_folder))
-    wb_tag = f"l1{cfg.l1_alpha:.5f}_ds{cfg.n_components_dictionary}"
-    
-    max_batches = 1000
-=======
     n_chunks_in_folder = len(os.listdir(dataset_folder))
     wb_tag = f"l1={cfg.l1_alpha:.2E}_ds={cfg.n_components_dictionary}"
 
->>>>>>> fd235e2 (Add sweep-as-inner capability.)
     n_batches = 0
     for epoch in range(cfg.epochs):
         chunk_order = np.random.permutation(n_chunks_in_folder)
@@ -692,7 +683,7 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, dataset_folder: str, comp
             dataset = DataLoader(pickle.load(open(chunk_loc, "rb")), batch_size=cfg.batch_size, shuffle=True)
             for batch_idx, batch in enumerate(dataset):
                 n_batches += 1
-                batch = batch[0].to(cfg.device)
+                batch = batch[0].to(cfg.device).to(torch.float32)
                 optimizer.zero_grad()
                 # Run through auto_encoder
 
@@ -709,10 +700,6 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, dataset_folder: str, comp
                 else:
                     running_recon_loss *= (time_horizon - 1) / time_horizon
                     running_recon_loss += l_reconstruction.item() / time_horizon
-<<<<<<< HEAD
-                if (batch_idx + 1) % 1000 == 0:
-                    print(f"L1 Coef: {cfg.l1_alpha:.3f} | Dict ratio: {cfg.n_components_dictionary / cfg.mlp_width} | " + \
-=======
                     running_l1_loss *= (time_horizon - 1) / time_horizon
                     running_l1_loss += l_l1.item() / time_horizon
 
@@ -720,7 +707,6 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, dataset_folder: str, comp
                     breakpoint()
 
                     print(f"L1 Coef: {cfg.l1_alpha:.2E} | Dict ratio: {cfg.n_components_dictionary / cfg.activation_dim} | " + \
->>>>>>> fd235e2 (Add sweep-as-inner capability.)
                             f"Batch: {batch_idx+1}/{len(dataset)} | Chunk: {chunk_ndx+1}/{n_chunks_in_folder} | " + \
                             f"Epoch: {epoch+1}/{cfg.epochs} | Reconstruction loss: {running_recon_loss:.6f} | l1: {l_l1:.6f}")
                     if cfg.use_wandb:
@@ -821,17 +807,10 @@ def make_activation_dataset(cfg, sentence_dataset: DataLoader, model: HookedTran
             dataset.append(mlp_activation_data)
             if len(dataset) >= max_chunks:
                 # Need to save, restart the list
-<<<<<<< HEAD
-                dataset = torch.cat(dataset, dim=0).to("cpu")
-                dataset = torch.utils.data.TensorDataset(dataset)
-                with open(cfg.dataset_folder + "/" + str(n_saved_chunks) + ".pkl", "wb") as f:
-                    pickle.dump(dataset, f)
-=======
                 dataset_t = torch.cat(dataset, dim=0).to("cpu")
                 dataset_obj = torch.utils.data.TensorDataset(dataset_t)
-                with open(dataset_folder + "/" + str(n_saved_chunks) + ".pkl", "wb") as f:
+                with open(cfg.dataset_folder + "/" + str(n_saved_chunks) + ".pkl", "wb") as f:
                     pickle.dump(dataset_obj, f)
->>>>>>> fd235e2 (Add sweep-as-inner capability.)
                 n_saved_chunks += 1
                 print(f"Saved chunk {n_saved_chunks} of activations")
                 dataset = []
@@ -953,14 +932,10 @@ def run_real_data_model(cfg):
             cfg.l1_alpha = l1_loss
             cfg.n_components_dictionary = dict_size
             auto_encoder = auto_encoders[l1_ndx][dict_size_ndx]
-<<<<<<< HEAD
-            auto_encoder, n_dead_neurons, reconstruction_loss = run_with_real_data(cfg, auto_encoder)
-=======
 
             auto_encoder, n_dead_neurons, reconstruction_loss, l1_loss, completed_batches = run_with_real_data(cfg, auto_encoder, dataset_folder, completed_batches=step_n)
             if l1_ndx == (len(l1_range) - 1) and dict_size_ndx == (len(dict_sizes) - 1):
                 step_n = completed_batches
->>>>>>> fd235e2 (Add sweep-as-inner capability.)
 
             dead_neurons_matrix[l1_ndx, dict_size_ndx] = n_dead_neurons
             recon_loss_matrix[l1_ndx, dict_size_ndx] = reconstruction_loss
