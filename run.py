@@ -12,7 +12,7 @@ import pickle
 from typing import Union, Tuple, List, Any, Optional, TypeVar, Dict
 
 from baukit import Trace
-from datasets import Dataset, DatasetDict, load_dataset # mypy: ignore-errors
+from datasets import Dataset, DatasetDict, load_dataset  # type: ignore
 from einops import rearrange
 from matplotlib import pyplot as plt
 import pandas as pd
@@ -389,8 +389,8 @@ def cosine_sim(
 ) -> np.ndarray:
     vecs = [vecs1, vecs2]
     for i in range(len(vecs)):
-        if not isinstance(vecs[i], np.ndarray):
-            vecs[i] = vecs[i].detach().cpu().numpy() # type: ignore
+        if type(vecs[i]) is not np.ndarray:
+            vecs[i] = vecs[i].detach().cpu().numpy()  # type: ignore
     vecs1, vecs2 = vecs
     normalize = lambda v: (v.T / np.linalg.norm(v, axis=1)).T
     vecs1_norm = normalize(vecs1)
