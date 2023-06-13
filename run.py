@@ -188,7 +188,7 @@ class RandomDatasetGenerator(Generator):
             self.n_ground_truth_components,
             device=self.device,
         )
-        self.t_type = torch.float16 if self.device == "cuda" else torch.float32
+        self.t_type = torch.float32
 
     def send(self, ignored_arg: Any) -> TensorType["dataset_size", "activation_dim"]:
         if self.correlated:
@@ -324,7 +324,7 @@ def generate_corr_matrix(num_feats: int, device: Union[torch.device, str]) -> Te
 
 # AutoEncoder Definition
 class AutoEncoder(nn.Module):
-    def __init__(self, activation_size, n_dict_components, t_type=torch.float16):
+    def __init__(self, activation_size, n_dict_components, t_type=torch.float32):
         super(AutoEncoder, self).__init__()
         self.decoder = nn.Linear(n_dict_components, activation_size, bias=False)
         # Initialize the decoder weights orthogonally
@@ -378,7 +378,7 @@ def get_n_dead_neurons(auto_encoder, data_generator, n_batches=10, device="cuda"
     Estimates the number of dead neurons in the network by running a few batches of data through the network and
     calculating the mean activation of each neuron. If the mean activation is 0 for a neuron, it is considered dead.
     """
-    t_type = torch.float16 if device == "cuda" else torch.float32
+    t_type = torch.float32
     outputs = []
     for batch_ndx, batch in enumerate(data_generator):
         input = batch[0].to(device).to(t_type)
@@ -411,10 +411,8 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
             device=device,
         )
 
-    t_type = torch.float16 if device == "cuda" else torch.float32
-    auto_encoder = AutoEncoder(cfg.mlp_width, cfg.n_components_dictionary, t_type).to(device)
     t_type = torch.float32
-    auto_encoder = AutoEncoder(cfg.activation_dim, cfg.n_components_dictionary, t_type).to(device)
+    auto_encoder = AutoEncoder(cfg.mlp_width, cfg.n_components_dictionary, t_type).to(device)
 
     ground_truth_features = data_generator.feats
     # Train the model
@@ -500,8 +498,8 @@ def plot_mat(mat, l1_alphas, learned_dict_ratios, show: bool = True, save_folder
 
 def compare_mmcs_with_larger_dicts(dict: npt.NDArray, larger_dicts: List[npt.NDArray]) -> float:
     """
-    :param dict: The dict to compare to others. Shape (activation_dim, n_dict_elements)
-    :param larger_dicts: A list of dicts to compare to. Shape (activation_dim, n_dict_elements(variable)]) * n_larger_dicts
+    :param dict: The dict to compare to others. Shape (mlp_width, n_dict_elements)
+    :param larger_dicts: A list of dicts to compare to. Shape (mlp_width, n_dict_elements(variable)]) * n_larger_dicts
     :return The mean max cosine similarity of the dict to the larger dicts
 
     Takes a dict, and for each element finds the most similar element in each of the larger dicts, takes the average
@@ -681,7 +679,7 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
                     momentum_mag = get_size_of_momentum(cfg, optimizer)
 
                     print(
-                        f"L1 Coef: {cfg.l1_alpha:.2E} | Dict ratio: {cfg.n_components_dictionary / cfg.activation_dim} | "
+                        f"L1 Coef: {cfg.l1_alpha:.2E} | Dict ratio: {cfg.n_components_dictionary / cfg.mlp_width} | "
                         + f"Batch: {batch_idx+1}/{len(dataset)} | Chunk: {chunk_ndx+1}/{n_chunks_in_folder} | "
                         + f"Epoch: {epoch+1}/{cfg.epochs} | Reconstruction loss: {running_recon_loss:.6f} | l1: {l_l1:.6f}"
                     )
@@ -927,8 +925,7 @@ def run_real_data_model(cfg: dotdict):
         wandb.init(project="sparse coding", config=cfg.__dict__, name=wandb_run_name)
 
     step_n = 0
-    n_mini_runs = 1
-    for mini_run in tqdm(range(n_mini_runs)):
+    for mini_run in tqdm(range(cfg.mini_runs)):
         for l1_ndx, dict_size_ndx in list(itertools.product(range(len(l1_range)), range(len(dict_sizes)))):
             l1_loss = l1_range[l1_ndx]
             dict_size = dict_sizes[dict_size_ndx]
@@ -1051,6 +1048,7 @@ def main():
     parser.add_argument("--n_chunks", type=int, default=400)
     parser.add_argument("--threshold", type=float, default=0.9)  # When looking for matching features across dicts, what is the threshold for a match
     parser.add_argument("--max_batches", type=int, default=0)  # How many batches to run the inner loop for before cutting out, 0 means run all
+    parser.add_argument("--mini_runs", type=int, default=1)  # How many times to run the inner loop, each time with a different random subset of the data
     args = parser.parse_args()
     cfg = dotdict(vars(args))  # convert to dotdict via dict
     cfg.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
