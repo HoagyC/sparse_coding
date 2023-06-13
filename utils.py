@@ -6,6 +6,7 @@ VAST_NUM = 4
 VAST_PORT = 35438
 SSH_DIRECTORY = "sparse_coding"
 dest_addr = f"root@ssh{VAST_NUM}.vast.ai"
+SSH_PYTHON = "/opt/conda/bin/python"
 
 def sync():
     """ Sync the local directory with the remote host."""
@@ -21,6 +22,13 @@ def copy_models():
     command = f"scp -P {VAST_PORT} -r models {dest_addr}:{SSH_DIRECTORY}/models"
     subprocess.call(command, shell=True)
 
+
+def copy_secrets():
+    """Copy the secrets.json file from local directory to the remote host."""
+    command = f"scp -P {VAST_PORT} secrets.json {dest_addr}:{SSH_DIRECTORY}"
+    subprocess.call(command, shell=True)
+
+
 def copy_recent():
     """ Get the most recent outputs folder in the remote host and copy across to same place in local directory."""
     # get the most recent folder
@@ -30,6 +38,17 @@ def copy_recent():
     # copy across
     command = f"scp -P {VAST_PORT} -r {dest_addr}:{output} outputs"
     subprocess.call(command, shell=True)
+
+
+def setup():
+    """Sync, copy models, create venv and install requirements."""
+    sync()
+    copy_models()
+    copy_secrets()
+    command = f'ssh -p {VAST_PORT} {dest_addr} "cd {SSH_DIRECTORY} && {SSH_PYTHON} -m venv .env && source .env/bin/activate && pip install -r requirements.txt" && apt install vim'
+    # command = f"ssh -p {VAST_PORT} {dest_addr} \"cd {SSH_DIRECTORY} && echo $PATH\""
+    subprocess.call(command, shell=True)
+
 
 class dotdict(dict):
     """ Dictionary that can be accessed with dot notation."""
@@ -58,3 +77,7 @@ if __name__ == "__main__":
         copy_models()
     elif sys.argv[1] == "recent":
         copy_recent()
+    elif sys.argv[1] == "setup":
+        setup()
+    elif sys.argv[1] == "secrets":
+        copy_secrets()
