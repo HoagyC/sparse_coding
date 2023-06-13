@@ -12,7 +12,7 @@ import pickle
 from typing import Union, Tuple, List, Any, Optional, TypeVar, Dict
 
 from baukit import Trace
-from datasets import Dataset, DatasetDict, load_dataset # mypy: ignore-errors
+from datasets import Dataset, DatasetDict, load_dataset # type: ignore
 from einops import rearrange
 from matplotlib import pyplot as plt
 import pandas as pd
@@ -353,7 +353,7 @@ def cosine_sim(
     vecs = [vecs1, vecs2]
     for i in range(len(vecs)):
         if not isinstance(vecs[i], np.ndarray):
-            vecs[i] = vecs[i].detach().cpu().numpy() # type: ignore
+            vecs[i] = vecs[i].detach().cpu().numpy() # type: ignore
     vecs1, vecs2 = vecs
     normalize = lambda v: (v.T / np.linalg.norm(v, axis=1)).T
     vecs1_norm = normalize(vecs1)
@@ -635,13 +635,13 @@ def run_toy_model(cfg):
     )
 
 
-def run_with_real_data(cfg, auto_encoder: AutoEncoder, dataset_folder: str, completed_batches: int = 0):
+def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 0):
     optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.learning_rate)
     running_recon_loss = 0.0
     running_l1_loss = 0.0
     time_horizon = 1000
     # torch.autograd.set_detect_anomaly(True)
-    n_chunks_in_folder = len(os.listdir(dataset_folder))
+    n_chunks_in_folder = len(os.listdir(cfg.dataset_folder))
     wb_tag = f"l1={cfg.l1_alpha:.2E}_ds={cfg.n_components_dictionary}"
     old_dict = auto_encoder.decoder.weight.detach().cpu().data.t().clone()
 
@@ -759,15 +759,9 @@ def make_feature_activation_dataset(cfg, model: HookedTransformer, feature_dict:
     df = pd.DataFrame(sentence_fragment_dicts)
     return df
 
-<<<<<<< HEAD
             
 def make_activation_dataset(cfg, sentence_dataset: DataLoader, model: HookedTransformer, tensor_name: str, baukit: bool = False) -> pd.DataFrame:
     print(f"Running model and saving activations to {cfg.dataset_folder}")
-=======
-
-def make_activation_dataset(cfg, sentence_dataset: DataLoader, model: HookedTransformer, tensor_name: str, dataset_folder: str, baukit: bool = False) -> pd.DataFrame:
-    print(f"Running model and saving activations to {dataset_folder}")
->>>>>>> 77f0425 (Black format with long lines.)
     with torch.no_grad():
         chunk_size = 2 * (2**30)  # 2GB
         activation_size = cfg.mlp_width * 2 * cfg.model_batch_size * cfg.max_length  # 3072 mlp activations, 2 bytes per half, 1024 context window
@@ -943,7 +937,7 @@ def run_real_data_model(cfg: dotdict):
             cfg.n_components_dictionary = dict_size
             auto_encoder = auto_encoders[l1_ndx][dict_size_ndx]
 
-            auto_encoder, n_dead_neurons, reconstruction_loss, l1_loss, completed_batches = run_with_real_data(cfg, auto_encoder, dataset_folder, completed_batches=step_n)
+            auto_encoder, n_dead_neurons, reconstruction_loss, l1_loss, completed_batches = run_with_real_data(cfg, auto_encoder, completed_batches=step_n)
             if l1_ndx == (len(l1_range) - 1) and dict_size_ndx == (len(dict_sizes) - 1):
                 step_n = completed_batches
 
