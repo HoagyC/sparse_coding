@@ -13,7 +13,7 @@ tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 
 model = GPT(cfg)
 model_dict = loaded_model["model"]
-# need to cut the "_orig_mod." from the keys
+# need to cut the "_orig_mod." from the keys
 model_dict = {k.replace("_orig_mod.", ""): v for k, v in model_dict.items()}
 model.load_state_dict(model_dict)
 

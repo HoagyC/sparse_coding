@@ -2,6 +2,7 @@ __pycache__/**
 .vscode/**
 
 .env
+.config
 outputs
 datasets
 models

@@ -69,7 +69,7 @@ torchtyping==0.1.4
 torchvision==0.15.2
 tqdm==4.65.0
 transformer-lens==1.2.2
-transformers==4.29.2
+transformers==4.30.1
 typeguard==4.0.0
 typing_extensions==4.6.2
 tzdata==2023.3
