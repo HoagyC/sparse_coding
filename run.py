@@ -324,7 +324,7 @@ def generate_corr_matrix(num_feats: int, device: Union[torch.device, str]) -> Te
 
 # AutoEncoder Definition
 class AutoEncoder(nn.Module):
-    def __init__(self, activation_size, n_dict_components, t_type=torch.float32):
+    def __init__(self, activation_size, n_dict_components, t_type=torch.float32, l1_coef=0.0):
         super(AutoEncoder, self).__init__()
         self.decoder = nn.Linear(n_dict_components, activation_size, bias=False)
         # Initialize the decoder weights orthogonally
@@ -332,6 +332,9 @@ class AutoEncoder(nn.Module):
         self.decoder = self.decoder.to(t_type)
 
         self.encoder = nn.Sequential(nn.Linear(activation_size, n_dict_components).to(t_type), nn.ReLU())
+        self.l1_coef = l1_coef
+        self.activation_size = activation_size
+        self.n_dict_components = n_dict_components
 
     def forward(self, x):
         c = self.encoder(x)
@@ -412,7 +415,7 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
         )
 
     t_type = torch.float32
-    auto_encoder = AutoEncoder(cfg.mlp_width, cfg.n_components_dictionary, t_type).to(device)
+    auto_encoder = AutoEncoder(cfg.mlp_width, cfg.n_components_dictionary, t_type, l1_coef=cfg.l1_alpha).to(device)
 
     ground_truth_features = data_generator.feats
     # Train the model
@@ -911,8 +914,22 @@ def run_real_data_model(cfg: dotdict):
     l1_loss_matrix = np.zeros((len(l1_range), len(dict_sizes)))
 
     # 2D array of learned dictionaries, indexed by l1_alpha and learned_dict_ratio, start with Nones
-    auto_encoders = [[AutoEncoder(cfg.activation_dim, n_feats).to(cfg.device) for n_feats in dict_sizes] for _ in range(len(l1_range))]
-    learned_dicts = [[None for _ in range(len(dict_sizes))] for _ in range(len(l1_range))]
+    auto_encoders = [[AutoEncoder(cfg.mlp_width, n_feats, l1_coef=l1_ndx).to(cfg.device) for n_feats in dict_sizes] for l1_ndx in l1_range]
+    if cfg.load_autoencoders:
+        # We check if the sizes match for any of the saved autoencoders, and if so, load them
+        loaded_autoencoders = pickle.load(open(cfg.load_autoencoders, "rb"))
+        for autoencoder_list in loaded_autoencoders:
+            for ae in autoencoder_list:
+                if ae.activation_size != cfg.mlp_width:
+                    print(f"Mismatch of activation size, expected {cfg.mlp_width} but got {ae.activation_size}")
+                    continue
+                if ae.l1_coef in l1_range and ae.decoder.weight.shape[1] in dict_sizes:
+                    print("Loading autoencoder with l1_coef", ae.l1_coef, "and dict_size", ae.decoder.weight.shape[1])
+                    auto_encoders[l1_range.index(ae.l1_coef)][dict_sizes.index(ae.decoder.weight.shape[1])] = ae
+                else:
+                    print(f"Unable to match autoencoder with l1_coef {ae.l1_coef} and dict_size {ae.decoder.weight.shape[1]}")
+
+    learned_dicts: List[List[Optional[torch.Tensor]]] = [[None for _ in range(len(dict_sizes))] for _ in range(len(l1_range))]
 
     start_time = datetime.now().strftime("%Y%m%d-%H%M%S")
     outputs_folder = os.path.join(cfg.outputs_folder, start_time)
@@ -1016,6 +1033,7 @@ def main():
     parser.add_argument("--n_ground_truth_components", type=int, default=512)
     parser.add_argument("--learned_dict_ratio", type=float, default=1.0)
     parser.add_argument("--max_length", type=int, default=256)  # when tokenizing, truncate to this length, basically the context size
+    parser.add_argument("--load_autoencoders", type=str, default="")
 
     parser.add_argument("--model_batch_size", type=int, default=4)
     parser.add_argument("--batch_size", type=int, default=256)
