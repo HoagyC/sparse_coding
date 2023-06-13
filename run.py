@@ -968,9 +968,9 @@ def run_real_data_model(cfg: dotdict):
             l1_coef = l1_range[l1_ndx]
             dict_size = dict_sizes[dict_size_ndx]
             wb_tag = f"l1={l1_coef:.2E}_ds={dict_size}"
-            wandb.log({f"{wb_tag}.n_dead_neurons": dead_neurons_matrix[l1_ndx, dict_size_ndx]}, step=step_n)
-            wandb.log({f"{wb_tag}.mmcs_with_larger": mmcs_with_larger[l1_ndx, dict_size_ndx]}, step=step_n)
-            wandb.log({f"{wb_tag}.feats_above_threshold": feats_above_threshold[l1_ndx, dict_size_ndx]}, step=step_n)
+            wandb.log({f"{wb_tag}.n_dead_neurons": dead_neurons_matrix[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
+            wandb.log({f"{wb_tag}.mmcs_with_larger": mmcs_with_larger[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
+            wandb.log({f"{wb_tag}.feats_above_threshold": feats_above_threshold[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
 
         dead_neurons_matrix = np.clip(dead_neurons_matrix, 0, 100)
 
@@ -1047,10 +1047,10 @@ def main():
     parser.add_argument("--feature_num_nonzero", type=int, default=5)
     parser.add_argument("--correlated_components", type=bool, default=True)
 
-    parser.add_argument("--l1_exp_low", type=int, default=-15)
-    parser.add_argument("--l1_exp_high", type=int, default=-9)  # not inclusive
+    parser.add_argument("--l1_exp_low", type=int, default=-12)
+    parser.add_argument("--l1_exp_high", type=int, default=-11)  # not inclusive
     parser.add_argument("--l1_exp_base", type=float, default=10 ** (1 / 4))
-    parser.add_argument("--dict_ratio_exp_low", type=int, default=3)
+    parser.add_argument("--dict_ratio_exp_low", type=int, default=1)
     parser.add_argument("--dict_ratio_exp_high", type=int, default=7)  # not inclusive
     parser.add_argument("--dict_ratio_exp_base", type=int, default=2)
 
