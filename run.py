@@ -704,19 +704,27 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, dataset_folder: str, comp
                     running_l1_loss += l_l1.item() / time_horizon
 
                 if (n_batches + completed_batches) % 1000 == 0:
-                    breakpoint()
+                    new_dict = auto_encoder.decoder.weight.detach().cpu().data.t().clone()
+                    feature_angle_shift = check_feature_movement(old_dict, new_dict)
+                    old_dict = new_dict
 
-                    print(f"L1 Coef: {cfg.l1_alpha:.2E} | Dict ratio: {cfg.n_components_dictionary / cfg.activation_dim} | " + \
-                            f"Batch: {batch_idx+1}/{len(dataset)} | Chunk: {chunk_ndx+1}/{n_chunks_in_folder} | " + \
-                            f"Epoch: {epoch+1}/{cfg.epochs} | Reconstruction loss: {running_recon_loss:.6f} | l1: {l_l1:.6f}")
+                    momentum_mag = get_size_of_momentum(cfg, optimizer)
+
+                    print(
+                        f"L1 Coef: {cfg.l1_alpha:.2E} | Dict ratio: {cfg.n_components_dictionary / cfg.activation_dim} | "
+                        + f"Batch: {batch_idx+1}/{len(dataset)} | Chunk: {chunk_ndx+1}/{n_chunks_in_folder} | "
+                        + f"Epoch: {epoch+1}/{cfg.epochs} | Reconstruction loss: {running_recon_loss:.6f} | l1: {l_l1:.6f}"
+                    )
                     if cfg.use_wandb:
-                        wandb.log({f"{wb_tag}.reconstruction_loss": running_recon_loss, 
+                        wandb.log(
+                            {
+                                f"{wb_tag}.reconstruction_loss": running_recon_loss,
                                    f"{wb_tag}.l1_loss": l_l1,
-                                   f"{wb_tag}.epoch": epoch, 
-                                   f"{wb_tag}.batch": batch_idx, 
-                                   f"{wb_tag}.chunk": chunk_ndx,
-                                   f"total_steps": completed_batches + n_batches},
-                                   commit=True # seems to remove weirdness with step numbers
+                                f"{wb_tag}.feature_angle_shift": feature_angle_shift,
+                                f"{wb_tag}.momentum_mag": momentum_mag,
+                                f"total_steps": completed_batches + n_batches,
+                            },
+                            commit=True,  # seems to remove weirdness with step numbers
                                    )
                 
                 if cfg.max_batches and n_batches >= cfg.max_batches:
@@ -855,7 +863,32 @@ def run_mmcs_with_larger(cfg, learned_dicts, threshold=0.9):
     return av_mmcs_with_larger_dicts, feats_above_threshold
 
 
-def run_real_data_model(cfg):
+def check_feature_movement(dict: torch.Tensor, old_dict: torch.Tensor):
+    """
+    Takes in two feature dicts of the same dimension,
+    and measures the extent to which they differ.
+
+    """
+    assert dict.shape == old_dict.shape
+    cos_sims = torch.zeros(dict.shape)
+    for i in range(dict.shape[0]):
+        cos_sims[i] = torch.nn.functional.cosine_similarity(dict[i], old_dict[i], dim=0)
+
+    total_movement = (1 - cos_sims).sum().item()
+    return total_movement
+
+
+def get_size_of_momentum(cfg: dotdict, optimizer: torch.optim.Optimizer):
+    """
+    Returns the size of the momentum vector for a given optimizer, for the decoder.
+    """
+    adam_momentum_tensor = optimizer.state_dict()["state"][0]["exp_avg"]
+    decoder_shape = cfg.mlp_width, cfg.n_components_dictionary  # decoder is Linear(n_components, mlp_width) so tensor is stored as (mlp_width, n_components)
+    assert adam_momentum_tensor.shape == decoder_shape
+    return adam_momentum_tensor.detach().abs().sum().item()  # sum of absolute values of all elements
+
+
+def run_real_data_model(cfg: dotdict):
     # cfg.model_name = "EleutherAI/pythia-70m-deduped"
     if cfg.model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]:
         model = HookedTransformer.from_pretrained(cfg.model_name, device=cfg.device)
