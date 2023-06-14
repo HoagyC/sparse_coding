@@ -34,6 +34,24 @@ from nanoGPT_model import GPT
 n_ground_truth_components, activation_dim, dataset_size = None, None, None
 T = TypeVar("T", bound=Union[Dataset, DatasetDict])
 
+def read_from_pile(address: str, max_lines: int = 100_000):
+    """Reads a file from the Pile dataset. Returns a generator."""
+    
+    with open(address, "r") as f:
+        for i, line in enumerate(f):
+            if i >= max_lines:
+                break
+            yield json.loads(line)
+
+
+def make_dataset(dataset_name: str):
+    """Returns a dataset from the Huggingface Datasets library."""
+    if dataset_name == "EleutherAI/pile":
+        dataset = Dataset.from_list(list(read_from_pile("pile1")))
+    else:
+        dataset = load_dataset(dataset_name, split="train")
+    return dataset
+
 
 # Nora's Code from https://github.com/AlignmentResearch/tuned-lens/blob/main/tuned_lens/data.py
 def chunk_and_tokenize(
@@ -878,23 +896,24 @@ def run_real_data_model(cfg: dotdict):
     else:
         raise ValueError("Model name not recognised")
 
-    sentence_dataset = load_dataset(cfg.dataset_name, split="train")
     if hasattr(model, "tokenizer"):
         tokenizer = model.tokenizer
     else:
         print("Using default tokenizer from gpt2")
         tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 
-    sentence_dataset, bits_per_byte = chunk_and_tokenize(sentence_dataset, tokenizer, max_length=cfg.max_length)
-    sentence_dataset = DataLoader(sentence_dataset, batch_size=cfg.model_batch_size, shuffle=True)
-
     # Check if we have already run this model and got the activations
     dataset_name = cfg.dataset_name.split("/")[-1] + "-" + cfg.model_name + "-" + str(cfg.layer)
     cfg.dataset_folder = os.path.join(cfg.datasets_folder, dataset_name)
     os.makedirs(cfg.dataset_folder, exist_ok=True)
+
     if len(os.listdir(cfg.dataset_folder)) == 0:
+        print(f"Activations in {cfg.dataset_folder} do not exist, creating them")
+        sentence_dataset = make_dataset(cfg.dataset_name)
         tensor_name = make_tensor_name(cfg)
-        make_activation_dataset(cfg, sentence_dataset, model, tensor_name, use_baukit)
+        tokenized_sentence_dataset, bits_per_byte = chunk_and_tokenize(sentence_dataset, tokenizer, max_length=cfg.max_length)
+        token_loader = DataLoader(tokenized_sentence_dataset, batch_size=cfg.model_batch_size, shuffle=True)
+        make_activation_dataset(cfg, token_loader, model, tensor_name, use_baukit)
     else:
         print(f"Activations in {cfg.dataset_folder} already exist, loading them")
         # get mlp_width from first file
@@ -1063,7 +1082,7 @@ def main():
 
     parser.add_argument("--outputs_folder", type=str, default="outputs")
     parser.add_argument("--datasets_folder", type=str, default="datasets")
-    parser.add_argument("--n_chunks", type=int, default=400)
+    parser.add_argument("--n_chunks", type=int, default=30)
     parser.add_argument("--threshold", type=float, default=0.9)  # When looking for matching features across dicts, what is the threshold for a match
     parser.add_argument("--max_batches", type=int, default=0)  # How many batches to run the inner loop for before cutting out, 0 means run all
     parser.add_argument("--mini_runs", type=int, default=1)  # How many times to run the inner loop, each time with a different random subset of the data
