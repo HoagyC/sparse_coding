@@ -28,7 +28,8 @@ from transformer_lens import HookedTransformer
 from transformers import PreTrainedTokenizerBase, GPT2Tokenizer
 import wandb
 
-from utils import dotdict
+from utils import dotdict, make_tensor_name
+from argparser import parse_args
 from nanoGPT_model import GPT
 
 n_ground_truth_components, activation_dim, dataset_size = None, None, None
@@ -726,59 +727,6 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
     return auto_encoder, n_dead_neurons, running_recon_loss, running_l1_loss, total_batches
 
 
-def make_feature_activation_dataset(cfg, model: HookedTransformer, feature_dict: torch.Tensor, use_baukit: bool = False, max_sentences: int = 10000):
-    """
-    Takes a dict of features and returns the top k activations for each feature in pile10k
-    """
-    sentence_dataset = load_dataset(cfg.dataset_name)
-    sentence_dataset = sentence_dataset["train"]
-    if max_sentences is not None and max_sentences < len(sentence_dataset):
-        sentence_dataset = sentence_dataset.select(range(max_sentences))
-
-    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-    tensor_name = make_tensor_name(cfg)
-    # make list of sentence, tokenization pairs
-
-    print(f"Computing internals for all {len(sentence_dataset)} sentences")
-
-    # Make dataframe with columns for each feature, and rows for each sentence fragment
-    # each row should also have the full sentence, the current tokens and the previous tokens
-
-    sentence_fragment_dicts = []
-    for sentence in tqdm(sentence_dataset):
-        tokens = tokenizer(sentence["text"], return_tensors="pt")["input_ids"].to(cfg.device)[:, : cfg.max_length]
-        if use_baukit:
-            with Trace(model, tensor_name) as ret:
-                _ = model(tokens)
-                mlp_activation_data = ret.output
-                mlp_activation_data = rearrange(mlp_activation_data, "b s n -> (b s) n").to(cfg.device)
-                mlp_activation_data = nn.functional.gelu(mlp_activation_data)
-        else:
-            _, cache = model.run_with_cache(tokens)
-            mlp_activation_data = cache[tensor_name].to(cfg.device)  # NOTE: could do all layers at once, but currently just doing 1 layer
-            mlp_activation_data = rearrange(mlp_activation_data, "b s n -> (b s) n")
-
-        # Project the activations into the feature space
-        feature_activation_data = torch.matmul(mlp_activation_data, feature_dict.to(torch.float32))
-
-        full_sentence = tokenizer.decode(tokens[0, 1:])
-        for i in range(1, tokens.shape[1]):
-            partial_str_dict: Dict[str, Any] = {}
-            partial_str_dict["pre_tokens"] = tokens[0, 1 : i + 1].tolist()
-            partial_str_dict["full_tokens"] = tokens[0, 1:].tolist()
-            partial_str_dict["sentence"] = full_sentence
-            partial_sentence = tokenizer.decode(tokens[0, 1 : i + 1])
-            partial_str_dict["context"] = partial_sentence
-
-            for j in range(feature_dict.shape[1]):
-                partial_str_dict[f"feature_{j}"] = feature_activation_data[i, j].item()
-            # add a row into the dataframe for each sentence fragment
-            sentence_fragment_dicts.append(partial_str_dict)
-
-    df = pd.DataFrame(sentence_fragment_dicts)
-    return df
-
-            
 def make_activation_dataset(cfg, sentence_dataset: DataLoader, model: HookedTransformer, tensor_name: str, baukit: bool = False) -> pd.DataFrame:
     print(f"Running model and saving activations to {cfg.dataset_folder}")
     with torch.no_grad():
@@ -813,22 +761,6 @@ def make_activation_dataset(cfg, sentence_dataset: DataLoader, model: HookedTran
                 dataset = []
                 if n_saved_chunks == cfg.n_chunks:
                     break
-
-
-def make_tensor_name(cfg):
-    if cfg.model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]:
-        tensor_name = f"blocks.{cfg.layer}.mlp.hook_post"
-        if cfg.model_name == "gpt2":
-            cfg.mlp_width = 3072
-        elif cfg.model_name == "EleutherAI/pythia-70m-deduped":
-            cfg.mlp_width = 2048
-    elif cfg.model_name == "nanoGPT":
-        tensor_name = f"transformer.h.{cfg.layer}.mlp.c_fc"
-        cfg.mlp_width = 128
-    else:
-        raise NotImplementedError(f"Model {cfg.model_name} not supported")
-
-    return tensor_name
 
 
 def run_mmcs_with_larger(cfg, learned_dicts, threshold=0.9):
@@ -1047,48 +979,7 @@ def run_real_data_model(cfg: dotdict):
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--use_wandb", type=bool, default=True)
-    parser.add_argument("--n_ground_truth_components", type=int, default=512)
-    parser.add_argument("--learned_dict_ratio", type=float, default=1.0)
-    parser.add_argument("--max_length", type=int, default=256)  # when tokenizing, truncate to this length, basically the context size
-    parser.add_argument("--load_autoencoders", type=str, default="")
-
-    parser.add_argument("--model_batch_size", type=int, default=4)
-    parser.add_argument("--batch_size", type=int, default=256)
-    parser.add_argument("--noise_std", type=float, default=0.1)
-    parser.add_argument("--l1_alpha", type=float, default=0.1)
-    parser.add_argument("--learning_rate", type=float, default=0.001)
-    parser.add_argument("--epochs", type=int, default=1)
-    parser.add_argument("--noise_level", type=float, default=0.0)
-
-    parser.add_argument("--feature_prob_decay", type=float, default=0.99)
-    parser.add_argument("--feature_num_nonzero", type=int, default=5)
-    parser.add_argument("--correlated_components", type=bool, default=True)
-
-    parser.add_argument("--l1_exp_low", type=int, default=-12)
-    parser.add_argument("--l1_exp_high", type=int, default=-11)  # not inclusive
-    parser.add_argument("--l1_exp_base", type=float, default=10 ** (1 / 4))
-    parser.add_argument("--dict_ratio_exp_low", type=int, default=1)
-    parser.add_argument("--dict_ratio_exp_high", type=int, default=7)  # not inclusive
-    parser.add_argument("--dict_ratio_exp_base", type=int, default=2)
-
-    parser.add_argument("--run_toy", type=bool, default=False)
-    parser.add_argument("--model_name", type=str, default="nanoGPT")
-    parser.add_argument("--model_path", type=str, default="models/32d70k.pt")
-    parser.add_argument("--dataset_name", type=str, default="NeelNanda/pile-10k")
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--layer", type=int, default=2)  # layer to extract mlp-post-non-lin features from, only if using real model
-
-    parser.add_argument("--outputs_folder", type=str, default="outputs")
-    parser.add_argument("--datasets_folder", type=str, default="datasets")
-    parser.add_argument("--n_chunks", type=int, default=30)
-    parser.add_argument("--threshold", type=float, default=0.9)  # When looking for matching features across dicts, what is the threshold for a match
-    parser.add_argument("--max_batches", type=int, default=0)  # How many batches to run the inner loop for before cutting out, 0 means run all
-    parser.add_argument("--mini_runs", type=int, default=1)  # How many times to run the inner loop, each time with a different random subset of the data
-    args = parser.parse_args()
-    cfg = dotdict(vars(args))  # convert to dotdict via dict
-    cfg.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    cfg = parse_args()
 
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)

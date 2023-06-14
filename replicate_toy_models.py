@@ -15,6 +15,7 @@ from typing import Union, Tuple, List, Any, Optional
 
 from matplotlib import pyplot as plt
 import numpy as np
+import numpy.typing as npt
 
 import torch
 import torch.nn as nn
@@ -216,13 +217,13 @@ class AutoEncoder(nn.Module):
 
 
 def cosine_sim(
-    vecs1: Union[torch.Tensor, torch.nn.parameter.Parameter, np.ndarray],
-    vecs2: Union[torch.Tensor, torch.nn.parameter.Parameter, np.ndarray],
+    vecs1: Union[torch.Tensor, torch.nn.parameter.Parameter, npt.NDArray],
+    vecs2: Union[torch.Tensor, torch.nn.parameter.Parameter, npt.NDArray],
 ) -> np.ndarray:
     vecs = [vecs1, vecs2]
     for i in range(len(vecs)):
-        if isinstance(vecs[i], torch.Tensor) or isinstance(vecs[i], torch.nn.parameter.Parameter):
-            vecs[i] = vecs[i].detach().cpu().numpy()
+        if not isinstance(vecs[i], np.ndarray):
+            vecs[i] = vecs[i].detach().cpu().numpy() # type: ignore
     vecs1, vecs2 = vecs
     normalize = lambda v: (v.T / np.linalg.norm(v, axis=1)).T
     vecs1_norm = normalize(vecs1)
@@ -374,7 +375,7 @@ def plot_mat(mat, l1_alphas, learned_dict_ratios, show=True, save_folder=None, s
         plt.close()
 
 
-def compare_mmcs_with_larger_dicts(dict: np.array, larger_dicts: List[np.array]) -> float:
+def compare_mmcs_with_larger_dicts(dict: npt.NDArray, larger_dicts: List[npt.NDArray]) -> float:
     """
     :param dict: The dict to compare to others. Shape (activation_dim, n_dict_elements)
     :param larger_dicts: A list of dicts to compare to. Shape (activation_dim, n_dict_elements(variable)]) * n_larger_dicts
