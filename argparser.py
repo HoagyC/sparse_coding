@@ -43,6 +43,12 @@ def parse_args():
     parser.add_argument("--threshold", type=float, default=0.9)  # When looking for matching features across dicts, what is the threshold for a match
     parser.add_argument("--max_batches", type=int, default=0)  # How many batches to run the inner loop for before cutting out, 0 means run all
     parser.add_argument("--mini_runs", type=int, default=1)  # How many times to run the inner loop, each time with a different random subset of the data
+
+    # interpret
+    parser.add_argument("--activation_sentences", type=int, default=8) # number of sentences to go through to get feature activation
+    parser.add_argument("--load_activation_dataset", type=str, default="outputs/activation_df.csv") # path to dataset to load
+    parser.add_argument("--save_activation_dataset", type=str, default="outputs/activation_df.csv") # path to model to load
+
     args = parser.parse_args()
     cfg = dotdict(vars(args))  # convert to dotdict via dict
     cfg.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

@@ -616,9 +616,9 @@ def run_toy_model(cfg):
         device=cfg.device,
     )
 
-    l1_range = [10 ** (exp / 2) for exp in range(cfg.l1_exp_low, cfg.l1_exp_high)]  # replicate is (-8,9)
+    l1_range = [cfg.l1_exp_base**exp for exp in range(cfg.l1_exp_low, cfg.l1_exp_high)]  # replicate is (-8,9)
     # l1_range = [0.0003] 
-    learned_dict_ratios = [2**exp for exp in range(cfg.dict_ratio_exp_low, cfg.dict_ratio_exp_high)]  # replicate is (-2,6)
+    learned_dict_ratios = [cfg.dict_ratio_exp_base**exp for exp in range(cfg.dict_ratio_exp_low, cfg.dict_ratio_exp_high)]  # replicate is (-2,6)
     print("Range of l1 values being used: ", l1_range)
     print("Range of dict_sizes compared to ground truth being used:", learned_dict_ratios)
     mmcs_matrix = np.zeros((len(l1_range), len(learned_dict_ratios)))

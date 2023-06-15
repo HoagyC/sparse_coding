@@ -1,5 +1,7 @@
 import asyncio
 import importlib
+import json
+import os
 import pickle
 from typing import Any, Dict
 
@@ -17,6 +19,12 @@ from argparser import parse_args
 from utils import dotdict, make_tensor_name
 from nanoGPT_model import GPT
 from run import AutoEncoder
+
+# set OPENAI_API_KEY environment variable from secrets.json['openai_key']
+# needs to be done before importing openai interp bits
+with open("secrets.json") as f:
+    secrets = json.load(f)
+    os.environ["OPENAI_API_KEY"] = secrets["openai_key"]
 
 from neuron_explainer.activations.activation_records import calculate_max_activation
 from neuron_explainer.activations.activations import ActivationRecordSliceParams, load_neuron, ActivationRecord, NeuronRecord, NeuronId
@@ -49,7 +57,7 @@ def make_feature_activation_dataset(cfg, model: HookedTransformer, feature_dict:
     # each row should also have the full sentence, the current tokens and the previous tokens
 
     sentence_fragment_dicts = []
-    for sentence in tqdm(sentence_dataset):
+    for sentence_id, sentence in tqdm(enumerate(sentence_dataset)):
         tokens = tokenizer(sentence["text"], return_tensors="pt")["input_ids"].to(cfg.device)[:, : cfg.max_length]
         if use_baukit:
             with Trace(model, tensor_name) as ret:
@@ -69,18 +77,20 @@ def make_feature_activation_dataset(cfg, model: HookedTransformer, feature_dict:
         for i in range(1, tokens.shape[1]):
             partial_str_dict: Dict[str, Any] = {}
             partial_str_dict["pre_tokens"] = tokens[0, 1 : i + 1].tolist()
+            partial_str_dict["token_id"] = i
+            partial_str_dict["sentence_id"] = sentence_id
             partial_str_dict["full_tokens"] = tokens[0, 1:].tolist()
             partial_str_dict["sentence"] = full_sentence
             partial_sentence = tokenizer.decode(tokens[0, 1 : i + 1])
             partial_str_dict["context"] = partial_sentence
-            partial_str_dict["current_token"] = tokenizer.decode(tokens[0, i + 1])
+            partial_str_dict["current_token"] = tokenizer.decode(tokens[0, i])
             if i < tokens.shape[1] - 1:
-                partial_str_dict["next_token"] = tokenizer.decode(tokens[0, i + 2])
+                partial_str_dict["next_token"] = tokenizer.decode(tokens[0, i + 1])
             else:
                 partial_str_dict["next_token"] = ""
 
             if i != 1:
-                partial_str_dict["prev_token"] = tokenizer.decode(tokens[0, i])
+                partial_str_dict["prev_token"] = tokenizer.decode(tokens[0, i - 1])
             else:
                 partial_str_dict["prev_token"] = ""
 
@@ -94,8 +104,9 @@ def make_feature_activation_dataset(cfg, model: HookedTransformer, feature_dict:
 
 
 async def interpret_neuron(neuron_record, n_examples_per_split: int= 5):
-    train_activation_records = neuron_record.train_activation_records(n_examples_per_split)
-    valid_activation_records = neuron_record.valid_activation_records(n_examples_per_split)
+    slice_params = ActivationRecordSliceParams(n_examples_per_split=n_examples_per_split)
+    train_activation_records = neuron_record.train_activation_records(slice_params)
+    valid_activation_records = neuron_record.valid_activation_records(slice_params)
 
     explainer = TokenActivationPairExplainer(
         model_name=EXPLAINER_MODEL_NAME,
@@ -146,56 +157,68 @@ async def main(cfg: dotdict):
     assert cfg.load_autoencoders is not None
     loaded_autoencoders = pickle.load(open(cfg.load_autoencoders, "rb"))
     autoencoder = loaded_autoencoders[0][0]
-    feature_dict = autoencoder.encoder[0].weight.detach().t()
-    df = make_feature_activation_dataset(cfg, model, feature_dict, use_baukit=use_baukit, max_sentences=50)
+    feature_dict = autoencoder.encoder[0].weight.detach().t().to(cfg.device)
 
-    max_sentences = 10
-    feature_num = 0
+    if cfg.load_activation_dataset and os.path.exists(cfg.load_activation_dataset):
+        base_df = pd.read_csv(cfg.load_activation_dataset)
+    else:
+        base_df = make_feature_activation_dataset(cfg, model, feature_dict, use_baukit=use_baukit, max_sentences=cfg.activation_sentences)
+        # save the dataset
+        base_df.to_csv(cfg.save_activation_dataset, index=False)
 
-    random_activationrecord_list = []
-    for sentence_id, sentence_df in df.groupby("sentence_id"):
-        token_list = []
-        activation_list = []
-        if sentence_id > max_sentences:
-            break
-        for token_id, token_df in sentence_df.groupby("token_id"):
-            token_list.append(token_df["token"].iloc[0])
-            activation_list.append(token_df[f"feature_{feature_num}"].iloc[0])
+    df = base_df.copy()
+
+    random_sentences = 10
+    for feature_num in range(1, 6):
+        # print previous, current, and next token the top scoring tokens
+        sorted_df = df.sort_values(by=f"feature_{feature_num}", ascending=False)
+        print(sorted_df.head(10)[["prev_token", "current_token", "next_token"]])
+
+        random_activationrecord_list = []
+        for sentence_id, sentence_df in df.groupby("sentence_id"):
+            token_list = []
+            activation_list = []
+            if sentence_id > random_sentences: # this eventually gives > not supported between instances of str and int becau
+                break
+            for token_id, token_df in sentence_df.groupby("token_id"):
+                token_list.append(token_df["current_token"].iloc[0])
+                activation_list.append(token_df[f"feature_{feature_num}"].iloc[0])
+            
+            random_activationrecord_list.append(ActivationRecord(token_list, activation_list))
+
+        # Now we want to get sentences with the highest activation, so we group by sentence_id and then get average activation
+        # then we sort by activation and take the top 10
+
+        n_top_sentences = 8
+        sentence_averages = []
+        for sentence_id, sentence_df in df.groupby("sentence_id"):
+            sentence_averages.append(
+                (sentence_id, sentence_df[f"feature_{feature_num}"].mean())
+            )
         
-        random_activationrecord_list.append(ActivationRecord(token_list, activation_list))
+        sentence_averages.sort(key=lambda x: x[1], reverse=True)
+        top_sentence_ids = [x[0] for x in sentence_averages[:n_top_sentences]]
 
-    # Now we want to get sentences with the highest activation, so we group by sentence_id and then get average activation
-    # then we sort by activation and take the top 10
-
-    n_sentences = 10
-    sentence_averages = []
-    for sentence_id, sentence_df in df.groupby("sentence_id"):
-        sentence_averages.append(
-            (sentence_id, sentence_df[f"feature_{feature_num}"].mean())
-        )
-    
-    sentence_averages.sort(key=lambda x: x[1], reverse=True)
-    top_sentence_ids = [x[0] for x in sentence_averages[:n_sentences]]
-
-    most_positive_activationrecord_list = []
-    for sentence_id in top_sentence_ids:
-        sentence_df = df[df["sentence_id"] == sentence_id]
-        token_list = []
-        activation_list = []
-        for token_id, token_df in sentence_df.groupby("token_id"):
-            token_list.append(token_df["token"].iloc[0])
-            activation_list.append(token_df[f"feature_{feature_num}"].iloc[0])
+        most_positive_activationrecord_list = []
+        for sentence_id in top_sentence_ids:
+            sentence_df = df[df["sentence_id"] == sentence_id]
+            token_list = []
+            activation_list = []
+            for token_id, token_df in sentence_df.groupby("token_id"):
+                token_list.append(token_df["current_token"].iloc[0])
+                activation_list.append(token_df[f"feature_{feature_num}"].iloc[0])
+            
+            most_positive_activationrecord_list.append(ActivationRecord(token_list, activation_list))
         
-        most_positive_activationrecord_list.append(ActivationRecord(token_list, activation_list))
-    
-    neuron_id = NeuronId(layer_index=2, neuron_index=feature_num)
+        neuron_id = NeuronId(layer_index=2, neuron_index=feature_num)
 
-    neuron_record = NeuronRecord(neuron_id=neuron_id, random_sample=random_activationrecord_list, most_positive_activation_records=most_positive_activationrecord_list)
-    n_examples_per_split = 5
+        neuron_record = NeuronRecord(neuron_id=neuron_id, random_sample=random_activationrecord_list, most_positive_activation_records=most_positive_activationrecord_list)
+        n_examples_per_split = 2
+        # note that we need n_sentences >= n_examples_per_split * 4 (numsplits)
 
 
-    scored_simulation = await interpret_neuron(neuron_record, n_examples_per_split=n_examples_per_split)
-    print(f"score={scored_simulation.get_preferred_score():.2f}")
+        scored_simulation = await interpret_neuron(neuron_record, n_examples_per_split)
+        print(f"score={scored_simulation.get_preferred_score():.2f}")
 
 
 if __name__ == "__main__":
