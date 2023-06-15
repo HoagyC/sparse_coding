@@ -9,10 +9,13 @@
 
 The repo also contains utils for running code on vast.ai computers which can speed up these sweeps.
 
+<<<<<<< HEAD
 ## Automatic Interpretation
 
 Currently using OpenAI's automoatic-interpretability repo but can't get it to install so the repo currently works by installing the automatic-interpretability/neuron-explainer/neuron-explainer cloned and saved in the top level of the repo, under the name `neuron_explainer`. 
 
+=======
+>>>>>>> 74e2177 (minor plot features)
 ## Training a custom small transformer
 
 The next part of the sparse coding work uses a very small transformer to do some early tests using sparse autoencoders to find features.

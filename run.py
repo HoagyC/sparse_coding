@@ -482,6 +482,39 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
     return mmcs, auto_encoder, n_dead_neurons, running_recon_loss
 
 
+
+def plot_hist(mat, l1_alphas, learned_dict_ratios, show: bool = True, save_folder: str = "", save_name: str = "", title: str = "" ):
+    # Create a histogram
+    len_alphas, len_dict_ratios = (len(l1_alphas), len(learned_dict_ratios))
+    len_dict_ratios -= 1 # Last dict doesn't do anything
+    
+    fig, axs = plt.subplots(len_dict_ratios, len_alphas, figsize=(7*len_alphas, 5*len_dict_ratios), squeeze=False)
+
+    for i in range(len_dict_ratios):
+        max_freq = 0  # To store the maximum frequency in a bin for the current row
+        for j in range(len_alphas):
+            # Calculate histogram
+            counts, bins = np.histogram(mat[j][i], bins=20)
+            max_freq = max(max_freq, counts.max())  # Update the maximum frequency if necessary
+
+            # Plot the histogram
+            axs[i, j].hist(bins[:-1], bins, weights=counts, edgecolor='black')
+            axs[i, j].set_title(f'Dict Ratio: {learned_dict_ratios[i]}| L1 {l1_alphas[j]:.0E}')
+            axs[i, j].set_xlim(0,1)
+            
+        # Set the ylim to the maximum frequency found in the current row
+        for ax in axs[i, :]:
+            ax.set_ylim(0, max_freq)
+
+
+    if title:
+        fig.suptitle(title, fontsize=20)
+    if show:
+        plt.show()
+    if save_folder:
+        plt.savefig(os.path.join(save_folder, save_name))
+        plt.close()
+        
 def plot_mat(mat, l1_alphas, learned_dict_ratios, show: bool = True, save_folder: str = "", save_name: str = "", title: str = "", col_range: Optional[Tuple[float, float]] = None):
     """
     :param mmcs_mat: matrix values
@@ -495,8 +528,7 @@ def plot_mat(mat, l1_alphas, learned_dict_ratios, show: bool = True, save_folder
     assert mat.shape == (len(l1_alphas), len(learned_dict_ratios))
     mat = mat.T
     plt.imshow(mat, interpolation="nearest")
-    # turn to str with 2 decimal places
-    x_labels = [f"{l1_alpha:.2f}" for l1_alpha in l1_alphas]
+    x_labels = [f"{l1_alpha:.0E}" for l1_alpha in l1_alphas]
     plt.xticks(range(len(x_labels)), x_labels)
     plt.xlabel("l1_alpha")
     y_labels = [str(learned_dict_ratio) for learned_dict_ratio in learned_dict_ratios]
@@ -509,6 +541,13 @@ def plot_mat(mat, l1_alphas, learned_dict_ratios, show: bool = True, save_folder
         plt.clim(*col_range)
 
     plt.xticks(rotation=90)  # turn x labels 90 degrees
+    # Add the values in the matrix as text annotations
+    for i in range(len(learned_dict_ratios)):
+        for j in range(len(l1_alphas)):
+            plt.text(j, i, format(mat[i, j], ".2f"),
+                    ha="center", va="center",
+                    color="black" if mat[i, j] > mat.max() / 2 else "w")
+
     if title:
         plt.title(title)
     if show:
@@ -577,7 +616,8 @@ def run_toy_model(cfg):
         device=cfg.device,
     )
 
-    l1_range = [10 ** (exp / 4) for exp in range(cfg.l1_exp_low, cfg.l1_exp_high)]  # replicate is (-8,9)
+    l1_range = [10 ** (exp / 2) for exp in range(cfg.l1_exp_low, cfg.l1_exp_high)]  # replicate is (-8,9)
+    # l1_range = [0.0003] 
     learned_dict_ratios = [2**exp for exp in range(cfg.dict_ratio_exp_low, cfg.dict_ratio_exp_high)]  # replicate is (-2,6)
     print("Range of l1 values being used: ", l1_range)
     print("Range of dict_sizes compared to ground truth being used:", learned_dict_ratios)
@@ -625,34 +665,21 @@ def run_toy_model(cfg):
     with open(os.path.join(outputs_folder, "recon_loss.pkl"), "wb") as f:
         pickle.dump(recon_loss_matrix, f)
 
-    # Compare each learned dictionary to the larger ones
-    av_mmcs_with_larger_dicts = np.zeros((len(l1_range), len(learned_dict_ratios)))
-    percentage_above_threshold_mmcs_with_larger_dicts = np.zeros((len(l1_range), len(learned_dict_ratios)))
-    learned_dicts = [[auto_e.decoder.weight.detach().cpu().data.t() for auto_e in l1] for l1 in auto_encoders]
-    for l1_ndx, dict_size_ndx in tqdm(list(itertools.product(range(len(l1_range)), range(len(learned_dict_ratios))))):
-        if dict_size_ndx == len(learned_dict_ratios) - 1:
-            continue
-        smaller_dict = learned_dicts[l1_ndx][dict_size_ndx]
-        larger_dict = learned_dicts[l1_ndx][dict_size_ndx + 1]
-        smaller_dict_features, shared_vector_size = smaller_dict.shape
-        # larger_dict_features, shared_vector_size = larger_dict.shape
-        max_cosine_similarities = np.zeros((smaller_dict_features))
-        larger_dict = larger_dict.to(cfg.device)
-        for i, vector in enumerate(smaller_dict):
-            max_cosine_similarities[i] = torch.nn.functional.cosine_similarity(vector.to(cfg.device), larger_dict, dim=1).max()
-        av_mmcs_with_larger_dicts[l1_ndx, dict_size_ndx] = max_cosine_similarities.mean().item()
-        threshold = 0.9
-        percentage_above_threshold_mmcs_with_larger_dicts[l1_ndx, dict_size_ndx] = (max_cosine_similarities > threshold).sum().item()
+    if(len(learned_dict_ratios) > 1):
+        # run MMCS-with-larger at the end of each mini run
+        learned_dicts = [[auto_e.decoder.weight.detach().cpu().data.t() for auto_e in l1] for l1 in auto_encoders]
+        mmcs_with_larger, feats_above_threshold, full_max_cosine_sim_for_histograms = run_mmcs_with_larger(cfg, learned_dicts, threshold=cfg.threshold)
 
-    with open(os.path.join(outputs_folder, "larger_dict_compare.pkl"), "wb") as f:
-        pickle.dump(av_mmcs_with_larger_dicts, f)
-    with open(os.path.join(outputs_folder, "larger_dict_threshold.pkl"), "wb") as f:
-        pickle.dump(percentage_above_threshold_mmcs_with_larger_dicts, f)
+        with open(os.path.join(outputs_folder, "larger_dict_compare.pkl"), "wb") as f:
+            pickle.dump(mmcs_with_larger, f)
+        with open(os.path.join(outputs_folder, "larger_dict_threshold.pkl"), "wb") as f:
+            pickle.dump(feats_above_threshold, f)
+        with open(os.path.join(outputs_folder, "max_cosine_similarities.pkl"), "wb") as f:
+            pickle.dump(full_max_cosine_sim_for_histograms, f)
 
-    plot_mat(av_mmcs_with_larger_dicts, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Average MMCS with larger dicts", save_name="av_mmcs_with_larger_dicts.png")
-    plot_mat(
-        percentage_above_threshold_mmcs_with_larger_dicts, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title=f"MMCS with larger dicts above {threshold}", save_name="percentage_above_threshold_mmcs_with_larger_dicts.png"
-    )
+        plot_mat(mmcs_with_larger, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Average MMCS with larger dicts", save_name="av_mmcs_with_larger_dicts.png")
+        plot_mat(feats_above_threshold, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title=f"MMCS with larger dicts above {cfg.threshold}", save_name="percentage_above_threshold_mmcs_with_larger_dicts.png")
+        plot_hist(full_max_cosine_sim_for_histograms, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title=f"Max Cosine Similarities", save_name="histogram_max_cosine_sim.png")
 
 
 def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 0):
@@ -767,23 +794,36 @@ def run_mmcs_with_larger(cfg, learned_dicts, threshold=0.9):
     n_l1_coefs, n_dict_sizes = len(learned_dicts), len(learned_dicts[0])
     av_mmcs_with_larger_dicts = np.zeros((n_l1_coefs, n_dict_sizes))
     feats_above_threshold = np.zeros((n_l1_coefs, n_dict_sizes))
+    full_max_cosine_sim_for_histograms = np.empty((n_l1_coefs, n_dict_sizes-1), dtype=object)
+
 
     for l1_ndx, dict_size_ndx in tqdm(list(itertools.product(range(n_l1_coefs), range(n_dict_sizes)))):
         if dict_size_ndx == n_dict_sizes - 1:
             continue
         smaller_dict = learned_dicts[l1_ndx][dict_size_ndx]
-        larger_dict = learned_dicts[l1_ndx][dict_size_ndx + 1]
-        smaller_dict_features, shared_vector_size = smaller_dict.shape
-        # larger_dict_features, shared_vector_size = larger_dict.shape
-        max_cosine_similarities = np.zeros((smaller_dict_features))
-        larger_dict = larger_dict.to(cfg.device)
-        for i, vector in enumerate(smaller_dict):
-            max_cosine_similarities[i] = torch.nn.functional.cosine_similarity(vector.to(cfg.device), larger_dict, dim=1).max()
+        # Clone the larger dict, because we're going to zero it out to do replacements
+        larger_dict_clone = learned_dicts[l1_ndx][dict_size_ndx + 1].clone().to(cfg.device)
+        smaller_dict_features, _ = smaller_dict.shape
+        larger_dict_features, _ = larger_dict_clone.shape
+        # Hungary algorithm
+        from scipy.optimize import linear_sum_assignment
+        # Calculate all cosine similarities and store in a 2D array
+        cos_sims = np.zeros((smaller_dict_features, larger_dict_features))
+        for idx, vector in enumerate(smaller_dict):
+            cos_sims[idx] = torch.nn.functional.cosine_similarity(vector.to(cfg.device), larger_dict_clone, dim=1).cpu().numpy()
+        # Convert to a minimization problem
+        cos_sims = 1 - cos_sims
+        # Use the Hungarian algorithm to solve the assignment problem
+        row_ind, col_ind = linear_sum_assignment(cos_sims)
+        # Retrieve the max cosine similarities and corresponding indices
+        max_cosine_similarities = 1 - cos_sims[row_ind, col_ind]
         av_mmcs_with_larger_dicts[l1_ndx, dict_size_ndx] = max_cosine_similarities.mean().item()
         threshold = 0.9
-        feats_above_threshold[l1_ndx, dict_size_ndx] = (max_cosine_similarities > threshold).sum().item()
+        feats_above_threshold[l1_ndx, dict_size_ndx] = (max_cosine_similarities > threshold).sum().item() / smaller_dict_features * 100
+        full_max_cosine_sim_for_histograms[l1_ndx][dict_size_ndx] = max_cosine_similarities
+    
 
-    return av_mmcs_with_larger_dicts, feats_above_threshold
+    return av_mmcs_with_larger_dicts, feats_above_threshold, full_max_cosine_sim_for_histograms
 
 
 def check_feature_movement(dict: torch.Tensor, old_dict: torch.Tensor):
@@ -889,7 +929,7 @@ def run_real_data_model(cfg: dotdict):
     if cfg.use_wandb:
         secrets = json.load(open("secrets.json"))
         wandb.login(key=secrets["wandb_key"])
-        wandb_run_name = f"{cfg.model_name}_{start_time[4:-2]}"  # trim year and seconds
+        wandb_run_name = f"{cfg.model_name}_{start_time[4:]}"  # trim year
         wandb.init(project="sparse coding", config=cfg.__dict__, name=wandb_run_name)
 
     step_n = 0
@@ -912,19 +952,20 @@ def run_real_data_model(cfg: dotdict):
 
         # run MMCS-with-larger at the end of each mini run
         learned_dicts = [[auto_e.decoder.weight.detach().cpu().data.t() for auto_e in l1] for l1 in auto_encoders]
-        mmcs_with_larger, feats_above_threshold = run_mmcs_with_larger(cfg, learned_dicts, threshold=cfg.threshold)
+        mmcs_with_larger, feats_above_threshold, full_max_cosine_sim_for_histograms = run_mmcs_with_larger(cfg, learned_dicts, threshold=cfg.threshold)
 
         # also just report them as variables
         for l1_ndx, dict_size_ndx in list(itertools.product(range(len(l1_range)), range(len(dict_sizes)))):
             l1_coef = l1_range[l1_ndx]
             dict_size = dict_sizes[dict_size_ndx]
-            wb_tag = f"l1={l1_coef:.2E}_ds={dict_size}"
-            wandb.log({f"{wb_tag}.n_dead_neurons": dead_neurons_matrix[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
-            wandb.log({f"{wb_tag}.mmcs_with_larger": mmcs_with_larger[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
-            wandb.log({f"{wb_tag}.feats_above_threshold": feats_above_threshold[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
-
+            if(cfg.use_wandb):
+                wb_tag = f"l1={l1_coef:.2E}_ds={dict_size}"
+                wandb.log({f"{wb_tag}.n_dead_neurons": dead_neurons_matrix[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
+                wandb.log({f"{wb_tag}.mmcs_with_larger": mmcs_with_larger[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
+                wandb.log({f"{wb_tag}.feats_above_threshold": feats_above_threshold[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
+                #TODO decide what to do for full_histogram.
         dead_neurons_matrix = np.clip(dead_neurons_matrix, 0, 100)
-
+        
         plot_mat(
             dead_neurons_matrix,
             l1_range,
@@ -939,16 +980,20 @@ def run_real_data_model(cfg: dotdict):
             ),
         )
         plot_mat(recon_loss_matrix, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="Reconstruction Loss", save_name="recon_loss_matrix.png")
-        plot_mat(mmcs_with_larger, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="Average mmcs with larger dicts", save_name="av_mmcs_with_larger_dicts.png", col_range=(0.0, 1.0))
-        plot_mat(feats_above_threshold, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title=f"MN features abouve {cfg.threshold}", save_name="percentage_above_threshold_mmcs_with_larger_dicts.png")
         plot_mat(l1_loss_matrix, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="L1 Loss", save_name="l1_loss_matrix.png")
         # upload images to wandb
-        wandb.log({"mmcs_with_larger": wandb.Image(os.path.join(outputs_folder, "av_mmcs_with_larger_dicts.png"))}, commit=True)
-        wandb.log({"feats_above_threshold": wandb.Image(os.path.join(outputs_folder, "percentage_above_threshold_mmcs_with_larger_dicts.png"))}, commit=True)
-        wandb.log({"dead_neurons": wandb.Image(os.path.join(outputs_folder, "dead_neurons_matrix.png"))}, commit=True)
-        wandb.log({"recon_loss": wandb.Image(os.path.join(outputs_folder, "recon_loss_matrix.png"))}, commit=True)
-        wandb.log({"l1_loss": wandb.Image(os.path.join(outputs_folder, "l1_loss_matrix.png"))}, commit=True)
-
+        if cfg.use_wandb:
+            wandb.log({"dead_neurons": wandb.Image(os.path.join(outputs_folder, "dead_neurons_matrix.png"))}, commit=True)
+            wandb.log({"recon_loss": wandb.Image(os.path.join(outputs_folder, "recon_loss_matrix.png"))}, commit=True)
+            wandb.log({"l1_loss": wandb.Image(os.path.join(outputs_folder, "l1_loss_matrix.png"))}, commit=True)
+        if(len(dict_sizes) > 1):
+            plot_mat(mmcs_with_larger, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="Average mmcs with larger dicts", save_name="av_mmcs_with_larger_dicts.png", col_range=(0.0, 1.0))
+            plot_mat(feats_above_threshold, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title=f"MN features abouve {cfg.threshold}", save_name="percentage_above_threshold_mmcs_with_larger_dicts.png")
+            plot_hist(full_max_cosine_sim_for_histograms, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title=f"Max Cosine Similarities", save_name="histogram_max_cosine_sim.png")
+            if cfg.use_wandb:
+                wandb.log({"mmcs_with_larger": wandb.Image(os.path.join(outputs_folder, "av_mmcs_with_larger_dicts.png"))}, commit=True)
+                wandb.log({"feats_above_threshold": wandb.Image(os.path.join(outputs_folder, "percentage_above_threshold_mmcs_with_larger_dicts.png"))}, commit=True)
+                wandb.log({"mcs_histogram": wandb.Image(os.path.join(outputs_folder, "histogram_max_cosine_sim.png"))}, commit=True)
     if cfg.use_wandb:
         wandb.finish()
 
@@ -967,15 +1012,17 @@ def run_real_data_model(cfg: dotdict):
 
     # Compare each learned dictionary to the larger ones
     learned_dicts = [[auto_e.decoder.weight.detach().cpu().data.t() for auto_e in l1] for l1 in auto_encoders]
-    mmcs_with_larger, feats_above_threshold = run_mmcs_with_larger(cfg, learned_dicts, threshold=cfg.threshold)
+    mmcs_with_larger, feats_above_threshold, full_max_cosine_sim_for_histograms = run_mmcs_with_larger(cfg, learned_dicts, threshold=cfg.threshold)
 
     with open(os.path.join(outputs_folder, "larger_dict_compare.pkl"), "wb") as f:
         pickle.dump(mmcs_with_larger, f)
     with open(os.path.join(outputs_folder, "larger_dict_threshold.pkl"), "wb") as f:
         pickle.dump(feats_above_threshold, f)
 
-    plot_mat(mmcs_with_larger, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="Average mmcs with larger dicts", save_name="av_mmcs_with_larger_dicts.png", col_range=(0.0, 1.0))
-    plot_mat(feats_above_threshold, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title=f"MMCS with larger dicts above {cfg.threshold}", save_name="percentage_above_threshold_mmcs_with_larger_dicts.png")
+    if(len(dict_sizes) > 1):
+        plot_mat(mmcs_with_larger, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="Average mmcs with larger dicts", save_name="av_mmcs_with_larger_dicts.png", col_range=(0.0, 1.0))
+        plot_mat(feats_above_threshold, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title=f"MMCS with larger dicts above {cfg.threshold}", save_name="percentage_above_threshold_mmcs_with_larger_dicts.png")
+        plot_hist(full_max_cosine_sim_for_histograms, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title=f"Max Cosine Similarities", save_name="histogram_max_cosine_sim.png")
 
 
 def main():
