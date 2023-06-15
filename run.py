@@ -544,7 +544,7 @@ def plot_mat(mat, l1_alphas, learned_dict_ratios, show: bool = True, save_folder
     # Add the values in the matrix as text annotations
     for i in range(len(learned_dict_ratios)):
         for j in range(len(l1_alphas)):
-            plt.text(j, i, format(mat[i, j], ".2f"),
+            plt.text(j, i, format(mat[i, j], ".2E"),
                     ha="center", va="center",
                     color="black" if mat[i, j] > mat.max() / 2 else "w")
 
