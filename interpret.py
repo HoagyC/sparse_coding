@@ -4,7 +4,7 @@ import pickle
 from typing import Any, Dict
 
 from baukit import Trace
-from datasets import load_dataset # type: ignore
+from datasets import load_dataset
 from einops import rearrange
 import pandas as pd
 import torch

@@ -38,7 +38,7 @@ def parse_args():
     parser.add_argument("--layer", type=int, default=2)  # layer to extract mlp-post-non-lin features from, only if using real model
 
     parser.add_argument("--outputs_folder", type=str, default="outputs")
-    parser.add_argument("--datasets_folder", type=str, default="datasets")
+    parser.add_argument("--datasets_folder", type=str, default="activation_data")
     parser.add_argument("--n_chunks", type=int, default=30)
     parser.add_argument("--threshold", type=float, default=0.9)  # When looking for matching features across dicts, what is the threshold for a match
     parser.add_argument("--max_batches", type=int, default=0)  # How many batches to run the inner loop for before cutting out, 0 means run all

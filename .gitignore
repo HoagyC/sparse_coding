@@ -4,7 +4,7 @@ __pycache__/**
 .env
 .config
 outputs
-datasets
+activation_data
 models
 nanoGPTtoTL.py
 tl_simple.py

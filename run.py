@@ -12,7 +12,7 @@ import pickle
 from typing import Union, Tuple, List, Any, Optional, TypeVar, Dict
 
 from baukit import Trace
-from datasets import Dataset, DatasetDict, load_dataset # type: ignore
+from datasets import Dataset, DatasetDict, load_dataset
 from einops import rearrange
 from matplotlib import pyplot as plt
 import pandas as pd
