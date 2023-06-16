@@ -12,7 +12,9 @@ def main(cfg):
     # load in two autoencoders
     with open(cfg.load_autoencoders, "rb") as f:
         autoencoders = pickle.load(f)
+    # autoencoders = torch.load(cfg.load_autoencoders, map_location=torch.device("cpu"))
 
+    print(len(autoencoders), len(autoencoders[0]))
     ae1, ae2 = autoencoders[0][2:4]
     aes = [[ae1, ae2]]
     learned_dicts = [[auto_e.decoder.weight.detach().cpu().data.t().to(torch.float32) for auto_e in l1] for l1 in aes]
@@ -33,6 +35,38 @@ def main(cfg):
     assert entropy.shape == mmcs.shape
     correlation = torch.corrcoef(torch.stack([entropy, torch.tensor(mmcs)]))[0, 1]
     print("correlation between entropy and mmcs:", correlation)
+
+    # other measure of the same concept is the effective number of neurons
+    proportion = lambda x: (x.abs().t() / torch.sum(x.abs(), dim=1)).t()
+    effective_number_of_neurons = lambda x: 1 / (proportion(x) ** 2).sum(dim=1)
+    enn = [[effective_number_of_neurons(learned_dict) for learned_dict in l1] for l1 in learned_dicts]
+    print("effective number of neurons:", enn)
+    breakpoint()
+    enn = enn[0][0]
+
+    # make scatter plot of entropy and mmcs
+    import matplotlib.pyplot as plt
+    plt.scatter(entropy, mmcs)
+    plt.xlabel("entropy")
+    plt.ylabel("mmcs")
+    plt.savefig("outputs/entropy_vs_mmcs.png")
+    plt.close()
+
+    # make scatter plot of enn and mmcs
+    plt.scatter(enn, mmcs)
+    plt.xlabel("enn")
+    plt.ylabel("mmcs")
+    plt.savefig("outputs/enn_vs_mmcs.png")
+    plt.show()
+    # now we look at the cosine similarity of the input vectors of the different neurons
+    transformer_loc = "models/32d70k.pt"
+    model = torch.load(open(transformer_loc, "rb"), map_location=torch.device("cpu"))
+    model_dict = model["model"]
+    in_matrix = model_dict[f"_orig_mod.transformer.h.{cfg.layer_n}.mlp.c_fc.weight"]
+
+    # now we want to look at the cosine similarity of the input vectors of the different neurons
+
+
 
 
 if __name__ == "__main__":

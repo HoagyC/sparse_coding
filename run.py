@@ -1001,8 +1001,9 @@ def run_real_data_model(cfg: dotdict):
     dead_neurons_matrix = np.clip(dead_neurons_matrix, 0, 100)
     plot_mat(dead_neurons_matrix, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="Dead Neurons", save_name="dead_neurons_matrix.png")
     plot_mat(recon_loss_matrix, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="Reconstruction Loss", save_name="recon_loss_matrix.png")
+    cpu_autoencoders = [[auto_e.to(torch.device("cpu")) for auto_e in l1] for l1 in auto_encoders]
     with open(os.path.join(outputs_folder, "auto_encoders.pkl"), "wb") as f:
-        pickle.dump(auto_encoders, f)
+        pickle.dump(cpu_autoencoders, f)
     with open(os.path.join(outputs_folder, "config.pkl"), "wb") as f:
         pickle.dump(cfg, f)
     with open(os.path.join(outputs_folder, "dead_neurons.pkl"), "wb") as f:
