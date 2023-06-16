@@ -35,20 +35,27 @@ from nanoGPT_model import GPT
 n_ground_truth_components, activation_dim, dataset_size = None, None, None
 T = TypeVar("T", bound=Union[Dataset, DatasetDict])
 
-def read_from_pile(address: str, max_lines: int = 100_000):
+def read_from_pile(address: str, max_lines: int = 100_000, start_line: int = 0):
     """Reads a file from the Pile dataset. Returns a generator."""
     
     with open(address, "r") as f:
         for i, line in enumerate(f):
-            if i >= max_lines:
+            if i < start_line:
+                continue
+            if i >= max_lines + start_line:
                 break
             yield json.loads(line)
 
 
-def make_dataset(dataset_name: str):
+def make_sentence_dataset(dataset_name: str, max_lines: int = 20_000, start_line: int = 0):
     """Returns a dataset from the Huggingface Datasets library."""
     if dataset_name == "EleutherAI/pile":
-        dataset = Dataset.from_list(list(read_from_pile("pile1")))
+        if not os.path.exists("pile0"):
+            print("Downloading shard 0 of the Pile dataset (requires 50GB of disk space).")
+            if not os.path.exists("pile0.zst"):
+                os.system("curl https://the-eye.eu/public/AI/pile/train/00.jsonl.zst > pile0.zst")
+                os.system("unzstd pile0.zst")
+        dataset = Dataset.from_list(list(read_from_pile("pile0", max_lines=max_lines, start_line=start_line)))
     else:
         dataset = load_dataset(dataset_name, split="train")
     return dataset
@@ -779,15 +786,23 @@ def make_activation_dataset(cfg, sentence_dataset: DataLoader, model: HookedTran
             dataset.append(mlp_activation_data)
             if len(dataset) >= max_chunks:
                 # Need to save, restart the list
-                dataset_t = torch.cat(dataset, dim=0).to("cpu")
-                dataset_obj = torch.utils.data.TensorDataset(dataset_t)
-                with open(cfg.dataset_folder + "/" + str(n_saved_chunks) + ".pkl", "wb") as f:
-                    pickle.dump(dataset_obj, f)
-                n_saved_chunks += 1
+                save_activation_chunk(dataset, n_saved_chunks, cfg)
                 print(f"Saved chunk {n_saved_chunks} of activations, total size:  {batch_idx * activation_size} ")
                 dataset = []
                 if n_saved_chunks == cfg.n_chunks:
                     break
+    
+        if n_saved_chunks < cfg.n_chunks:
+            save_activation_chunk(dataset, n_saved_chunks, cfg)
+            print(f"Saved undersized chunk {n_saved_chunks} of activations, total size:  {batch_idx * activation_size} ")
+
+def save_activation_chunk(dataset, n_saved_chunks, cfg):
+    dataset_t = torch.cat(dataset, dim=0).to("cpu")
+    dataset_obj = torch.utils.data.TensorDataset(dataset_t)
+    with open(cfg.dataset_folder + "/" + str(n_saved_chunks) + ".pkl", "wb") as f:
+        pickle.dump(dataset_obj, f)
+    n_saved_chunks += 1
+    
 
 
 def run_mmcs_with_larger(cfg, learned_dicts, threshold=0.9):
@@ -850,6 +865,15 @@ def get_size_of_momentum(cfg: dotdict, optimizer: torch.optim.Optimizer):
     assert adam_momentum_tensor.shape == decoder_shape
     return adam_momentum_tensor.detach().abs().sum().item()  # sum of absolute values of all elements
 
+def setup_data(cfg, tokenizer, model, use_baukit=False, start_line=0):
+    sentence_dataset = make_sentence_dataset(cfg.dataset_name, max_lines=cfg.max_lines, start_line=start_line)
+    tensor_name = make_tensor_name(cfg)
+    tokenized_sentence_dataset, bits_per_byte = chunk_and_tokenize(sentence_dataset, tokenizer, max_length=cfg.max_length)
+    token_loader = DataLoader(tokenized_sentence_dataset, batch_size=cfg.model_batch_size, shuffle=True)
+    make_activation_dataset(cfg, token_loader, model, tensor_name, use_baukit)
+    n_lines = len(sentence_dataset)
+    return n_lines
+
 
 def run_real_data_model(cfg: dotdict):
     # cfg.model_name = "EleutherAI/pythia-70m-deduped"
@@ -881,17 +905,14 @@ def run_real_data_model(cfg: dotdict):
 
     if len(os.listdir(cfg.dataset_folder)) == 0:
         print(f"Activations in {cfg.dataset_folder} do not exist, creating them")
-        sentence_dataset = make_dataset(cfg.dataset_name)
-        tensor_name = make_tensor_name(cfg)
-        tokenized_sentence_dataset, bits_per_byte = chunk_and_tokenize(sentence_dataset, tokenizer, max_length=cfg.max_length)
-        token_loader = DataLoader(tokenized_sentence_dataset, batch_size=cfg.model_batch_size, shuffle=True)
-        make_activation_dataset(cfg, token_loader, model, tensor_name, use_baukit)
+        n_lines = setup_data(cfg, tokenizer, model, use_baukit=use_baukit)
     else:
         print(f"Activations in {cfg.dataset_folder} already exist, loading them")
         # get mlp_width from first file
         with open(os.path.join(cfg.dataset_folder, "0.pkl"), "rb") as f:
             dataset = pickle.load(f)
         cfg.mlp_width = dataset.tensors[0][0].shape[-1]
+        n_lines = cfg.max_lines
         del dataset
 
     l1_range = [cfg.l1_exp_base**exp for exp in range(cfg.l1_exp_low, cfg.l1_exp_high)]
@@ -994,6 +1015,14 @@ def run_real_data_model(cfg: dotdict):
                 wandb.log({"mmcs_with_larger": wandb.Image(os.path.join(outputs_folder, "av_mmcs_with_larger_dicts.png"))}, commit=True)
                 wandb.log({"feats_above_threshold": wandb.Image(os.path.join(outputs_folder, "percentage_above_threshold_mmcs_with_larger_dicts.png"))}, commit=True)
                 wandb.log({"mcs_histogram": wandb.Image(os.path.join(outputs_folder, "histogram_max_cosine_sim.png"))}, commit=True)
+
+        if cfg.refresh_data:
+            print("Remaking dataset")
+            os.system(f"rm -rf {cfg.dataset_folder}/*") # delete the old dataset
+            n_new_lines = setup_data(cfg, tokenizer, model, use_baukit, start_line=n_lines)
+            n_lines += n_new_lines
+
+
     if cfg.use_wandb:
         wandb.finish()
 

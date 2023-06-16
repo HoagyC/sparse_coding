@@ -44,6 +44,8 @@ def parse_args():
     parser.add_argument("--max_batches", type=int, default=0)  # How many batches to run the inner loop for before cutting out, 0 means run all
     parser.add_argument("--mini_runs", type=int, default=1)  # How many times to run the inner loop, each time with a different random subset of the data
 
+    parser.add_argument("--refresh_data", type=bool, default=False)  # Whether to remake the dataset after each mini run
+    parser.add_argument("--max_lines", type=int, default=100000)  # How many lines to read from the dataset
     # interpret
     parser.add_argument("--activation_sentences", type=int, default=8) # number of sentences to go through to get feature activation
     parser.add_argument("--load_activation_dataset", type=str, default="outputs/activation_df.csv") # path to dataset to load
