@@ -3,10 +3,38 @@ Looking at whether there are systematic differences between feature that have co
 """
 import pickle
 
+import matplotlib.pyplot as plt
 import torch
 
 from argparser import parse_args
 from run import run_mmcs_with_larger, AutoEncoder
+
+def test_diversity_of_random_features():
+    random_features = torch.randn(10000, 128)
+    random_features = random_features / torch.norm(random_features, dim=1, keepdim=True)
+    proportion = lambda x: (x.abs().t() / torch.sum(x.abs(), dim=1)).t()
+    effective_number_of_neurons = lambda x: 1 / (proportion(x) ** 2).sum(dim=1)
+    enn = effective_number_of_neurons(random_features)
+    plt.hist(enn)
+    print("mean:", enn.mean())
+    plt.xlabel("Effective number of neurons")
+    plt.ylabel("MMCS")
+    plt.savefig("outputs/enn_vs_mmcs_randn.png")
+    # plt.show()
+
+    # now try with random directions, sampled from a normal distribution, not sampled from torch.randn
+    gaussian = torch.distributions.normal.Normal(0, 1)
+    random_features = gaussian.sample((10000, 128))
+    random_features = random_features / torch.norm(random_features, dim=1, keepdim=True)
+    enn_gaussian = effective_number_of_neurons(random_features)
+    plt.hist(enn_gaussian)
+    print("mean:", enn_gaussian.mean())
+    plt.xlabel("Effective number of neurons")
+    plt.ylabel("MMCS")
+    plt.savefig("outputs/enn_vs_mmcs_gaussian.png")
+
+
+
 
 def main(cfg):
     # load in two autoencoders
@@ -40,12 +68,9 @@ def main(cfg):
     proportion = lambda x: (x.abs().t() / torch.sum(x.abs(), dim=1)).t()
     effective_number_of_neurons = lambda x: 1 / (proportion(x) ** 2).sum(dim=1)
     enn = [[effective_number_of_neurons(learned_dict) for learned_dict in l1] for l1 in learned_dicts]
-    print("effective number of neurons:", enn)
-    breakpoint()
     enn = enn[0][0]
 
     # make scatter plot of entropy and mmcs
-    import matplotlib.pyplot as plt
     plt.scatter(entropy, mmcs)
     plt.xlabel("entropy")
     plt.ylabel("mmcs")
@@ -54,17 +79,23 @@ def main(cfg):
 
     # make scatter plot of enn and mmcs
     plt.scatter(enn, mmcs)
-    plt.xlabel("enn")
-    plt.ylabel("mmcs")
+    plt.xlabel("Effective number of neurons")
+    plt.ylabel("MMCS")
     plt.savefig("outputs/enn_vs_mmcs.png")
-    plt.show()
+    # plt.show()
+
+    # calculate mean entropy for features above and below threshold
+    enn_above_threshold = enn[mmcs > cfg.threshold]
+    enn_below_threshold = enn[mmcs < cfg.threshold]
+    print("mean enn above threshold:", enn_above_threshold.mean())
+    print("mean enn below threshold:", enn_below_threshold.mean())
+
     # now we look at the cosine similarity of the input vectors of the different neurons
     transformer_loc = "models/32d70k.pt"
     model = torch.load(open(transformer_loc, "rb"), map_location=torch.device("cpu"))
     model_dict = model["model"]
-    in_matrix = model_dict[f"_orig_mod.transformer.h.{cfg.layer_n}.mlp.c_fc.weight"]
+    in_matrix = model_dict[f"_orig_mod.transformer.h.{cfg.layer}.mlp.c_fc.weight"]
 
-    # now we want to look at the cosine similarity of the input vectors of the different neurons
 
 
 
@@ -72,3 +103,4 @@ def main(cfg):
 if __name__ == "__main__":
     cfg = parse_args()
     main(cfg)
+    test_diversity_of_random_features()
