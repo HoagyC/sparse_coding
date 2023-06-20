@@ -3,7 +3,8 @@ import importlib
 import json
 import os
 import pickle
-from typing import Any, Dict
+import requests
+from typing import Any, Dict, Union
 
 from baukit import Trace
 from datasets import load_dataset
@@ -27,15 +28,34 @@ with open("secrets.json") as f:
     os.environ["OPENAI_API_KEY"] = secrets["openai_key"]
 
 from neuron_explainer.activations.activation_records import calculate_max_activation
-from neuron_explainer.activations.activations import ActivationRecordSliceParams, load_neuron, ActivationRecord, NeuronRecord, NeuronId
+from neuron_explainer.activations.activations import ActivationRecordSliceParams, ActivationRecord, NeuronRecord, NeuronId
 from neuron_explainer.explanations.calibrated_simulator import UncalibratedNeuronSimulator
 from neuron_explainer.explanations.explainer import TokenActivationPairExplainer
 from neuron_explainer.explanations.prompt_builder import PromptFormat
 from neuron_explainer.explanations.scoring import simulate_and_score
 from neuron_explainer.explanations.simulator import ExplanationNeuronSimulator
+from neuron_explainer.fast_dataclasses import loads
 
 EXPLAINER_MODEL_NAME = "gpt-4"
 SIMULATOR_MODEL_NAME = "text-davinci-003"
+
+# Replaces the load_neuron function in neuron_explainer.activations.activations because couldn't get blobfile to work
+def load_neuron(
+    layer_index: Union[str, int], neuron_index: Union[str, int],
+    dataset_path: str = "https://openaipublic.blob.core.windows.net/neuron-explainer/data/collated-activations",
+) -> NeuronRecord:
+    """Load the NeuronRecord for the specified neuron."""
+    url = os.path.join(dataset_path, str(layer_index), f"{neuron_index}.json")
+    response = requests.get(url)
+    if response.status_code != 200:
+        raise ValueError(f"Neuron record not found at {url}.")
+    neuron_record = loads(response.content)
+
+    if not isinstance(neuron_record, NeuronRecord):
+        raise ValueError(
+            f"Stored data incompatible with current version of NeuronRecord dataclass."
+        )
+    return neuron_record
 
 
 def make_feature_activation_dataset(cfg, model: HookedTransformer, feature_dict: torch.Tensor, use_baukit: bool = False, max_sentences: int = 10000):
@@ -220,7 +240,47 @@ async def main(cfg: dotdict):
         scored_simulation = await interpret_neuron(neuron_record, n_examples_per_split)
         print(f"score={scored_simulation.get_preferred_score():.2f}")
 
+async def run_openai_example():
+    neuron_record = load_neuron(9, 6236)
+
+    # Grab the activation records we'll need.
+    slice_params = ActivationRecordSliceParams(n_examples_per_split=5)
+    train_activation_records = neuron_record.train_activation_records(
+        activation_record_slice_params=slice_params
+    )
+    valid_activation_records = neuron_record.valid_activation_records(
+        activation_record_slice_params=slice_params
+    )
+
+    # Generate an explanation for the neuron.
+    explainer = TokenActivationPairExplainer(
+        model_name=EXPLAINER_MODEL_NAME,
+        prompt_format=PromptFormat.HARMONY_V4,
+        max_concurrent=1,
+    )
+    explanations = await explainer.generate_explanations(
+        all_activation_records=train_activation_records,
+        max_activation=calculate_max_activation(train_activation_records),
+        num_samples=1,
+    )
+    assert len(explanations) == 1
+    explanation = explanations[0]
+    print(f"{explanation=}")
+
+    # Simulate and score the explanation.
+    simulator = UncalibratedNeuronSimulator(
+        ExplanationNeuronSimulator(
+            SIMULATOR_MODEL_NAME,
+            explanation,
+            max_concurrent=1,
+            prompt_format=PromptFormat.INSTRUCTION_FOLLOWING,
+        )
+    )
+    scored_simulation = await simulate_and_score(simulator, valid_activation_records)
+    print(f"score={scored_simulation.get_preferred_score():.2f}")
+
 
 if __name__ == "__main__":
-    cfg = parse_args()
-    asyncio.run(main(cfg))
+    asyncio.run(run_openai_example())
+    # cfg = parse_args()
+    # asyncio.run(main(cfg))
