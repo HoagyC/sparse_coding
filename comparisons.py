@@ -83,7 +83,7 @@ def main():
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
 
-    from run import setup_data, mean_max_cosine_similarity
+    from run import setup_data, mean_max_cosine_similarity, run_with_real_data
 
     if cfg.model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]:
         model = HookedTransformer.from_pretrained(cfg.model_name, device=cfg.device)
