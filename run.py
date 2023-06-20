@@ -399,13 +399,13 @@ def mean_max_cosine_similarity(ground_truth_features, learned_dictionary, debug=
     return mmcs
 
 
-def get_n_dead_neurons(auto_encoder, data_generator, n_batches=10, device="cuda"):
+def get_n_dead_features(auto_encoder, data_generator, n_batches=10, device="cuda"):
     """
     :param result_dict: dictionary containing the results of a single run
-    :return: number of dead neurons
+    :return: number of dead features
 
-    Estimates the number of dead neurons in the network by running a few batches of data through the network and
-    calculating the mean activation of each neuron. If the mean activation is 0 for a neuron, it is considered dead.
+    Estimates the number of dead features in the network by running a few batches of data through the network and
+    calculating the mean activation of each feature. If the mean activation is 0 for a feature, it is considered dead.
     """
     t_type = torch.float32
     outputs = []
@@ -418,15 +418,15 @@ def get_n_dead_neurons(auto_encoder, data_generator, n_batches=10, device="cuda"
             break
     outputs = torch.cat(outputs)  # (n_batches * batch_size, n_dict_components)
     mean_activations = outputs.mean(dim=0)  # (n_dict_components), c is after the ReLU, no need to take abs
-    n_dead_neurons = (mean_activations == 0).sum().item()
-    return n_dead_neurons
+    n_dead_features = (mean_activations == 0).sum().item()
+    return n_dead_features
 
 
 def analyse_result(result):
-    get_n_dead_neurons(result)
+    get_n_dead_features(result)
 
 
-def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]):
+def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator], mini_run: int = 1, num_mini_runs: int = 1):
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     if not data_generator:
@@ -485,8 +485,8 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
 
     learned_dictionary = auto_encoder.decoder.weight.data.t()
     mmcs = mean_max_cosine_similarity(ground_truth_features.to(auto_encoder.device), learned_dictionary)
-    n_dead_neurons = get_n_dead_neurons(auto_encoder, data_generator, device=device)
-    return mmcs, auto_encoder, n_dead_neurons, running_recon_loss
+    n_dead_features = get_n_dead_features(auto_encoder, data_generator, device=device)
+    return mmcs, auto_encoder, n_dead_features, running_recon_loss
 
 
 
@@ -551,9 +551,15 @@ def plot_mat(mat, l1_alphas, learned_dict_ratios, show: bool = True, save_folder
     # Add the values in the matrix as text annotations
     for i in range(len(learned_dict_ratios)):
         for j in range(len(l1_alphas)):
-            plt.text(j, i, format(mat[i, j], ".2E"),
-                    ha="center", va="center",
-                    color="black" if mat[i, j] > mat.max() / 2 else "w")
+            # if type is a float, round to 2 decimal places
+            if "float" in str(mat[i, j].dtype):
+                plt.text(j, i, format(mat[i, j], ".2E"),
+                        ha="center", va="center",
+                        color="black" if mat[i, j] > mat.max() / 2 else "w")
+            else:
+                plt.text(j, i, format(mat[i, j]),
+                        ha="center", va="center",
+                        color="black" if mat[i, j] > mat.max() / 2 else "w")
 
     if title:
         plt.title(title)
@@ -607,8 +613,8 @@ def recalculate_results(auto_encoder, data_generator):
     ground_truth_features = data_generator.feats
     learned_dictionary = auto_encoder.decoder.weight.data.t()
     mmcs = mean_max_cosine_similarity(ground_truth_features.to(auto_encoder.device), learned_dictionary)
-    n_dead_neurons = get_n_dead_neurons(auto_encoder, data_generator)
-    return mmcs, learned_dictionary, n_dead_neurons, recon_loss
+    n_dead_features = get_n_dead_features(auto_encoder, data_generator)
+    return mmcs, learned_dictionary, n_dead_features, recon_loss
 
 
 def run_toy_model(cfg):
@@ -629,7 +635,7 @@ def run_toy_model(cfg):
     print("Range of l1 values being used: ", l1_range)
     print("Range of dict_sizes compared to ground truth being used:", learned_dict_ratios)
     mmcs_matrix = np.zeros((len(l1_range), len(learned_dict_ratios)))
-    dead_neurons_matrix = np.zeros((len(l1_range), len(learned_dict_ratios)))
+    dead_features_matrix = np.zeros((len(l1_range), len(learned_dict_ratios)))
     recon_loss_matrix = np.zeros((len(l1_range), len(learned_dict_ratios)))
 
     # 2D array of learned dictionaries, indexed by l1_alpha and learned_dict_ratio, start with Nones
@@ -641,11 +647,11 @@ def run_toy_model(cfg):
         cfg.l1_alpha = l1_alpha
         cfg.learned_dict_ratio = learned_dict_ratio
         cfg.n_components_dictionary = int(cfg.n_ground_truth_components * cfg.learned_dict_ratio)
-        mmcs, auto_encoder, n_dead_neurons, reconstruction_loss = run_single_go(cfg, data_generator)
-        print(f"l1_alpha: {l1_alpha} | learned_dict_ratio: {learned_dict_ratio} | mmcs: {mmcs:.3f} | n_dead_neurons: {n_dead_neurons} | reconstruction_loss: {reconstruction_loss:.3f}")
+        mmcs, auto_encoder, n_dead_features, reconstruction_loss = run_single_go(cfg, data_generator)
+        print(f"l1_alpha: {l1_alpha} | learned_dict_ratio: {learned_dict_ratio} | mmcs: {mmcs:.3f} | n_dead_features: {n_dead_features} | reconstruction_loss: {reconstruction_loss:.3f}")
 
         mmcs_matrix[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = mmcs
-        dead_neurons_matrix[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = n_dead_neurons
+        dead_features_matrix[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = n_dead_features
         recon_loss_matrix[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = reconstruction_loss
         auto_encoders[l1_range.index(l1_alpha)][learned_dict_ratios.index(learned_dict_ratio)] = auto_encoder.cpu()
 
@@ -655,9 +661,9 @@ def run_toy_model(cfg):
 
     # Save the matrices and the data generator
     plot_mat(mmcs_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Mean Max Cosine Similarity w/ True", save_name="mmcs_matrix.png", col_range=(0.0, 1.0))
-    # clamp dead_neurons to 0-100 for better visualisation
-    dead_neurons_matrix = np.clip(dead_neurons_matrix, 0, 100)
-    plot_mat(dead_neurons_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Dead Neurons", save_name="dead_neurons_matrix.png")
+    # clamp dead_features to 0-100 for better visualisation
+    dead_features_matrix = np.clip(dead_features_matrix, 0, 100)
+    plot_mat(dead_features_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Dead Neurons", save_name="dead_features_matrix.png")
     plot_mat(recon_loss_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Reconstruction Loss", save_name="recon_loss_matrix.png")
     with open(os.path.join(outputs_folder, "auto_encoders.pkl"), "wb") as f:
         pickle.dump(auto_encoders, f)
@@ -667,8 +673,8 @@ def run_toy_model(cfg):
         pickle.dump(data_generator, f)
     with open(os.path.join(outputs_folder, "mmcs_matrix.pkl"), "wb") as f:
         pickle.dump(mmcs_matrix, f)
-    with open(os.path.join(outputs_folder, "dead_neurons.pkl"), "wb") as f:
-        pickle.dump(dead_neurons_matrix, f)
+    with open(os.path.join(outputs_folder, "dead_features.pkl"), "wb") as f:
+        pickle.dump(dead_features_matrix, f)
     with open(os.path.join(outputs_folder, "recon_loss.pkl"), "wb") as f:
         pickle.dump(recon_loss_matrix, f)
 
@@ -689,7 +695,7 @@ def run_toy_model(cfg):
         plot_hist(full_max_cosine_sim_for_histograms, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title=f"Max Cosine Similarities", save_name="histogram_max_cosine_sim.png")
 
 
-def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 0):
+def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 0, mini_run: int = 1, n_mini_runs: int = 1):
     optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.learning_rate)
     running_recon_loss = 0.0
     running_l1_loss = 0.0
@@ -736,7 +742,7 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
 
                     print(
                         f"L1 Coef: {cfg.l1_alpha:.2E} | Dict ratio: {cfg.n_components_dictionary / cfg.mlp_width} | "
-                        + f"Batch: {batch_idx+1}/{len(dataset)} | Chunk: {chunk_ndx+1}/{n_chunks_in_folder} | "
+                        + f"Batch: {batch_idx+1}/{len(dataset)} | Chunk: {chunk_ndx+1}/{n_chunks_in_folder} | Minirun: {mini_run}/{n_mini_runs} |"
                         + f"Epoch: {epoch+1}/{cfg.epochs} | Reconstruction loss: {running_recon_loss:.6f} | l1: {l_l1:.6f}"
                     )
                     if cfg.use_wandb:
@@ -752,13 +758,13 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
                         )
 
                 if cfg.max_batches and n_batches >= cfg.max_batches:
-                    n_dead_neurons = get_n_dead_neurons(auto_encoder, dataset)
+                    n_dead_features = get_n_dead_features(auto_encoder, dataset)
                     total_batches = n_batches + completed_batches
-                    return auto_encoder, n_dead_neurons, running_recon_loss, running_l1_loss, total_batches
+                    return auto_encoder, n_dead_features, running_recon_loss, running_l1_loss, total_batches
 
-    n_dead_neurons = get_n_dead_neurons(auto_encoder, dataset)
+    n_dead_features = get_n_dead_features(auto_encoder, dataset)
     total_batches = n_batches + completed_batches
-    return auto_encoder, n_dead_neurons, running_recon_loss, running_l1_loss, total_batches
+    return auto_encoder, n_dead_features, running_recon_loss, running_l1_loss, total_batches
 
 
 def make_activation_dataset(cfg, sentence_dataset: DataLoader, model: HookedTransformer, tensor_name: str, baukit: bool = False) -> pd.DataFrame:
@@ -787,6 +793,7 @@ def make_activation_dataset(cfg, sentence_dataset: DataLoader, model: HookedTran
             if len(dataset) >= max_chunks:
                 # Need to save, restart the list
                 save_activation_chunk(dataset, n_saved_chunks, cfg)
+                n_saved_chunks += 1
                 print(f"Saved chunk {n_saved_chunks} of activations, total size:  {batch_idx * activation_size} ")
                 dataset = []
                 if n_saved_chunks == cfg.n_chunks:
@@ -801,7 +808,6 @@ def save_activation_chunk(dataset, n_saved_chunks, cfg):
     dataset_obj = torch.utils.data.TensorDataset(dataset_t)
     with open(cfg.dataset_folder + "/" + str(n_saved_chunks) + ".pkl", "wb") as f:
         pickle.dump(dataset_obj, f)
-    n_saved_chunks += 1
     
 
 
@@ -921,7 +927,7 @@ def run_real_data_model(cfg: dotdict):
 
     print("Range of l1 values being used: ", l1_range)
     print("Range of dict_sizes being used:", dict_sizes)
-    dead_neurons_matrix = np.zeros((len(l1_range), len(dict_sizes)))
+    dead_features_matrix = np.zeros((len(l1_range), len(dict_sizes)))
     recon_loss_matrix = np.zeros((len(l1_range), len(dict_sizes)))
     l1_loss_matrix = np.zeros((len(l1_range), len(dict_sizes)))
 
@@ -963,11 +969,11 @@ def run_real_data_model(cfg: dotdict):
             cfg.n_components_dictionary = dict_size
             auto_encoder = auto_encoders[l1_ndx][dict_size_ndx]
 
-            auto_encoder, n_dead_neurons, reconstruction_loss, l1_loss, completed_batches = run_with_real_data(cfg, auto_encoder, completed_batches=step_n)
+            auto_encoder, n_dead_features, reconstruction_loss, l1_loss, completed_batches = run_with_real_data(cfg, auto_encoder, completed_batches=step_n, mini_run=mini_run, n_mini_runs=cfg.mini_runs)
             if l1_ndx == (len(l1_range) - 1) and dict_size_ndx == (len(dict_sizes) - 1):
                 step_n = completed_batches
 
-            dead_neurons_matrix[l1_ndx, dict_size_ndx] = n_dead_neurons
+            dead_features_matrix[l1_ndx, dict_size_ndx] = n_dead_features
             recon_loss_matrix[l1_ndx, dict_size_ndx] = reconstruction_loss
             l1_loss_matrix[l1_ndx, dict_size_ndx] = l1_loss
 
@@ -981,20 +987,20 @@ def run_real_data_model(cfg: dotdict):
             dict_size = dict_sizes[dict_size_ndx]
             if(cfg.use_wandb):
                 wb_tag = f"l1={l1_coef:.2E}_ds={dict_size}"
-                wandb.log({f"{wb_tag}.n_dead_neurons": dead_neurons_matrix[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
+                wandb.log({f"{wb_tag}.n_dead_features": dead_features_matrix[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
                 wandb.log({f"{wb_tag}.mmcs_with_larger": mmcs_with_larger[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
                 wandb.log({f"{wb_tag}.feats_above_threshold": feats_above_threshold[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
                 #TODO decide what to do for full_histogram.
-        dead_neurons_matrix = np.clip(dead_neurons_matrix, 0, 100)
+        dead_features_matrix = np.clip(dead_features_matrix, 0, 100)
         
         plot_mat(
-            dead_neurons_matrix,
+            dead_features_matrix,
             l1_range,
             dict_sizes,
             show=False,
             save_folder=outputs_folder,
             title="Dead Neurons",
-            save_name="dead_neurons_matrix.png",
+            save_name="dead_features_matrix.png",
             col_range=(
                 0.0,
                 100.0,
@@ -1004,10 +1010,10 @@ def run_real_data_model(cfg: dotdict):
         plot_mat(l1_loss_matrix, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="L1 Loss", save_name="l1_loss_matrix.png")
         # upload images to wandb
         if cfg.use_wandb:
-            wandb.log({"dead_neurons": wandb.Image(os.path.join(outputs_folder, "dead_neurons_matrix.png"))}, commit=True)
+            wandb.log({"dead_features": wandb.Image(os.path.join(outputs_folder, "dead_features_matrix.png"))}, commit=True)
             wandb.log({"recon_loss": wandb.Image(os.path.join(outputs_folder, "recon_loss_matrix.png"))}, commit=True)
             wandb.log({"l1_loss": wandb.Image(os.path.join(outputs_folder, "l1_loss_matrix.png"))}, commit=True)
-        if(len(dict_sizes) > 1):
+        if(len(dict_sizes) > 1) and cfg.use_wandb:
             plot_mat(mmcs_with_larger, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="Average mmcs with larger dicts", save_name="av_mmcs_with_larger_dicts.png", col_range=(0.0, 1.0))
             plot_mat(feats_above_threshold, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title=f"MN features abouve {cfg.threshold}", save_name="percentage_above_threshold_mmcs_with_larger_dicts.png")
             plot_hist(full_max_cosine_sim_for_histograms, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title=f"Max Cosine Similarities", save_name="histogram_max_cosine_sim.png")
@@ -1026,17 +1032,17 @@ def run_real_data_model(cfg: dotdict):
     if cfg.use_wandb:
         wandb.finish()
 
-    # clamp dead_neurons to 0-100 for better visualisation
-    dead_neurons_matrix = np.clip(dead_neurons_matrix, 0, 100)
-    plot_mat(dead_neurons_matrix, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="Dead Neurons", save_name="dead_neurons_matrix.png")
+    # clamp dead_features to 0-100 for better visualisation
+    dead_features_matrix = np.clip(dead_features_matrix, 0, 100)
+    plot_mat(dead_features_matrix, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="Dead Neurons", save_name="dead_features_matrix.png")
     plot_mat(recon_loss_matrix, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="Reconstruction Loss", save_name="recon_loss_matrix.png")
     cpu_autoencoders = [[auto_e.to(torch.device("cpu")) for auto_e in l1] for l1 in auto_encoders]
     with open(os.path.join(outputs_folder, "auto_encoders.pkl"), "wb") as f:
         pickle.dump(cpu_autoencoders, f)
     with open(os.path.join(outputs_folder, "config.pkl"), "wb") as f:
         pickle.dump(cfg, f)
-    with open(os.path.join(outputs_folder, "dead_neurons.pkl"), "wb") as f:
-        pickle.dump(dead_neurons_matrix, f)
+    with open(os.path.join(outputs_folder, "dead_features.pkl"), "wb") as f:
+        pickle.dump(dead_features_matrix, f)
     with open(os.path.join(outputs_folder, "recon_loss.pkl"), "wb") as f:
         pickle.dump(recon_loss_matrix, f)
 

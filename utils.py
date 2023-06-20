@@ -3,7 +3,7 @@ import sys
 from typing import Optional
 
 VAST_NUM = 4
-VAST_PORT = 13158
+VAST_PORT = 24718
 SSH_DIRECTORY = "sparse_coding"
 dest_addr = f"root@ssh{VAST_NUM}.vast.ai"
 SSH_PYTHON = "/opt/conda/bin/python"
@@ -47,7 +47,7 @@ def setup():
     # command = f"ssh -p {VAST_PORT} {dest_addr} \"cd {SSH_DIRECTORY} && echo $PATH\""
     subprocess.call(command, shell=True)
     # clone neuron explainer, until i can load it from pip
-    command = f'ssh -p {VAST_PORT} {dest_addr} "git clone https://github.com/openai/automated-interpretability && mv automated-interpretability/neuron-explainer/neuron_explainer/ neuron_explainer"'
+    command = f'ssh -p {VAST_PORT} {dest_addr} "cd sparse_coding && git clone https://github.com/openai/automated-interpretability && mv automated-interpretability/neuron-explainer/neuron_explainer/ neuron_explainer"'
     subprocess.call(command, shell=True)
 
 class dotdict(dict):
