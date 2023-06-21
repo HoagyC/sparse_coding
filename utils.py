@@ -3,7 +3,7 @@ import sys
 from typing import Optional
 
 VAST_NUM = 4
-VAST_PORT = 24718
+VAST_PORT = 35344
 SSH_DIRECTORY = "sparse_coding"
 dest_addr = f"root@ssh{VAST_NUM}.vast.ai"
 SSH_PYTHON = "/opt/conda/bin/python"
@@ -57,7 +57,9 @@ class dotdict(dict):
         if d is None:
             d = {}
         super().__init__(d)
-        self.__dict__ = self
+
+    def __dict__(self):
+        return self
 
     def __getattr__(self, name):
         if name in self:

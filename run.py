@@ -618,6 +618,18 @@ def recalculate_results(auto_encoder, data_generator):
 
 
 def run_toy_model(cfg):
+    start_time = datetime.now().strftime("%Y%m%d-%H%M%S")
+    cfg.model_name = f"toy{cfg.mlp_width}{cfg.learned_dict_ratio}"
+
+    if cfg.use_wandb:
+        secrets = json.load(open("secrets.json"))
+        wandb.login(key=secrets["wandb_key"])
+        wandb_run_name = f"{cfg.model_name}_{start_time[4:]}"  # trim year
+        wandb.init(project="sparse coding", config=dict(cfg), name=wandb_run_name, entity="sparse_coding")
+
+    
+    breakpoint()
+
     # Using a single data generator for all runs so that can compare learned dicts
     data_generator = RandomDatasetGenerator(
         activation_dim=cfg.mlp_width,
@@ -742,7 +754,7 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
 
                     print(
                         f"L1 Coef: {cfg.l1_alpha:.2E} | Dict ratio: {cfg.n_components_dictionary / cfg.mlp_width} | "
-                        + f"Batch: {batch_idx+1}/{len(dataset)} | Chunk: {chunk_ndx+1}/{n_chunks_in_folder} | Minirun: {mini_run}/{n_mini_runs} |"
+                        + f"Batch: {batch_idx+1}/{len(dataset)} | Chunk: {chunk_ndx+1}/{n_chunks_in_folder} | Minirun: {mini_run + 1}/{n_mini_runs} | "
                         + f"Epoch: {epoch+1}/{cfg.epochs} | Reconstruction loss: {running_recon_loss:.6f} | l1: {l_l1:.6f}"
                     )
                     if cfg.use_wandb:
@@ -957,7 +969,7 @@ def run_real_data_model(cfg: dotdict):
         secrets = json.load(open("secrets.json"))
         wandb.login(key=secrets["wandb_key"])
         wandb_run_name = f"{cfg.model_name}_{start_time[4:]}"  # trim year
-        wandb.init(project="sparse coding", config=cfg.__dict__, name=wandb_run_name)
+        wandb.init(project="sparse coding", config=dict(cfg), name=wandb_run_name, entity="sparse_coding")
 
     step_n = 0
     for mini_run in tqdm(range(cfg.mini_runs)):

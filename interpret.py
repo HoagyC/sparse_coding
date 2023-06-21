@@ -36,7 +36,7 @@ from neuron_explainer.explanations.scoring import simulate_and_score
 from neuron_explainer.explanations.simulator import ExplanationNeuronSimulator
 from neuron_explainer.fast_dataclasses import loads
 
-EXPLAINER_MODEL_NAME = "gpt-4"
+EXPLAINER_MODEL_NAME = "gpt-3.5-turbo"
 SIMULATOR_MODEL_NAME = "text-davinci-003"
 
 # Replaces the load_neuron function in neuron_explainer.activations.activations because couldn't get blobfile to work
@@ -241,7 +241,7 @@ async def main(cfg: dotdict):
         print(f"score={scored_simulation.get_preferred_score():.2f}")
 
 async def run_openai_example():
-    neuron_record = load_neuron(9, 6236)
+    neuron_record = load_neuron(9, 10)
 
     # Grab the activation records we'll need.
     slice_params = ActivationRecordSliceParams(n_examples_per_split=5)

@@ -12,9 +12,9 @@ from torch.utils.data import DataLoader
 
 import numpy as np
 
+from transformers import GPT2Tokenizer
 from transformer_lens import HookedTransformer
 import pickle
-import itertools
 
 class BatchedPCA():
     def __init__(self, n_dims, device):
