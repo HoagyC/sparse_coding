@@ -4,10 +4,11 @@ import json
 import os
 import pickle
 import requests
-from typing import Any, Dict, Union
+import sys
+from typing import Any, Dict, Union, List
 
 from baukit import Trace
-from datasets import load_dataset
+from datasets import load_dataset, ReadInstruction
 from einops import rearrange
 import pandas as pd
 import torch
@@ -20,6 +21,7 @@ from argparser import parse_args
 from utils import dotdict, make_tensor_name
 from nanoGPT_model import GPT
 from run import AutoEncoder
+
 
 # set OPENAI_API_KEY environment variable from secrets.json['openai_key']
 # needs to be done before importing openai interp bits
@@ -38,6 +40,12 @@ from neuron_explainer.fast_dataclasses import loads
 
 EXPLAINER_MODEL_NAME = "gpt-3.5-turbo"
 SIMULATOR_MODEL_NAME = "text-davinci-003"
+
+OPENAI_MAX_FRAGMENTS = 50000
+OPENAI_FRAGMENT_LEN = 64
+OPENAI_EXAMPLES_PER_SPLIT = 5
+N_SPLITS = 4
+TOTAL_EXAMPLES = OPENAI_EXAMPLES_PER_SPLIT * N_SPLITS
 
 # Replaces the load_neuron function in neuron_explainer.activations.activations because couldn't get blobfile to work
 def load_neuron(
@@ -58,12 +66,12 @@ def load_neuron(
     return neuron_record
 
 
-def make_feature_activation_dataset(cfg, model: HookedTransformer, feature_dict: torch.Tensor, use_baukit: bool = False, max_sentences: int = 10000):
+def make_feature_activation_dataset(cfg, model: HookedTransformer, feature_dict: torch.Tensor, use_baukit: bool = False):
     """
     Takes a dict of features and returns the top k activations for each feature in pile10k
     """
-    sentence_dataset = load_dataset(cfg.dataset_name)
-    sentence_dataset = sentence_dataset["train"]
+    max_sentences = 10000
+    sentence_dataset = load_dataset("openwebtext", split="train[:1%](pct1_dropremainder)")
     if max_sentences is not None and max_sentences < len(sentence_dataset):
         sentence_dataset = sentence_dataset.select(range(max_sentences))
 
@@ -72,54 +80,67 @@ def make_feature_activation_dataset(cfg, model: HookedTransformer, feature_dict:
     # make list of sentence, tokenization pairs
 
     print(f"Computing internals for all {len(sentence_dataset)} sentences")
+    tokenizer_model = HookedTransformer.from_pretrained("gpt2", device=cfg.device) # as copilot likes to say, this is a hack
 
     # Make dataframe with columns for each feature, and rows for each sentence fragment
     # each row should also have the full sentence, the current tokens and the previous tokens
 
-    sentence_fragment_dicts = []
+    sentence_fragment_dicts: List[Dict[str, Any]] = []
+    n_thrown = 0
     for sentence_id, sentence in tqdm(enumerate(sentence_dataset)):
-        tokens = tokenizer(sentence["text"], return_tensors="pt")["input_ids"].to(cfg.device)[:, : cfg.max_length]
-        if use_baukit:
-            with Trace(model, tensor_name) as ret:
-                _ = model(tokens)
-                mlp_activation_data = ret.output
-                mlp_activation_data = rearrange(mlp_activation_data, "b s n -> (b s) n").to(cfg.device)
-                mlp_activation_data = nn.functional.gelu(mlp_activation_data)
-        else:
-            _, cache = model.run_with_cache(tokens)
-            mlp_activation_data = cache[tensor_name].to(cfg.device)  # NOTE: could do all layers at once, but currently just doing 1 layer
-            mlp_activation_data = rearrange(mlp_activation_data, "b s n -> (b s) n")
-
-        # Project the activations into the feature space
-        feature_activation_data = torch.matmul(mlp_activation_data, feature_dict.to(torch.float32))
-
-        full_sentence = tokenizer.decode(tokens[0, 1:])
-        for i in range(1, tokens.shape[1]):
-            partial_str_dict: Dict[str, Any] = {}
-            partial_str_dict["pre_tokens"] = tokens[0, 1 : i + 1].tolist()
-            partial_str_dict["token_id"] = i
-            partial_str_dict["sentence_id"] = sentence_id
-            partial_str_dict["full_tokens"] = tokens[0, 1:].tolist()
-            partial_str_dict["sentence"] = full_sentence
-            partial_sentence = tokenizer.decode(tokens[0, 1 : i + 1])
-            partial_str_dict["context"] = partial_sentence
-            partial_str_dict["current_token"] = tokenizer.decode(tokens[0, i])
-            if i < tokens.shape[1] - 1:
-                partial_str_dict["next_token"] = tokenizer.decode(tokens[0, i + 1])
+        # split the sentence into fragments
+        tokens = tokenizer_model.to_tokens(sentence["text"], prepend_bos=False)
+        num_fragments = tokens.shape[1] // OPENAI_FRAGMENT_LEN
+        for fragment_id in range(num_fragments):
+            start_idx = fragment_id * OPENAI_FRAGMENT_LEN
+            end_idx = (fragment_id + 1) * OPENAI_FRAGMENT_LEN
+            fragment_tokens = tokens[:, start_idx:end_idx]
+            if use_baukit:
+                with Trace(model, tensor_name) as ret:
+                    _ = model(fragment_tokens)
+                    mlp_activation_data = ret.output
+                    mlp_activation_data = rearrange(mlp_activation_data, "b s n -> (b s) n").to(cfg.device)
+                    mlp_activation_data = nn.functional.gelu(mlp_activation_data)
             else:
-                partial_str_dict["next_token"] = ""
+                _, cache = model.run_with_cache(fragment_tokens)
+                mlp_activation_data = cache[tensor_name].to(cfg.device)  # NOTE: could do all layers at once, but currently just doing 1 layer
+                mlp_activation_data = rearrange(mlp_activation_data, "b s n -> (b s) n")
 
-            if i != 1:
-                partial_str_dict["prev_token"] = tokenizer.decode(tokens[0, i - 1])
-            else:
-                partial_str_dict["prev_token"] = ""
+            # Project the activations into the feature space
+            feature_activation_data = torch.matmul(mlp_activation_data, feature_dict.to(torch.float32))
+
+            # Get average activation for each feature
+            assert feature_activation_data.shape == (OPENAI_FRAGMENT_LEN, feature_dict.shape[1])
+            feature_activation_means = torch.mean(feature_activation_data, dim=0)
+
+            fragment_dict: Dict[str, Any] = {}
+            fragment_dict["fragment_id"] = len(sentence_fragment_dicts)
+            fragment_dict["fragment_token_ids"] = fragment_tokens[0].tolist()
+            fragment_dict["fragment_token_strs"] = tokenizer_model.to_str_tokens(fragment_tokens[0])
+
+            # if there are any question marks in the fragment, throw it away (caused by byte pair encoding)
+            replacement_char = "�"
+            if replacement_char in fragment_dict["fragment_token_strs"]:
+                # throw away the fragment
+                n_thrown += 1
+                continue
 
             for j in range(feature_dict.shape[1]):
-                partial_str_dict[f"feature_{j}"] = feature_activation_data[i, j].item()
-            # add a row into the dataframe for each sentence fragment
-            sentence_fragment_dicts.append(partial_str_dict)
+                fragment_dict[f"feature_{j}_mean"] = feature_activation_means[j].item()
+                fragment_dict[f"feature_{j}_activations"] = feature_activation_data[:, j].tolist()
+                assert len(fragment_dict[f"feature_{j}_activations"]) == len(fragment_dict["fragment_token_strs"])
+                # TODO: figure out why gettnig those question marks in tokenization
+                # just printing errors
+            
+
+            sentence_fragment_dicts.append(fragment_dict)
+            if len(sentence_fragment_dicts) > OPENAI_MAX_FRAGMENTS:
+                break
+        if len(sentence_fragment_dicts) > OPENAI_MAX_FRAGMENTS:
+            break
 
     df = pd.DataFrame(sentence_fragment_dicts)
+    print(f"Threw away {n_thrown} fragments, made {len(df)} fragments")
     return df
 
 
@@ -133,7 +154,6 @@ async def interpret_neuron(neuron_record, n_examples_per_split: int= 5):
         prompt_format=PromptFormat.HARMONY_V4,
         max_concurrent=1,
     )
-
     explanations = await explainer.generate_explanations(
     all_activation_records=train_activation_records,
     max_activation=calculate_max_activation(train_activation_records),
@@ -179,69 +199,49 @@ async def main(cfg: dotdict):
     autoencoder = loaded_autoencoders[0][0]
     feature_dict = autoencoder.encoder[0].weight.detach().t().to(cfg.device)
 
-    if cfg.load_activation_dataset and os.path.exists(cfg.load_activation_dataset):
-        base_df = pd.read_csv(cfg.load_activation_dataset)
-    else:
-        base_df = make_feature_activation_dataset(cfg, model, feature_dict, use_baukit=use_baukit, max_sentences=cfg.activation_sentences)
-        # save the dataset
-        base_df.to_csv(cfg.save_activation_dataset, index=False)
+    if not (cfg.load_activation_dataset and os.path.exists(cfg.load_activation_dataset)):
+        base_df = make_feature_activation_dataset(cfg, model, feature_dict, use_baukit=use_baukit)
+        # save the dataset, saving each column separately so that we can retrive just the columns we want later
+        # base_df.to_csv(cfg.save_activation_dataset, index=False)
+        layer = 2
+        for i in range(0, cfg.n_feats_explain):
+            print(f"Saving feature {i} of layer {layer}")
+            base_df[["fragment_id", f"feature_{i}_mean", f"feature_{i}_activations"]].to_csv(cfg.save_activation_dataset.replace(".csv", f"_layer_{layer}_feature_{i}.csv"), index=False)
+        base_df[["fragment_id", "fragment_token_strs", "fragment_token_ids"]].to_csv(cfg.save_activation_dataset, index=False)
 
-    df = base_df.copy()
+    base_df = pd.read_csv(cfg.load_activation_dataset)
+    for feature_num in range(0, cfg.n_feats_explain):
+        # Load the dataset
+        neuron_df = pd.read_csv(cfg.load_activation_dataset.replace(".csv", f"_layer_2_feature_{feature_num}.csv"))
+        # need to convert the activations and list of tokens from strings to lists
+        df = base_df.merge(neuron_df, on="fragment_id")
+        df[f"feature_{feature_num}_activations"] = df[f"feature_{feature_num}_activations"].apply(lambda x: eval(x))
+        df["fragment_token_strs"] = df["fragment_token_strs"].apply(lambda x: eval(x))
+        df["fragment_token_ids"] = df["fragment_token_ids"].apply(lambda x: eval(x))
 
-    random_sentences = 10
-    for feature_num in range(1, 6):
-        # print previous, current, and next token the top scoring tokens
-        sorted_df = df.sort_values(by=f"feature_{feature_num}", ascending=False)
-        print(sorted_df.head(10)[["prev_token", "current_token", "next_token"]])
-
-        random_activationrecord_list = []
-        for sentence_id, sentence_df in df.groupby("sentence_id"):
-            token_list = []
-            activation_list = []
-            if sentence_id > random_sentences: # this eventually gives > not supported between instances of str and int becau
-                break
-            for token_id, token_df in sentence_df.groupby("token_id"):
-                token_list.append(token_df["current_token"].iloc[0])
-                activation_list.append(token_df[f"feature_{feature_num}"].iloc[0])
-            
-            random_activationrecord_list.append(ActivationRecord(token_list, activation_list))
-
-        # Now we want to get sentences with the highest activation, so we group by sentence_id and then get average activation
-        # then we sort by activation and take the top 10
-
-        n_top_sentences = 8
-        sentence_averages = []
-        for sentence_id, sentence_df in df.groupby("sentence_id"):
-            sentence_averages.append(
-                (sentence_id, sentence_df[f"feature_{feature_num}"].mean())
-            )
+        sorted_df = df.sort_values(by=f"feature_{feature_num}_mean", ascending=False)
+        sorted_df = sorted_df.head(TOTAL_EXAMPLES)
+        top_activation_records = []
+        for i, row in sorted_df.iterrows():
+            top_activation_records.append(ActivationRecord(row["fragment_token_strs"], row[f"feature_{feature_num}_activations"]))
         
-        sentence_averages.sort(key=lambda x: x[1], reverse=True)
-        top_sentence_ids = [x[0] for x in sentence_averages[:n_top_sentences]]
-
-        most_positive_activationrecord_list = []
-        for sentence_id in top_sentence_ids:
-            sentence_df = df[df["sentence_id"] == sentence_id]
-            token_list = []
-            activation_list = []
-            for token_id, token_df in sentence_df.groupby("token_id"):
-                token_list.append(token_df["current_token"].iloc[0])
-                activation_list.append(token_df[f"feature_{feature_num}"].iloc[0])
-            
-            most_positive_activationrecord_list.append(ActivationRecord(token_list, activation_list))
+        # Adding random fragments
+        random_df = df.sample(n=TOTAL_EXAMPLES)
+        random_activation_records = []
+        for i, row in random_df.iterrows():
+            random_activation_records.append(ActivationRecord(row["fragment_token_strs"], row[f"feature_{feature_num}_activations"]))
         
         neuron_id = NeuronId(layer_index=2, neuron_index=feature_num)
 
-        neuron_record = NeuronRecord(neuron_id=neuron_id, random_sample=random_activationrecord_list, most_positive_activation_records=most_positive_activationrecord_list)
-        n_examples_per_split = 2
-        # note that we need n_sentences >= n_examples_per_split * 4 (numsplits)
+        neuron_record = NeuronRecord(neuron_id=neuron_id, random_sample=random_activation_records, most_positive_activation_records=top_activation_records)
+        breakpoint()
 
-
-        scored_simulation = await interpret_neuron(neuron_record, n_examples_per_split)
+        scored_simulation = await interpret_neuron(neuron_record, OPENAI_EXAMPLES_PER_SPLIT)
         print(f"score={scored_simulation.get_preferred_score():.2f}")
 
 async def run_openai_example():
     neuron_record = load_neuron(9, 10)
+    breakpoint()
 
     # Grab the activation records we'll need.
     slice_params = ActivationRecordSliceParams(n_examples_per_split=5)
@@ -281,6 +281,9 @@ async def run_openai_example():
 
 
 if __name__ == "__main__":
-    asyncio.run(run_openai_example())
-    # cfg = parse_args()
-    # asyncio.run(main(cfg))
+    if len(sys.argv) > 1 and sys.argv[1] == "openai":
+        asyncio.run(run_openai_example())
+
+    else:
+        cfg = parse_args()
+        asyncio.run(main(cfg))
