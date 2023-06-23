@@ -28,7 +28,7 @@ from transformer_lens import HookedTransformer
 from transformers import PreTrainedTokenizerBase, GPT2Tokenizer
 import wandb
 
-from utils import dotdict, make_tensor_name
+from utils import *
 from argparser import parse_args
 from nanoGPT_model import GPT
 
@@ -1037,6 +1037,17 @@ def run_real_data_model(cfg: dotdict):
                 wandb.log({"mmcs_with_larger": wandb.Image(os.path.join(outputs_folder, "av_mmcs_with_larger_dicts.png"))}, commit=True)
                 wandb.log({"feats_above_threshold": wandb.Image(os.path.join(outputs_folder, "percentage_above_threshold_mmcs_with_larger_dicts.png"))}, commit=True)
                 wandb.log({"mcs_histogram": wandb.Image(os.path.join(outputs_folder, "histogram_max_cosine_sim.png"))}, commit=True)
+
+        if cfg.save_after_mini:
+            cpu_autoencoders = [[auto_e.to(torch.device("cpu")) for auto_e in l1] for l1 in auto_encoders]
+            minirun_folder = os.path.join(outputs_folder, f"minirun{mini_run}")
+            os.makedirs(minirun_folder, exist_ok=True)
+            encoders_loc = os.path.join(minirun_folder, "autoencoders.pkl")
+            with open(encoders_loc, "wb") as f:
+                pickle.dump(cpu_autoencoders, f)
+            
+            if cfg.upload_to_aws:
+                upload_to_aws(encoders_loc)
 
         if cfg.refresh_data:
             print("Remaking dataset")
