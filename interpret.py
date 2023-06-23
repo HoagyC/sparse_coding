@@ -234,14 +234,12 @@ async def main(cfg: dotdict):
         neuron_id = NeuronId(layer_index=2, neuron_index=feature_num)
 
         neuron_record = NeuronRecord(neuron_id=neuron_id, random_sample=random_activation_records, most_positive_activation_records=top_activation_records)
-        breakpoint()
 
         scored_simulation = await interpret_neuron(neuron_record, OPENAI_EXAMPLES_PER_SPLIT)
         print(f"score={scored_simulation.get_preferred_score():.2f}")
 
 async def run_openai_example():
     neuron_record = load_neuron(9, 10)
-    breakpoint()
 
     # Grab the activation records we'll need.
     slice_params = ActivationRecordSliceParams(n_examples_per_split=5)
