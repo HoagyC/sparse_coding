@@ -674,7 +674,7 @@ def run_toy_model(cfg):
     # Save the matrices and the data generator
     plot_mat(mmcs_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Mean Max Cosine Similarity w/ True", save_name="mmcs_matrix.png", col_range=(0.0, 1.0))
     # clamp dead_features to 0-100 for better visualisation
-    dead_features_matrix = np.clip(dead_features_matrix, 0, 100)
+    # dead_features_matrix = np.clip(dead_features_matrix, 0, 100)
     plot_mat(dead_features_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Dead Neurons", save_name="dead_features_matrix.png")
     plot_mat(recon_loss_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Reconstruction Loss", save_name="recon_loss_matrix.png")
     with open(os.path.join(outputs_folder, "auto_encoders.pkl"), "wb") as f:
@@ -979,7 +979,7 @@ def run_real_data_model(cfg: dotdict):
     if cfg.use_wandb:
         secrets = json.load(open("secrets.json"))
         wandb.login(key=secrets["wandb_key"])
-        wandb_run_name = f"{cfg.model_name}_{start_time[4:]}"  # trim year
+        wandb_run_name = f"{cfg.model_name}_{cfg.layer}_{start_time[4:]}"  # trim year
         wandb.init(project="sparse coding", config=dict(cfg), name=wandb_run_name, entity="sparse_coding")
 
     step_n = 0
@@ -997,7 +997,6 @@ def run_real_data_model(cfg: dotdict):
                 step_n = completed_batches
 
             feature_activations_matrix[l1_ndx][dict_size_ndx] = feature_activations
-            breakpoint()
             dead_features_matrix[l1_ndx, dict_size_ndx] = feature_activations.shape[0] - np.count_nonzero(feature_activations)
             recon_loss_matrix[l1_ndx, dict_size_ndx] = reconstruction_loss
             l1_loss_matrix[l1_ndx, dict_size_ndx] = l1_loss
@@ -1016,7 +1015,7 @@ def run_real_data_model(cfg: dotdict):
                 wandb.log({f"{wb_tag}.mmcs_with_larger": mmcs_with_larger[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
                 wandb.log({f"{wb_tag}.feats_above_threshold": feats_above_threshold[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
                 #TODO decide what to do for full_histogram.
-        dead_features_matrix = np.clip(dead_features_matrix, 0, 100)
+        # dead_features_matrix = np.clip(dead_features_matrix, 0, 100)
         
         plot_mat(
             dead_features_matrix,
@@ -1073,11 +1072,11 @@ def run_real_data_model(cfg: dotdict):
         wandb.finish()
 
     # clamp dead_features to 0-100 for better visualisation
-    dead_features_matrix = np.clip(dead_features_matrix, 0, 100)
+    # dead_features_matrix = np.clip(dead_features_matrix, 0, 100)
     plot_mat(dead_features_matrix, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="Dead Neurons", save_name="dead_features_matrix.png")
     plot_mat(recon_loss_matrix, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="Reconstruction Loss", save_name="recon_loss_matrix.png")
     cpu_autoencoders = [[auto_e.to(torch.device("cpu")) for auto_e in l1] for l1 in auto_encoders]
-    with open(os.path.join(outputs_folder, "auto_encoders.pkl"), "wb") as f:
+    with open(os.path.join(outputs_folder, f"auto_encoders_{cfg.layer}.pkl"), "wb") as f:
         pickle.dump(cpu_autoencoders, f)
     with open(os.path.join(outputs_folder, "config.pkl"), "wb") as f:
         pickle.dump(cfg, f)
