@@ -884,7 +884,11 @@ def get_size_of_momentum(cfg: dotdict, optimizer: torch.optim.Optimizer):
     return adam_momentum_tensor.detach().abs().sum().item()  # sum of absolute values of all elements
 
 def setup_data(cfg, tokenizer, model, use_baukit=False, start_line=0):
-    sentence_dataset = make_sentence_dataset(cfg.dataset_name, max_lines=cfg.max_lines, start_line=start_line)
+    sentence_len_lower = 1000
+    max_lines = int((2e9  * cfg.n_chunks)/ (cfg.mlp_width * sentence_len_lower * 2))
+    print(f"Setting max_lines to {max_lines} to minimize sentences processed")
+
+    sentence_dataset = make_sentence_dataset(cfg.dataset_name, max_lines=max_lines, start_line=start_line)
     tensor_name = make_tensor_name(cfg)
     tokenized_sentence_dataset, bits_per_byte = chunk_and_tokenize(sentence_dataset, tokenizer, max_length=cfg.max_length)
     token_loader = DataLoader(tokenized_sentence_dataset, batch_size=cfg.model_batch_size, shuffle=True)
