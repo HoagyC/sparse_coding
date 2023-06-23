@@ -711,6 +711,7 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
     optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.learning_rate)
     running_recon_loss = 0.0
     running_l1_loss = 0.0
+    feature_activations = np.zeros((cfg.n_components_dictionary))
     time_horizon = 1000
     # torch.autograd.set_detect_anomaly(True)
     n_chunks_in_folder = len(os.listdir(cfg.dataset_folder))
@@ -718,6 +719,7 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
     old_dict = auto_encoder.decoder.weight.detach().cpu().data.t().clone()
 
     n_batches = 0
+    breakout = False
     for epoch in range(cfg.epochs):
         chunk_order = np.random.permutation(n_chunks_in_folder)
         for chunk_ndx, chunk_id in enumerate(chunk_order):
@@ -739,11 +741,14 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
                 if n_batches == 1:
                     running_recon_loss = l_reconstruction.item()
                     running_l1_loss = l_l1.item()
+                    feature_activations = dict_levels.detach().mean(dim=0).cpu().numpy()
                 else:
                     running_recon_loss *= (time_horizon - 1) / time_horizon
                     running_recon_loss += l_reconstruction.item() / time_horizon
                     running_l1_loss *= (time_horizon - 1) / time_horizon
                     running_l1_loss += l_l1.item() / time_horizon
+                    feature_activations *= (time_horizon - 1) / time_horizon
+                    feature_activations += dict_levels.detach().mean(dim=0).cpu().numpy() / time_horizon
 
                 if (n_batches + completed_batches) % 1000 == 0:
                     new_dict = auto_encoder.decoder.weight.detach().cpu().data.t().clone()
@@ -770,13 +775,14 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
                         )
 
                 if cfg.max_batches and n_batches >= cfg.max_batches:
-                    n_dead_features = get_n_dead_features(auto_encoder, dataset)
-                    total_batches = n_batches + completed_batches
-                    return auto_encoder, n_dead_features, running_recon_loss, running_l1_loss, total_batches
-
-    n_dead_features = get_n_dead_features(auto_encoder, dataset)
+                    breakout=True
+                    break
+            if breakout:
+                break
+        if breakout:
+            break
     total_batches = n_batches + completed_batches
-    return auto_encoder, n_dead_features, running_recon_loss, running_l1_loss, total_batches
+    return auto_encoder, running_recon_loss, running_l1_loss, feature_activations, total_batches
 
 
 def make_activation_dataset(cfg, sentence_dataset: DataLoader, model: HookedTransformer, tensor_name: str, baukit: bool = False) -> pd.DataFrame:
@@ -946,6 +952,7 @@ def run_real_data_model(cfg: dotdict):
     dead_features_matrix = np.zeros((len(l1_range), len(dict_sizes)))
     recon_loss_matrix = np.zeros((len(l1_range), len(dict_sizes)))
     l1_loss_matrix = np.zeros((len(l1_range), len(dict_sizes)))
+    feature_activations_matrix = [[None for _ in dict_sizes] for _ in l1_range]
 
     # 2D array of learned dictionaries, indexed by l1_alpha and learned_dict_ratio, start with Nones
     auto_encoders = [[AutoEncoder(cfg.mlp_width, n_feats, l1_coef=l1_ndx).to(cfg.device) for n_feats in dict_sizes] for l1_ndx in l1_range]
@@ -985,17 +992,19 @@ def run_real_data_model(cfg: dotdict):
             cfg.n_components_dictionary = dict_size
             auto_encoder = auto_encoders[l1_ndx][dict_size_ndx]
 
-            auto_encoder, n_dead_features, reconstruction_loss, l1_loss, completed_batches = run_with_real_data(cfg, auto_encoder, completed_batches=step_n, mini_run=mini_run, n_mini_runs=cfg.mini_runs)
+            auto_encoder, reconstruction_loss, l1_loss, feature_activations, completed_batches = run_with_real_data(cfg, auto_encoder, completed_batches=step_n, mini_run=mini_run, n_mini_runs=cfg.mini_runs)
             if l1_ndx == (len(l1_range) - 1) and dict_size_ndx == (len(dict_sizes) - 1):
                 step_n = completed_batches
 
-            dead_features_matrix[l1_ndx, dict_size_ndx] = n_dead_features
+            feature_activations_matrix[l1_ndx][dict_size_ndx] = feature_activations
+            breakpoint()
+            dead_features_matrix[l1_ndx, dict_size_ndx] = feature_activations.shape[0] - np.count_nonzero(feature_activations)
             recon_loss_matrix[l1_ndx, dict_size_ndx] = reconstruction_loss
             l1_loss_matrix[l1_ndx, dict_size_ndx] = l1_loss
 
         # run MMCS-with-larger at the end of each mini run
         learned_dicts = [[auto_e.decoder.weight.detach().cpu().data.t() for auto_e in l1] for l1 in auto_encoders]
-        mmcs_with_larger, feats_above_threshold, full_max_cosine_sim_for_histograms = run_mmcs_with_larger(cfg, learned_dicts, threshold=cfg.threshold)
+        mmcs_with_larger, feats_above_threshold, mcs = run_mmcs_with_larger(cfg, learned_dicts, threshold=cfg.threshold)
 
         # also just report them as variables
         for l1_ndx, dict_size_ndx in list(itertools.product(range(len(l1_range)), range(len(dict_sizes)))):
@@ -1032,7 +1041,7 @@ def run_real_data_model(cfg: dotdict):
         if(len(dict_sizes) > 1) and cfg.use_wandb:
             plot_mat(mmcs_with_larger, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="Average mmcs with larger dicts", save_name="av_mmcs_with_larger_dicts.png", col_range=(0.0, 1.0))
             plot_mat(feats_above_threshold, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title=f"MN features abouve {cfg.threshold}", save_name="percentage_above_threshold_mmcs_with_larger_dicts.png")
-            plot_hist(full_max_cosine_sim_for_histograms, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title=f"Max Cosine Similarities", save_name="histogram_max_cosine_sim.png")
+            plot_hist(mcs, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title=f"Max Cosine Similarities", save_name="histogram_max_cosine_sim.png")
             if cfg.use_wandb:
                 wandb.log({"mmcs_with_larger": wandb.Image(os.path.join(outputs_folder, "av_mmcs_with_larger_dicts.png"))}, commit=True)
                 wandb.log({"feats_above_threshold": wandb.Image(os.path.join(outputs_folder, "percentage_above_threshold_mmcs_with_larger_dicts.png"))}, commit=True)
@@ -1043,11 +1052,15 @@ def run_real_data_model(cfg: dotdict):
             minirun_folder = os.path.join(outputs_folder, f"minirun{mini_run}")
             os.makedirs(minirun_folder, exist_ok=True)
             encoders_loc = os.path.join(minirun_folder, "autoencoders.pkl")
+            activations_loc = os.path.join(minirun_folder, "av_activations.pkl")
             with open(encoders_loc, "wb") as f:
                 pickle.dump(cpu_autoencoders, f)
+            with open(activations_loc, "wb") as f:
+                pickle.dump(feature_activations_matrix, f)
             
             if cfg.upload_to_aws:
                 upload_to_aws(encoders_loc)
+                upload_to_aws(activations_loc)
 
         if cfg.refresh_data:
             print("Remaking dataset")
@@ -1075,7 +1088,7 @@ def run_real_data_model(cfg: dotdict):
 
     # Compare each learned dictionary to the larger ones
     learned_dicts = [[auto_e.decoder.weight.detach().cpu().data.t() for auto_e in l1] for l1 in auto_encoders]
-    mmcs_with_larger, feats_above_threshold, full_max_cosine_sim_for_histograms = run_mmcs_with_larger(cfg, learned_dicts, threshold=cfg.threshold)
+    mmcs_with_larger, feats_above_threshold, mcs = run_mmcs_with_larger(cfg, learned_dicts, threshold=cfg.threshold)
 
     with open(os.path.join(outputs_folder, "larger_dict_compare.pkl"), "wb") as f:
         pickle.dump(mmcs_with_larger, f)
@@ -1085,7 +1098,7 @@ def run_real_data_model(cfg: dotdict):
     if(len(dict_sizes) > 1):
         plot_mat(mmcs_with_larger, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="Average mmcs with larger dicts", save_name="av_mmcs_with_larger_dicts.png", col_range=(0.0, 1.0))
         plot_mat(feats_above_threshold, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title=f"MMCS with larger dicts above {cfg.threshold}", save_name="percentage_above_threshold_mmcs_with_larger_dicts.png")
-        plot_hist(full_max_cosine_sim_for_histograms, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title=f"Max Cosine Similarities", save_name="histogram_max_cosine_sim.png")
+        plot_hist(mcs, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title=f"Max Cosine Similarities", save_name="histogram_max_cosine_sim.png")
 
 
 def main():

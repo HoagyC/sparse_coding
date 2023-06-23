@@ -16,6 +16,11 @@ SSH_PYTHON = "/opt/conda/bin/python"
 
 BUCKET_NAME = "sparse-coding"
 
+ACCESS_KEY_NAME_DICT = {
+    "AKIAV3IKT32M2ZA3WRLQ": "hoagy",
+    "AKIATUSYDLZAEZ7T5GLX": "aidan"
+}
+
 def sync():
     """Sync the local directory with the remote host."""
     command = f'rsync -rv --filter ":- .gitignore" --exclude ".git" -e "ssh -p {VAST_PORT}" . {dest_addr}:{SSH_DIRECTORY}'
@@ -97,7 +102,7 @@ def make_tensor_name(cfg):
 
     return tensor_name
 
-def upload_to_aws(local_file_name, s3_file_name: str = "") -> bool:
+def upload_to_aws(local_file_name) -> bool:
     """"
     Upload a file to an S3 bucket
     :param local_file_name: File to upload
@@ -111,8 +116,13 @@ def upload_to_aws(local_file_name, s3_file_name: str = "") -> bool:
         aws_secret_access_key=secrets["secret_key"],
     )
 
-    if not s3_file_name:
-        s3_file_name = local_file_name
+    if secrets["access_key"] in ACCESS_KEY_NAME_DICT:
+        name = ACCESS_KEY_NAME_DICT[secrets["access_key"]]
+    else:
+        name = "unknown"
+
+    s3_file_name = name + "-" + local_file_name
+
     local_file_path = Path(local_file_name)
     try:
         if local_file_path.is_dir():
