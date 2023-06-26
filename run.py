@@ -712,14 +712,16 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
     running_recon_loss = 0.0
     running_l1_loss = 0.0
     feature_activations = np.zeros((cfg.n_components_dictionary))
+    sparsity = 0.0
     time_horizon = 1000
     # torch.autograd.set_detect_anomaly(True)
     n_chunks_in_folder = len(os.listdir(cfg.dataset_folder))
-    wb_tag = f"l1={cfg.l1_alpha:.2E}_ds={cfg.n_components_dictionary}"
+    # wb_tag = f"l1={cfg.l1_alpha:.2E}_ds={cfg.n_components_dictionary}"
+    wb_tag = ""
     old_dict = auto_encoder.decoder.weight.detach().cpu().data.t().clone()
-
     n_batches = 0
     breakout = False
+    auto_encoder = auto_encoder.to(cfg.device)
     for epoch in range(cfg.epochs):
         chunk_order = np.random.permutation(n_chunks_in_folder)
         for chunk_ndx, chunk_id in enumerate(chunk_order):
@@ -742,6 +744,7 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
                     running_recon_loss = l_reconstruction.item()
                     running_l1_loss = l_l1.item()
                     feature_activations = dict_levels.detach().mean(dim=0).cpu().numpy()
+                    sparsity = dict_levels.detach().count_nonzero(dim=1).float().mean().item()
                 else:
                     running_recon_loss *= (time_horizon - 1) / time_horizon
                     running_recon_loss += l_reconstruction.item() / time_horizon
@@ -749,6 +752,8 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
                     running_l1_loss += l_l1.item() / time_horizon
                     feature_activations *= (time_horizon - 1) / time_horizon
                     feature_activations += dict_levels.detach().mean(dim=0).cpu().numpy() / time_horizon
+                    sparsity *= (time_horizon - 1) / time_horizon
+                    sparsity += dict_levels.detach().count_nonzero(dim=1).float().mean().item() / time_horizon
 
                 if (n_batches + completed_batches) % 1000 == 0:
                     new_dict = auto_encoder.decoder.weight.detach().cpu().data.t().clone()
@@ -769,6 +774,7 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
                                 f"{wb_tag}.l1_loss": l_l1,
                                 f"{wb_tag}.feature_angle_shift": feature_angle_shift,
                                 f"{wb_tag}.momentum_mag": momentum_mag,
+                                f"{wb_tag}.sparsity": sparsity,
                                 f"total_steps": completed_batches + n_batches,
                             },
                             commit=True,  # seems to remove weirdness with step numbers
@@ -860,8 +866,6 @@ def run_mmcs_with_larger(cfg, learned_dicts, threshold=0.9):
         threshold = 0.9
         feats_above_threshold[l1_ndx, dict_size_ndx] = (max_cosine_similarities > threshold).sum().item() / smaller_dict_features * 100
         full_max_cosine_sim_for_histograms[l1_ndx][dict_size_ndx] = max_cosine_similarities
-    
-
     return av_mmcs_with_larger_dicts, feats_above_threshold, full_max_cosine_sim_for_histograms
 
 
@@ -897,6 +901,7 @@ def setup_data(cfg, tokenizer, model, use_baukit=False, start_line=0):
     sentence_dataset = make_sentence_dataset(cfg.dataset_name, max_lines=max_lines, start_line=start_line)
     tensor_name = make_tensor_name(cfg)
     tokenized_sentence_dataset, bits_per_byte = chunk_and_tokenize(sentence_dataset, tokenizer, max_length=cfg.max_length)
+    # breakpoint()
     token_loader = DataLoader(tokenized_sentence_dataset, batch_size=cfg.model_batch_size, shuffle=True)
     make_activation_dataset(cfg, token_loader, model, tensor_name, use_baukit)
     n_lines = len(sentence_dataset)
@@ -975,18 +980,18 @@ def run_real_data_model(cfg: dotdict):
     start_time = datetime.now().strftime("%Y%m%d-%H%M%S")
     outputs_folder = os.path.join(cfg.outputs_folder, start_time)
     os.makedirs(outputs_folder, exist_ok=True)
-
     if cfg.use_wandb:
         secrets = json.load(open("secrets.json"))
         wandb.login(key=secrets["wandb_key"])
         wandb_run_name = f"{cfg.model_name}_{cfg.layer}_{start_time[4:]}"  # trim year
-        wandb.init(project="sparse coding", config=dict(cfg), name=wandb_run_name, entity="sparse_coding")
 
     step_n = 0
     for mini_run in tqdm(range(cfg.mini_runs)):
         for l1_ndx, dict_size_ndx in list(itertools.product(range(len(l1_range)), range(len(dict_sizes)))):
             l1_loss = l1_range[l1_ndx]
             dict_size = dict_sizes[dict_size_ndx]
+            if cfg.use_wandb:
+                wandb.init(project="sparse coding", config=dict(cfg), group=wandb_run_name, name=f"l1={l1_loss:.0E}_dict={dict_size}" ,entity="sparse_coding")
 
             cfg.l1_alpha = l1_loss
             cfg.n_components_dictionary = dict_size
@@ -1000,6 +1005,11 @@ def run_real_data_model(cfg: dotdict):
             dead_features_matrix[l1_ndx, dict_size_ndx] = feature_activations.shape[0] - np.count_nonzero(feature_activations)
             recon_loss_matrix[l1_ndx, dict_size_ndx] = reconstruction_loss
             l1_loss_matrix[l1_ndx, dict_size_ndx] = l1_loss
+            
+            if cfg.use_wandb:
+                wandb.finish()
+        if cfg.use_wandb:
+            wandb.init(project="sparse coding", config=dict(cfg), group=wandb_run_name, name=f"graphs" ,entity="sparse_coding")
 
         # run MMCS-with-larger at the end of each mini run
         learned_dicts = [[auto_e.decoder.weight.detach().cpu().data.t() for auto_e in l1] for l1 in auto_encoders]
@@ -1010,7 +1020,8 @@ def run_real_data_model(cfg: dotdict):
             l1_coef = l1_range[l1_ndx]
             dict_size = dict_sizes[dict_size_ndx]
             if(cfg.use_wandb):
-                wb_tag = f"l1={l1_coef:.2E}_ds={dict_size}"
+                # wb_tag = f"l1={l1_coef:.2E}_ds={dict_size}"
+                wb_tag = ""
                 wandb.log({f"{wb_tag}.n_dead_features": dead_features_matrix[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
                 wandb.log({f"{wb_tag}.mmcs_with_larger": mmcs_with_larger[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
                 wandb.log({f"{wb_tag}.feats_above_threshold": feats_above_threshold[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
@@ -1061,15 +1072,15 @@ def run_real_data_model(cfg: dotdict):
                 upload_to_aws(encoders_loc)
                 upload_to_aws(activations_loc)
 
+        if cfg.use_wandb:
+            wandb.finish()
+
         if cfg.refresh_data:
             print("Remaking dataset")
             os.system(f"rm -rf {cfg.dataset_folder}/*") # delete the old dataset
             n_new_lines = setup_data(cfg, tokenizer, model, use_baukit, start_line=n_lines)
             n_lines += n_new_lines
 
-
-    if cfg.use_wandb:
-        wandb.finish()
 
     # clamp dead_features to 0-100 for better visualisation
     # dead_features_matrix = np.clip(dead_features_matrix, 0, 100)
