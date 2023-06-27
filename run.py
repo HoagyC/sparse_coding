@@ -711,8 +711,10 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
     optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.learning_rate)
     running_recon_loss = 0.0
     running_l1_loss = 0.0
+    import collections
     feature_activations = np.zeros((cfg.n_components_dictionary))
-    sparsity = 0.0
+    running_sparsity = collections.deque(maxlen=10)
+    running_dead_features =collections.deque(maxlen=10)
     time_horizon = 1000
     # torch.autograd.set_detect_anomaly(True)
     n_chunks_in_folder = len(os.listdir(cfg.dataset_folder))
@@ -740,6 +742,12 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
                 loss.backward()
                 optimizer.step()
 
+                # Update running metrics
+                sparsity = (dict_levels.detach().count_nonzero(dim=1)).float().mean().item()
+                dead_features = (dict_levels.detach().mean(dim=0)).count_nonzero().item()
+                running_sparsity.append(sparsity)
+                running_dead_features.append(dead_features)
+
                 if n_batches == 1:
                     running_recon_loss = l_reconstruction.item()
                     running_l1_loss = l_l1.item()
@@ -762,6 +770,7 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
 
                     momentum_mag = get_size_of_momentum(cfg, optimizer)
 
+
                     print(
                         f"L1 Coef: {cfg.l1_alpha:.2E} | Dict ratio: {cfg.n_components_dictionary / cfg.mlp_width} | "
                         + f"Batch: {batch_idx+1}/{len(dataset)} | Chunk: {chunk_ndx+1}/{n_chunks_in_folder} | Minirun: {mini_run + 1}/{n_mini_runs} | "
@@ -775,8 +784,10 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
                                 f"{wb_tag}.feature_angle_shift": feature_angle_shift,
                                 f"{wb_tag}.momentum_mag": momentum_mag,
                                 f"{wb_tag}.sparsity": sparsity,
+                                f"{wb_tag}.dead_features": np.count_nonzero(feature_activations==0),
                                 f"total_steps": completed_batches + n_batches,
                             },
+                            step=completed_batches + n_batches,
                             commit=True,  # seems to remove weirdness with step numbers
                         )
 
@@ -987,7 +998,7 @@ def run_real_data_model(cfg: dotdict):
 
     step_n = 0
     for mini_run in tqdm(range(cfg.mini_runs)):
-        for l1_ndx, dict_size_ndx in list(itertools.product(range(len(l1_range)), range(len(dict_sizes)))):
+        for l1_ndx, dict_size_ndx in tqdm(list(itertools.product(range(len(l1_range)), range(len(dict_sizes))))):
             l1_loss = l1_range[l1_ndx]
             dict_size = dict_sizes[dict_size_ndx]
             if cfg.use_wandb:
@@ -1009,7 +1020,7 @@ def run_real_data_model(cfg: dotdict):
             if cfg.use_wandb:
                 wandb.finish()
         if cfg.use_wandb:
-            wandb.init(project="sparse coding", config=dict(cfg), group=wandb_run_name, name=f"graphs" ,entity="sparse_coding")
+            wandb.init(project="sparse coding", config=dict(cfg), group=wandb_run_name+"_graphs", name=f"mini_run:{mini_run}", entity="sparse_coding")
 
         # run MMCS-with-larger at the end of each mini run
         learned_dicts = [[auto_e.decoder.weight.detach().cpu().data.t() for auto_e in l1] for l1 in auto_encoders]
@@ -1021,10 +1032,9 @@ def run_real_data_model(cfg: dotdict):
             dict_size = dict_sizes[dict_size_ndx]
             if(cfg.use_wandb):
                 # wb_tag = f"l1={l1_coef:.2E}_ds={dict_size}"
-                wb_tag = ""
-                wandb.log({f"{wb_tag}.n_dead_features": dead_features_matrix[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
-                wandb.log({f"{wb_tag}.mmcs_with_larger": mmcs_with_larger[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
-                wandb.log({f"{wb_tag}.feats_above_threshold": feats_above_threshold[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
+                wandb.log({f".n_dead_features": dead_features_matrix[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
+                wandb.log({f".mmcs_with_larger": mmcs_with_larger[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
+                wandb.log({f".feats_above_threshold": feats_above_threshold[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
                 #TODO decide what to do for full_histogram.
         # dead_features_matrix = np.clip(dead_features_matrix, 0, 100)
         
@@ -1052,10 +1062,9 @@ def run_real_data_model(cfg: dotdict):
             plot_mat(mmcs_with_larger, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="Average mmcs with larger dicts", save_name="av_mmcs_with_larger_dicts.png", col_range=(0.0, 1.0))
             plot_mat(feats_above_threshold, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title=f"MN features abouve {cfg.threshold}", save_name="percentage_above_threshold_mmcs_with_larger_dicts.png")
             plot_hist(mcs, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title=f"Max Cosine Similarities", save_name="histogram_max_cosine_sim.png")
-            if cfg.use_wandb:
-                wandb.log({"mmcs_with_larger": wandb.Image(os.path.join(outputs_folder, "av_mmcs_with_larger_dicts.png"))}, commit=True)
-                wandb.log({"feats_above_threshold": wandb.Image(os.path.join(outputs_folder, "percentage_above_threshold_mmcs_with_larger_dicts.png"))}, commit=True)
-                wandb.log({"mcs_histogram": wandb.Image(os.path.join(outputs_folder, "histogram_max_cosine_sim.png"))}, commit=True)
+            wandb.log({"mmcs_with_larger": wandb.Image(os.path.join(outputs_folder, "av_mmcs_with_larger_dicts.png"))}, commit=True)
+            wandb.log({"feats_above_threshold": wandb.Image(os.path.join(outputs_folder, "percentage_above_threshold_mmcs_with_larger_dicts.png"))}, commit=True)
+            wandb.log({"mcs_histogram": wandb.Image(os.path.join(outputs_folder, "histogram_max_cosine_sim.png"))}, commit=True)
 
         if cfg.save_after_mini:
             cpu_autoencoders = [[auto_e.to(torch.device("cpu")) for auto_e in l1] for l1 in auto_encoders]
