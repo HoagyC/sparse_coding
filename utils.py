@@ -18,7 +18,8 @@ BUCKET_NAME = "sparse-coding"
 
 ACCESS_KEY_NAME_DICT = {
     "AKIAV3IKT32M2ZA3WRLQ": "hoagy",
-    "AKIATUSYDLZAEZ7T5GLX": "aidan"
+    "AKIATUSYDLZAEZ7T5GLX": "aidan",
+    "AKIATEQID7TUM5FUW4R5": "logan",
 }
 
 def sync():

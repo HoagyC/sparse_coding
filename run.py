@@ -1,5 +1,6 @@
 import argparse
 from collections.abc import Generator
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
 import importlib
@@ -628,8 +629,6 @@ def run_toy_model(cfg):
         wandb.init(project="sparse coding", config=dict(cfg), name=wandb_run_name, entity="sparse_coding")
 
     
-    breakpoint()
-
     # Using a single data generator for all runs so that can compare learned dicts
     data_generator = RandomDatasetGenerator(
         activation_dim=cfg.mlp_width,
@@ -879,7 +878,20 @@ def check_feature_movement(dict: torch.Tensor, old_dict: torch.Tensor):
     total_movement = (1 - cos_sims).sum().item()
     return total_movement
 
-
+def save_torch_models(models: List[List[AutoEncoder]], path: str) -> None:
+    """
+    Saves a list of lists of torch models to a given path.
+    """
+    models_dict = {}
+    for l1_models in models:
+        for model in l1_models:
+            l1_coef = model.l1_coef
+            dict_size = model.n_dict_components
+            models_dict[f"l1={l1_coef:.2E}_ds={dict_size}"] = model.state_dict()
+    
+    torch.save(models_dict, path)
+            
+            
 def get_size_of_momentum(cfg: dotdict, optimizer: torch.optim.Optimizer):
     """
     Returns the size of the momentum vector for a given optimizer, for the decoder.
@@ -997,7 +1009,6 @@ def run_real_data_model(cfg: dotdict):
                 step_n = completed_batches
 
             feature_activations_matrix[l1_ndx][dict_size_ndx] = feature_activations
-            breakpoint()
             dead_features_matrix[l1_ndx, dict_size_ndx] = feature_activations.shape[0] - np.count_nonzero(feature_activations)
             recon_loss_matrix[l1_ndx, dict_size_ndx] = reconstruction_loss
             l1_loss_matrix[l1_ndx, dict_size_ndx] = l1_loss
@@ -1048,13 +1059,12 @@ def run_real_data_model(cfg: dotdict):
                 wandb.log({"mcs_histogram": wandb.Image(os.path.join(outputs_folder, "histogram_max_cosine_sim.png"))}, commit=True)
 
         if cfg.save_after_mini:
-            cpu_autoencoders = [[auto_e.to(torch.device("cpu")) for auto_e in l1] for l1 in auto_encoders]
+            cpu_autoencoders = [[deepcopy(auto_e).to(torch.device("cpu")) for auto_e in l1] for l1 in auto_encoders]
             minirun_folder = os.path.join(outputs_folder, f"minirun{mini_run}")
             os.makedirs(minirun_folder, exist_ok=True)
-            encoders_loc = os.path.join(minirun_folder, "autoencoders.pkl")
+            encoders_loc = os.path.join(minirun_folder, "autoencoders.pth")
             activations_loc = os.path.join(minirun_folder, "av_activations.pkl")
-            with open(encoders_loc, "wb") as f:
-                pickle.dump(cpu_autoencoders, f)
+            save_torch_models(cpu_autoencoders, encoders_loc)
             with open(activations_loc, "wb") as f:
                 pickle.dump(feature_activations_matrix, f)
             
