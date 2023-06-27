@@ -1,11 +1,12 @@
 import asyncio
+from datetime import datetime
 import importlib
 import json
 import os
 import pickle
 import requests
 import sys
-from typing import Any, Dict, Union, List
+from typing import Any, Dict, Union, List, Callable
 
 from baukit import Trace
 from datasets import load_dataset, ReadInstruction
@@ -18,7 +19,7 @@ from transformer_lens import HookedTransformer
 from transformers import GPT2Tokenizer
 
 from argparser import parse_args
-from utils import dotdict, make_tensor_name
+from utils import dotdict, make_tensor_name, upload_to_aws
 from nanoGPT_model import GPT
 from run import AutoEncoder
 
@@ -38,8 +39,8 @@ from neuron_explainer.explanations.scoring import simulate_and_score
 from neuron_explainer.explanations.simulator import ExplanationNeuronSimulator
 from neuron_explainer.fast_dataclasses import loads
 
-EXPLAINER_MODEL_NAME = "gpt-3.5-turbo"
-SIMULATOR_MODEL_NAME = "text-davinci-003"
+EXPLAINER_MODEL_NAME = "gpt-3.5-turbo" # "gpt-4"
+SIMULATOR_MODEL_NAME = "text-davinci-003" # "text-davinci-003"
 
 OPENAI_MAX_FRAGMENTS = 50000
 OPENAI_FRAGMENT_LEN = 64
@@ -66,7 +67,18 @@ def load_neuron(
     return neuron_record
 
 
-def make_feature_activation_dataset(cfg, model: HookedTransformer, feature_dict: torch.Tensor, use_baukit: bool = False):
+def run_activation_ica(activation_data: nn.Tensor):
+    """
+    Takes a tensor of activations and returns the ICA of the activations
+    """
+    from sklearn.decomposition import FastICA
+    ica = FastICA()
+    ica.fit(activation_data)
+    breakpoint()
+    return ica
+
+
+def make_feature_activation_dataset(cfg, model: HookedTransformer, activation_matrix: torch.Tensor, use_baukit: bool = False):
     """
     Takes a dict of features and returns the top k activations for each feature in pile10k
     """
@@ -78,6 +90,8 @@ def make_feature_activation_dataset(cfg, model: HookedTransformer, feature_dict:
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
     tensor_name = make_tensor_name(cfg)
     # make list of sentence, tokenization pairs
+
+    n_features = activation_matrix.shape[1]
 
     print(f"Computing internals for all {len(sentence_dataset)} sentences")
     tokenizer_model = HookedTransformer.from_pretrained("gpt2", device=cfg.device) # as copilot likes to say, this is a hack
@@ -107,10 +121,10 @@ def make_feature_activation_dataset(cfg, model: HookedTransformer, feature_dict:
                 mlp_activation_data = rearrange(mlp_activation_data, "b s n -> (b s) n")
 
             # Project the activations into the feature space
-            feature_activation_data = torch.matmul(mlp_activation_data, feature_dict.to(torch.float32))
+            feature_activation_data = torch.matmul(mlp_activation_data, activation_matrix)
 
             # Get average activation for each feature
-            assert feature_activation_data.shape == (OPENAI_FRAGMENT_LEN, feature_dict.shape[1])
+            assert feature_activation_data.shape == (OPENAI_FRAGMENT_LEN, n_features)
             feature_activation_means = torch.mean(feature_activation_data, dim=0)
 
             fragment_dict: Dict[str, Any] = {}
@@ -125,7 +139,7 @@ def make_feature_activation_dataset(cfg, model: HookedTransformer, feature_dict:
                 n_thrown += 1
                 continue
 
-            for j in range(feature_dict.shape[1]):
+            for j in range(n_features):
                 fragment_dict[f"feature_{j}_mean"] = feature_activation_means[j].item()
                 fragment_dict[f"feature_{j}_activations"] = feature_activation_data[:, j].tolist()
                 assert len(fragment_dict[f"feature_{j}_activations"]) == len(fragment_dict["fragment_token_strs"])
@@ -142,39 +156,6 @@ def make_feature_activation_dataset(cfg, model: HookedTransformer, feature_dict:
     df = pd.DataFrame(sentence_fragment_dicts)
     print(f"Threw away {n_thrown} fragments, made {len(df)} fragments")
     return df
-
-
-async def interpret_neuron(neuron_record, n_examples_per_split: int= 5):
-    slice_params = ActivationRecordSliceParams(n_examples_per_split=n_examples_per_split)
-    train_activation_records = neuron_record.train_activation_records(slice_params)
-    valid_activation_records = neuron_record.valid_activation_records(slice_params)
-
-    explainer = TokenActivationPairExplainer(
-        model_name=EXPLAINER_MODEL_NAME,
-        prompt_format=PromptFormat.HARMONY_V4,
-        max_concurrent=1,
-    )
-    explanations = await explainer.generate_explanations(
-    all_activation_records=train_activation_records,
-    max_activation=calculate_max_activation(train_activation_records),
-    num_samples=1,
-)
-    assert len(explanations) == 1
-    explanation = explanations[0]
-    print(f"{explanation=}")
-
-    # Simulate and score the explanation.
-    simulator = UncalibratedNeuronSimulator(
-        ExplanationNeuronSimulator(
-            SIMULATOR_MODEL_NAME,
-            explanation,
-            max_concurrent=1,
-            prompt_format=PromptFormat.INSTRUCTION_FOLLOWING,
-        )
-    )
-    scored_simulation = await simulate_and_score(simulator, valid_activation_records)
-    return scored_simulation
-
 
 async def main(cfg: dotdict):
     # Load model
@@ -199,6 +180,17 @@ async def main(cfg: dotdict):
     autoencoder = loaded_autoencoders[0][0]
     feature_dict = autoencoder.encoder[0].weight.detach().t().to(cfg.device)
 
+    if cfg.activation_transform == "neuron_basis":
+        activation_transform = torch.eye(feature_dict.shape[0]).to(cfg.device)
+    elif cfg.activation_transform == "ica":
+        activation_transform = activation_ICA()
+    elif cfg.activation_transform == "pca":
+        activation_transform = activation_PCA()
+    elif cfg.activation_transform == "feature9dict":
+        activation_transform = feature_dict
+    else:
+        raise ValueError(f"Activation transform {cfg.activation_transform} not recognised")
+
     if not (cfg.load_activation_dataset and os.path.exists(cfg.load_activation_dataset)):
         base_df = make_feature_activation_dataset(cfg, model, feature_dict, use_baukit=use_baukit)
         # save the dataset, saving each column separately so that we can retrive just the columns we want later
@@ -210,6 +202,12 @@ async def main(cfg: dotdict):
         base_df[["fragment_id", "fragment_token_strs", "fragment_token_ids"]].to_csv(cfg.save_activation_dataset, index=False)
 
     base_df = pd.read_csv(cfg.load_activation_dataset)
+    start_time = datetime.now().strftime("%Y%m%d-%H%M%S")
+    save_folder = os.path.join("auto_interp_results", start_time)
+
+    # save the autoencoder being investigated
+    os.makedirs(save_folder, exist_ok=True)
+    torch.save(autoencoder, os.path.join(save_folder, "autoencoder.pt"))
     for feature_num in range(0, cfg.n_feats_explain):
         # Load the dataset
         neuron_df = pd.read_csv(cfg.load_activation_dataset.replace(".csv", f"_layer_2_feature_{feature_num}.csv"))
@@ -235,8 +233,53 @@ async def main(cfg: dotdict):
 
         neuron_record = NeuronRecord(neuron_id=neuron_id, random_sample=random_activation_records, most_positive_activation_records=top_activation_records)
 
-        scored_simulation = await interpret_neuron(neuron_record, OPENAI_EXAMPLES_PER_SPLIT)
-        print(f"score={scored_simulation.get_preferred_score():.2f}")
+    slice_params = ActivationRecordSliceParams(n_examples_per_split=OPENAI_EXAMPLES_PER_SPLIT)
+    train_activation_records = neuron_record.train_activation_records(slice_params)
+    valid_activation_records = neuron_record.valid_activation_records(slice_params)
+
+    explainer = TokenActivationPairExplainer(
+        model_name=EXPLAINER_MODEL_NAME,
+        prompt_format=PromptFormat.HARMONY_V4,
+        max_concurrent=1,
+    )
+    explanations = await explainer.generate_explanations(
+    all_activation_records=train_activation_records,
+    max_activation=calculate_max_activation(train_activation_records),
+    num_samples=1,
+)
+    assert len(explanations) == 1
+    explanation = explanations[0]
+    print(f"{explanation=}")
+
+    # Simulate and score the explanation.
+    format = PromptFormat.HARMONY_V4 if SIMULATOR_MODEL_NAME == "gpt-3.5-turbo" else PromptFormat.INSTRUCTION_FOLLOWING
+    simulator = UncalibratedNeuronSimulator(
+        ExplanationNeuronSimulator(
+            SIMULATOR_MODEL_NAME,
+            explanation,
+            max_concurrent=1,
+            prompt_format=format,
+        )
+    )
+    scored_simulation = await simulate_and_score(simulator, valid_activation_records)
+    score = scored_simulation.get_preferred_score()
+    print(f"score={score:.2f}")
+
+    for feature_num in range(0, cfg.n_feats_explain):
+        os.makedirs(os.path.join(save_folder, f"feature_{feature_num}"), exist_ok=True)
+        pickle.dump(scored_simulation, open(os.path.join(save_folder, f"feature_{feature_num}", "scored_simulation.pkl"), "wb"))
+        pickle.dump(neuron_record, open(os.path.join(save_folder, f"feature_{feature_num}", "neuron_record.pkl"), "wb"))
+        # write a file with the explanation and the score
+        with open(os.path.join(save_folder, f"feature_{feature_num}", "explanation.txt"), "w") as f:
+            f.write(f"{explanation}\n\nScore: {score:.2f}")
+    
+    if cfg.upload_to_aws:
+        upload_to_aws(save_folder)
+
+        
+        
+
+
 
 async def run_openai_example():
     neuron_record = load_neuron(9, 10)
@@ -266,12 +309,13 @@ async def run_openai_example():
     print(f"{explanation=}")
 
     # Simulate and score the explanation.
+    format = PromptFormat.HARMONY_V4 if SIMULATOR_MODEL_NAME == "gpt-3.5-turbo" else PromptFormat.INSTRUCTION_FOLLOWING
     simulator = UncalibratedNeuronSimulator(
         ExplanationNeuronSimulator(
             SIMULATOR_MODEL_NAME,
             explanation,
             max_concurrent=1,
-            prompt_format=PromptFormat.INSTRUCTION_FOLLOWING,
+            prompt_format=format, # INSTRUCTIONFOLLIWING
         )
     )
     scored_simulation = await simulate_and_score(simulator, valid_activation_records)
