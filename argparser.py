@@ -51,11 +51,10 @@ def parse_args():
     parser.add_argument("--max_lines", type=int, default=100000)  # How many lines to read from the dataset
     # interpret
     parser.add_argument("--activation_sentences", type=int, default=8) # number of sentences to go through to get feature activation
-    parser.add_argument("--load_activation_dataset", type=str, default="outputs/activation_df.csv") # path to dataset to load
-    parser.add_argument("--save_activation_dataset", type=str, default="outputs/activation_df.csv") # path to model to load
+    parser.add_argument("--load_activation_dataset", type=bool, default=True) # path to dataset to load
     parser.add_argument("--n_feats_explain", type=int, default=10) # number of features to explain
     parser.add_argument("--activation_transform", type=str, default="ica") # way of transforming neuron activations into features
-
+    parser.add_argument("--load_interpret_autoencoder", type=str, default="") # path to autoencoder to load
     args = parser.parse_args()
     cfg = dotdict(vars(args))  # convert to dotdict via dict
     cfg.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
