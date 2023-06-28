@@ -117,54 +117,6 @@ def activation_NMF(dataset, n_activations):
     print(f"NMF fit in {datetime.now() - nmf_start}")
     return nmf
 
-def process_sentence(sentence_id: int, sentence: str, model: GPT, tokenizer_model: GPT2Tokenizer, use_baukit: bool = True):
-    # split the sentence into fragments
-    tokens = tokenizer_model.to_tokens(sentence["text"], prepend_bos=False)
-    num_fragments = tokens.shape[1] // OPENAI_FRAGMENT_LEN
-    for fragment_id in range(num_fragments):
-        start_idx = fragment_id * OPENAI_FRAGMENT_LEN
-        end_idx = (fragment_id + 1) * OPENAI_FRAGMENT_LEN
-        fragment_tokens = tokens[:, start_idx:end_idx]
-        if use_baukit:
-            with Trace(model, tensor_name) as ret:
-                _ = model(fragment_tokens)
-                mlp_activation_data = ret.output
-                mlp_activation_data = rearrange(mlp_activation_data, "b s n -> (b s) n").to(cfg.device)
-                mlp_activation_data = nn.functional.gelu(mlp_activation_data)
-        else:
-            _, cache = model.run_with_cache(fragment_tokens)
-            mlp_activation_data = cache[tensor_name].to(cfg.device)  # NOTE: could do all layers at once, but currently just doing 1 layer
-            mlp_activation_data = rearrange(mlp_activation_data, "b s n -> (b s) n")
-
-        # Project the activations into the feature space
-        feature_activation_data = activation_transform(mlp_activation_data.detach().cpu())
-        if not isinstance(feature_activation_data, torch.Tensor):
-            feature_activation_data = torch.tensor(feature_activation_data)
-
-        # Get average activation for each feature
-        feature_activation_means = torch.mean(feature_activation_data, dim=0)
-
-        fragment_dict: Dict[str, Any] = {}
-        fragment_dict["fragment_id"] = len(sentence_fragment_dicts)
-        fragment_dict["fragment_token_ids"] = fragment_tokens[0].tolist()
-        fragment_dict["fragment_token_strs"] = tokenizer_model.to_str_tokens(fragment_tokens[0])
-
-        # if there are any question marks in the fragment, throw it away (caused by byte pair encoding)
-        replacement_char = "�"
-        if replacement_char in fragment_dict["fragment_token_strs"]:
-            # throw away the fragment
-            n_thrown += 1
-            continue
-
-        for j in range(feature_activation_means.shape[0]):
-            fragment_dict[f"feature_{j}_mean"] = feature_activation_means[j].item()
-            fragment_dict[f"feature_{j}_activations"] = feature_activation_data[:, j].tolist()
-            assert len(fragment_dict[f"feature_{j}_activations"]) == len(fragment_dict["fragment_token_strs"])
-            # TODO: figure out why gettnig those question marks in tokenization
-            # just printing errors
-        
-
-        sentence_fragment_dicts.append(fragment_dict)
 
 def make_feature_activation_dataset(cfg, model: HookedTransformer, activation_transform: Callable[[torch.Tensor], Any], use_baukit: bool = False):
     """
@@ -188,7 +140,53 @@ def make_feature_activation_dataset(cfg, model: HookedTransformer, activation_tr
     sentence_fragment_dicts: List[Dict[str, Any]] = []
     n_thrown = 0
     for sentence_id, sentence in tqdm(enumerate(sentence_dataset)):
+        # split the sentence into fragments
+        tokens = tokenizer_model.to_tokens(sentence["text"], prepend_bos=False)
+        num_fragments = tokens.shape[1] // OPENAI_FRAGMENT_LEN
+        for fragment_id in range(num_fragments):
+            start_idx = fragment_id * OPENAI_FRAGMENT_LEN
+            end_idx = (fragment_id + 1) * OPENAI_FRAGMENT_LEN
+            fragment_tokens = tokens[:, start_idx:end_idx]
+            if use_baukit:
+                with Trace(model, tensor_name) as ret:
+                    _ = model(fragment_tokens)
+                    mlp_activation_data = ret.output
+                    mlp_activation_data = rearrange(mlp_activation_data, "b s n -> (b s) n").to(cfg.device)
+                    mlp_activation_data = nn.functional.gelu(mlp_activation_data)
+            else:
+                _, cache = model.run_with_cache(fragment_tokens)
+                mlp_activation_data = cache[tensor_name].to(cfg.device)  # NOTE: could do all layers at once, but currently just doing 1 layer
+                mlp_activation_data = rearrange(mlp_activation_data, "b s n -> (b s) n")
 
+            # Project the activations into the feature space
+            feature_activation_data = activation_transform(mlp_activation_data.detach().cpu())
+            if not isinstance(feature_activation_data, torch.Tensor):
+                feature_activation_data = torch.tensor(feature_activation_data)
+
+            # Get average activation for each feature
+            feature_activation_means = torch.mean(feature_activation_data, dim=0)
+
+            fragment_dict: Dict[str, Any] = {}
+            fragment_dict["fragment_id"] = len(sentence_fragment_dicts)
+            fragment_dict["fragment_token_ids"] = fragment_tokens[0].tolist()
+            fragment_dict["fragment_token_strs"] = tokenizer_model.to_str_tokens(fragment_tokens[0])
+
+            # if there are any question marks in the fragment, throw it away (caused by byte pair encoding)
+            replacement_char = "�"
+            if replacement_char in fragment_dict["fragment_token_strs"]:
+                # throw away the fragment
+                n_thrown += 1
+                continue
+
+            for j in range(feature_activation_means.shape[0]):
+                fragment_dict[f"feature_{j}_mean"] = feature_activation_means[j].item()
+                fragment_dict[f"feature_{j}_activations"] = feature_activation_data[:, j].tolist()
+                assert len(fragment_dict[f"feature_{j}_activations"]) == len(fragment_dict["fragment_token_strs"])
+                # TODO: figure out why gettnig those question marks in tokenization
+                # just printing errors
+            
+
+            sentence_fragment_dicts.append(fragment_dict)
             if len(sentence_fragment_dicts) > OPENAI_MAX_FRAGMENTS:
                 break
         if len(sentence_fragment_dicts) > OPENAI_MAX_FRAGMENTS:
