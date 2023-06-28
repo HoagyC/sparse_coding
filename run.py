@@ -713,8 +713,9 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
     running_l1_loss = 0.0
     import collections
     feature_activations = np.zeros((cfg.n_components_dictionary))
-    running_sparsity = collections.deque(maxlen=10)
-    running_dead_features =collections.deque(maxlen=10)
+    running_window = 100
+    running_sparsity = collections.deque(maxlen=running_window)
+    running_dead_features =collections.deque(maxlen=running_window)
     time_horizon = 1000
     # torch.autograd.set_detect_anomaly(True)
     n_chunks_in_folder = len(os.listdir(cfg.dataset_folder))
@@ -744,7 +745,7 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
 
                 # Update running metrics
                 sparsity = (dict_levels.detach().count_nonzero(dim=1)).float().mean().item()
-                dead_features = (dict_levels.detach().mean(dim=0)).count_nonzero().item()
+                dead_features = (dict_levels.detach().mean(dim=0)==0).count_nonzero().item()
                 running_sparsity.append(sparsity)
                 running_dead_features.append(dead_features)
 
@@ -891,7 +892,7 @@ def check_feature_movement(dict: torch.Tensor, old_dict: torch.Tensor):
     for i in range(dict.shape[0]):
         cos_sims[i] = torch.nn.functional.cosine_similarity(dict[i], old_dict[i], dim=0)
 
-    total_movement = (1 - cos_sims).sum().item()
+    total_movement = (1 - cos_sims).mean().item()
     return total_movement
 
 
