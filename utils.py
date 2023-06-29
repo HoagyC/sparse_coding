@@ -91,19 +91,26 @@ class dotdict(dict):
     def __delattr__(self, name):
         del self[name]
 
-# TODO: make it so it doesn't modify the cfg object
 def make_tensor_name(cfg):
-    if cfg.model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]:
-        tensor_name = f"blocks.{cfg.layer}.mlp.hook_post"
-        if cfg.model_name == "gpt2":
-            cfg.mlp_width = 3072
-        elif cfg.model_name == "EleutherAI/pythia-70m-deduped":
-            cfg.mlp_width = 2048
-    elif cfg.model_name == "nanoGPT":
-        tensor_name = f"transformer.h.{cfg.layer}.mlp.c_fc"
-        cfg.mlp_width = 128
+    if cfg.use_residual:
+        if cfg.model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]:
+            tensor_name = f"blocks.{cfg.layer}.hook_resid_post"
+            if cfg.model_name == "gpt2":
+                cfg.mlp_width = 768
+            elif cfg.model_name == "EleutherAI/pythia-70m-deduped":
+                cfg.mlp_width = 512
     else:
-        raise NotImplementedError(f"Model {cfg.model_name} not supported")
+        if cfg.model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]:
+            tensor_name = f"blocks.{cfg.layer}.mlp.hook_post"
+            if cfg.model_name == "gpt2":
+                cfg.mlp_width = 3072
+            elif cfg.model_name == "EleutherAI/pythia-70m-deduped":
+                cfg.mlp_width = 2048
+        elif cfg.model_name == "nanoGPT":
+            tensor_name = f"transformer.h.{cfg.layer}.mlp.c_fc"
+            cfg.mlp_width = 128
+        else:
+            raise NotImplementedError(f"Model {cfg.model_name} not supported")
 
     return tensor_name
 

@@ -37,6 +37,10 @@ def parse_args():
     parser.add_argument("--dataset_name", type=str, default="NeelNanda/pile-10k")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--layer", type=int, default=2)  # layer to extract mlp-post-non-lin features from, only if using real model
+<<<<<<< HEAD
+=======
+    parser.add_argument("--use_residual", type=bool, default=False)  # whether to train on residual stream data
+>>>>>>> 328b79d (residual-stream training support for some models)
 
     parser.add_argument("--outputs_folder", type=str, default="outputs")
     parser.add_argument("--datasets_folder", type=str, default="activation_data")
@@ -51,10 +55,17 @@ def parse_args():
     parser.add_argument("--max_lines", type=int, default=100000)  # How many lines to read from the dataset
     # interpret
     parser.add_argument("--activation_sentences", type=int, default=8) # number of sentences to go through to get feature activation
+<<<<<<< HEAD
     parser.add_argument("--load_activation_dataset", type=bool, default=True) # path to dataset to load
     parser.add_argument("--n_feats_explain", type=int, default=10) # number of features to explain
     parser.add_argument("--activation_transform", type=str, default="ica") # way of transforming neuron activations into features
     parser.add_argument("--load_interpret_autoencoder", type=str, default="") # path to autoencoder to load
+=======
+    parser.add_argument("--load_activation_dataset", type=str, default="outputs/activation_df.csv") # path to dataset to load
+    parser.add_argument("--save_activation_dataset", type=str, default="outputs/activation_df.csv") # path to model to load
+    parser.add_argument("--n_feats_explain", type=int, default=10) # number of features to explain
+
+>>>>>>> 328b79d (residual-stream training support for some models)
     args = parser.parse_args()
     cfg = dotdict(vars(args))  # convert to dotdict via dict
     cfg.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
