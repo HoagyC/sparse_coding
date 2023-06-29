@@ -32,7 +32,7 @@ def parse_args():
     parser.add_argument("--dict_ratio_exp_base", type=int, default=2)
 
     parser.add_argument("--run_toy", type=bool, default=False)
-    parser.add_argument("--model_name", type=str, default="nanoGPT")
+    parser.add_argument("--model_name", type=str, default="nanoGPT") # EleutherAI/pythia-70m-deduped
     parser.add_argument("--model_path", type=str, default="models/32d70k.pt")
     parser.add_argument("--dataset_name", type=str, default="NeelNanda/pile-10k")
     parser.add_argument("--seed", type=int, default=0)
@@ -44,7 +44,7 @@ def parse_args():
     parser.add_argument("--n_chunks", type=int, default=30)
     parser.add_argument("--threshold", type=float, default=0.9)  # When looking for matching features across dicts, what is the threshold for a match
     parser.add_argument("--max_batches", type=int, default=0)  # How many batches to run the inner loop for before cutting out, 0 means run all
-    parser.add_argument("--mini_runs", type=int, default=1)  # How many times to run the inner loop, each time with a different random subset of the data
+    parser.add_argument("--mini_runs", type=int, default=1)  # How many times to run the inner loop, each time with a different random subset o f the data
     parser.add_argument("--save_after_mini", type=bool, default=False)  # Whether to save the model after each mini run
     parser.add_argument("--upload_to_aws", type=bool, default=False)  # Whether to upload the model to aws after each mini run
 

@@ -95,9 +95,10 @@ def generate_rand_dataset(
     
     # generate random feature strengths
     feature_strengths = torch.rand((dataset_size, n_ground_truth_components), device=device)
-    data_zero = torch.zeros_like(dataset_thresh, device=device)
     # only some features are activated, chosen at random
     dataset_thresh = torch.rand(dataset_size, n_ground_truth_components, device=device)
+    data_zero = torch.zeros_like(dataset_thresh, device=device)
+
     dataset_codes = torch.where(
         dataset_thresh <= feature_probs,
         feature_strengths,
