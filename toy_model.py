@@ -53,6 +53,4 @@ for epoch_ndx in range(epochs):
 
     # get the loss
     # scoring by the cosine similarity of the output features and the target features
-    loss = torch.nn.functional.cosine_similarity(output, target_features)
-
-
+    loss = torch.nn.functional.cosine_similarity(output, target_features_to_add).mean()

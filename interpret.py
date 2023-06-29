@@ -441,12 +441,12 @@ async def run_openai_example():
     print(f"score={scored_simulation.get_preferred_score():.2f}")
 
 def read_results():
-    results_folder = "auto_interp_results/nanoGPT_layer2_postnonlin"
+    results_folder = "auto_interp_results/pythia-70m-deduped_layer2_postnonlin"
     transforms = ["random", "neuron_basis"]
     scores = {}
     for transform in transforms:
         scores[transform] = []
-        for feature_ndx in range(128):
+        for feature_ndx in range(10):
             feature_folder = os.path.join(results_folder, transform, f"feature_{feature_ndx}")
             if not os.path.exists(feature_folder):
                 continue
@@ -473,10 +473,10 @@ def read_results():
 
 
 if __name__ == "__main__":
-    # read_results()
     if len(sys.argv) > 1 and sys.argv[1] == "openai":
         asyncio.run(run_openai_example())
-
+    elif len(sys.argv) > 1 and sys.argv[1] == "read_results":
+        read_results()
     else:
         cfg = parse_args()
         asyncio.run(main(cfg))
