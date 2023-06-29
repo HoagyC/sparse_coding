@@ -17,6 +17,8 @@ mlp_ratio = 1
 n_features = 100
 sparsity = 0.9
 non_linearity = torch.nn.ReLU() # torch.nn.GELU()
+batch_size = 256
+epochs = int(1e4)
 
 # Generate random features
 init_features = torch.randn(n_features, n_dimensions)
@@ -31,7 +33,26 @@ model = torch.nn.Sequential(
     torch.nn.Linear(n_dimensions * mlp_ratio, n_dimensions),
 )
 
+for epoch_ndx in range(epochs):
+    # select features to add
+    features_to_add = torch.rand(n_features) < sparsity
+    features_to_add = features_to_add.float()
+    features_to_add = features_to_add.unsqueeze(0)
+    features_to_add = features_to_add.repeat(batch_size, 1)
+    features_to_add = features_to_add.to(torch.bool)
+    
+    # get the features to add
+    features_to_add = init_features[features_to_add]
+    input_features = torch.sum(features_to_add, dim=1)
 
+    # get the target features
+    target_features_to_add = target_features[features_to_add]
 
+    # get the output
+    output = model(input_features)
+
+    # get the loss
+    # scoring by the cosine similarity of the output features and the target features
+    loss = torch.nn.functional.cosine_similarity(output, target_features)
 
 

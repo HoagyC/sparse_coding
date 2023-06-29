@@ -860,7 +860,6 @@ def run_mmcs_with_larger(cfg, learned_dicts, threshold=0.9):
         threshold = 0.9
         feats_above_threshold[l1_ndx, dict_size_ndx] = (max_cosine_similarities > threshold).sum().item() / smaller_dict_features * 100
         full_max_cosine_sim_for_histograms[l1_ndx][dict_size_ndx] = max_cosine_similarities
-    
 
     return av_mmcs_with_larger_dicts, feats_above_threshold, full_max_cosine_sim_for_histograms
 
@@ -911,7 +910,7 @@ def setup_data(cfg, tokenizer, model, use_baukit=False, start_line=0, chunk_size
     tensor_name = make_tensor_name(cfg)
     tokenized_sentence_dataset, bits_per_byte = chunk_and_tokenize(sentence_dataset, tokenizer, max_length=cfg.max_length)
     token_loader = DataLoader(tokenized_sentence_dataset, batch_size=cfg.model_batch_size, shuffle=True)
-    make_activation_dataset(cfg, token_loader, model, tensor_name, use_baukit, bits_per_byte=bits_per_byte, chunk_size_gb=chunk_size_gb)
+    make_activation_dataset(cfg, token_loader, model, tensor_name, use_baukit, chunk_size_gb=chunk_size_gb)
     n_lines = len(sentence_dataset)
     return n_lines
 

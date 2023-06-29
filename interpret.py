@@ -42,10 +42,10 @@ from neuron_explainer.explanations.scoring import simulate_and_score
 from neuron_explainer.explanations.simulator import ExplanationNeuronSimulator
 from neuron_explainer.fast_dataclasses import loads
 
-EXPLAINER_MODEL_NAME = "gpt-3.5-turbo" # "gpt-4"
+EXPLAINER_MODEL_NAME = "gpt-4" # "gpt-3.5-turbo"
 SIMULATOR_MODEL_NAME = "text-davinci-003" # "text-davinci-003"
 
-OPENAI_MAX_FRAGMENTS = 50
+OPENAI_MAX_FRAGMENTS = 50000
 OPENAI_FRAGMENT_LEN = 64
 OPENAI_EXAMPLES_PER_SPLIT = 5
 N_SPLITS = 4
@@ -72,9 +72,9 @@ def load_neuron(
 def make_activation_dataset(cfg, model):
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
     cfg.n_chunks = 1
-    dataset_name = cfg.dataset_name.split("/")[-1] + "-" + cfg.model_name + "-" + str(cfg.layer)
+    dataset_name = cfg.dataset_name.split("/")[-1] + "-" + cfg.model_name.split("/")[-1] + "-" + str(cfg.layer)
     cfg.dataset_folder = os.path.join(cfg.datasets_folder, dataset_name)
-    if len(os.listdir(cfg.dataset_folder)) == 0:
+    if not os.path.exists(cfg.dataset_folder) or len(os.listdir(cfg.dataset_folder)) == 0:
         setup_data(cfg, tokenizer, model, use_baukit=True, chunk_size_gb=10)
     chunk_loc = os.path.join(cfg.dataset_folder, f"0.pkl")
 
@@ -201,6 +201,10 @@ async def main(cfg: dotdict) -> None:
     if cfg.model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]:
         model = HookedTransformer.from_pretrained(cfg.model_name, device=cfg.device)
         use_baukit = False
+        if cfg.model_name == "gpt2":
+            activation_width = 3072
+        elif cfg.model_name == "EleutherAI/pythia-70m-deduped":
+            activation_width = 2048
     elif cfg.model_name == "nanoGPT":
         model_dict = torch.load(open(cfg.model_path, "rb"), map_location="cpu")["model"]
         model_dict = {k.replace("_orig_mod.", ""): v for k, v in model_dict.items()}
@@ -210,6 +214,7 @@ async def main(cfg: dotdict) -> None:
         model = GPT(model_cfg).to(cfg.device)
         model.load_state_dict(model_dict)
         use_baukit = True
+        activation_width = 128
     else:
         raise ValueError("Model name not recognised")
     
@@ -218,10 +223,9 @@ async def main(cfg: dotdict) -> None:
         assert cfg.load_interpret_autoencoder is not None
         autoencoder = pickle.load(open(cfg.load_interpret_autoencoder, "rb"))
         feature_dict = autoencoder.encoder[0].weight.detach().t()
-        activation_width, feature_width = feature_dict.shape
-
+    
     dataset, n_activations = make_activation_dataset(cfg, model)
-    activations_name = f"{cfg.model_name}_layer{cfg.layer}_postnonlin"
+    activations_name = f"{cfg.model_name.split('/')[-1]}_layer{cfg.layer}_postnonlin"
 
     if cfg.activation_transform == "neuron_basis":
         print("Using neuron basis activation transform")
@@ -229,32 +233,35 @@ async def main(cfg: dotdict) -> None:
 
     elif cfg.activation_transform == "ica":
         print("Using ICA activation transform")
-        if os.path.exists("ica_1gb.pkl"):
+        ica_path = os.path.join("auto_interp_results", activations_name, "ica_1gb.pkl")
+        if os.path.exists(ica_path):
             print("Loading ICA")
-            ica = pickle.load(open("ica_1gb.pkl", "rb"))
+            ica = pickle.load(open(ica_path, "rb"))
         else:
             ica = activation_ICA(dataset, n_activations)
-            pickle.dump(ica, open("ica_1gb.pkl", "wb"))
+            pickle.dump(ica, open(ica_path, "wb"))
         activation_transform = lambda x: torch.tensor(ica.transform(x))
 
     elif cfg.activation_transform == "pca":
         print("Using PCA activation transform")
-        if os.path.exists("pca_1gb.pkl"):
+        pca_path = os.path.join("auto_interp_results", activations_name, "pca_1gb.pkl")
+        if os.path.exists(pca_path):
             print("Loading PCA")
-            pca = pickle.load(open("pca_1gb.pkl", "rb"))
+            pca = pickle.load(open(pca_path, "rb"))
         else:
             pca = activation_PCA(dataset, n_activations)
-            pickle.dump(pca, open("pca_1gb.pkl", "wb"))
+            pickle.dump(pca, open(pca_path, "wb"))
         activation_transform = lambda x: torch.tensor(pca.transform(x))
 
     elif cfg.activation_transform == "nmf":
         print("Using NMF activation transform")
-        if os.path.exists("nmf_1gb.pkl"):
+        nmf_path = os.path.join("auto_interp_results", activations_name, "nmf_1gb.pkl")
+        if os.path.exists(nmf_path):
             print("Loading NMF")
-            nmf = pickle.load(open("nmf_1gb.pkl", "rb"))
+            nmf = pickle.load(open(nmf_path, "rb"))
         else:
             nmf = activation_NMF(dataset, n_activations)
-            pickle.dump(nmf, open("nmf_1gb.pkl", "wb"))
+            pickle.dump(nmf, open(nmf_path, "wb"))
         activation_transform = lambda x: torch.tensor(nmf.transform(x))
 
     elif cfg.activation_transform == "feature_dict":
@@ -263,7 +270,13 @@ async def main(cfg: dotdict) -> None:
 
     elif cfg.activation_transform == "random":
         print("Using random activation transform")
-        random_direction_matrix = torch.randn(activation_width, activation_width)
+        random_path = os.path.join("auto_interp_results", activations_name, "random_dirs.pkl")
+        if os.path.exists(random_path):
+            print("Loading random directions")
+            random_direction_matrix = pickle.load(open(random_path, "rb"))
+        else:
+            random_direction_matrix = torch.randn(activation_width, activation_width)
+            pickle.dump(random_direction_matrix, open(random_path, "wb"))
         activation_transform = lambda x: torch.matmul(x, random_direction_matrix)
 
     else:
@@ -275,9 +288,9 @@ async def main(cfg: dotdict) -> None:
         transform_name = cfg.activation_transform
 
     transform_folder = os.path.join("auto_interp_results", activations_name, transform_name)
-    df_loc = os.path.join(transform_folder, f"activation_df.csv")
+    df_loc = os.path.join(transform_folder, f"activation_df.pkl")
 
-    if not (cfg.load_activation_dataset and os.path.exists(os.path.join(transform_folder, "activation_df.csv"))):
+    if not (cfg.load_activation_dataset and os.path.exists(df_loc)):
         base_df = make_feature_activation_dataset(cfg, model, activation_transform, use_baukit=use_baukit)
         # save the dataset, saving each column separately so that we can retrive just the columns we want later
         print(f"Saving dataset to {df_loc}")
@@ -290,26 +303,27 @@ async def main(cfg: dotdict) -> None:
         #     feat_df_loc = os.path.join(activations_folder, f"activation_df_{cfg.activation_transform}_feature_{feat_n}_layer_{layer}.csv")
         #     base_df[["fragment_id", f"feature_{feat_n}_mean", f"feature_{feat_n}_activations"]].to_csv(feat_df_loc, index=False)
         # base_df[["fragment_id", "fragment_token_strs", "fragment_token_ids"]].to_csv(df_loc, index=False)
-        for feat_n in range(0, n_features_in_df):
-            print(f"Saving feature {feat_n}")
-            base_df[f"feature_{feat_n}_activations"] = base_df[f"feature_{feat_n}_activations"].astype(str)
+        # for feat_n in range(0, n_features_in_df):
+        #     print(f"Saving feature {feat_n}")
+        #     base_df[f"feature_{feat_n}_activations"] = base_df[f"feature_{feat_n}_activations"].astype(str)
         
-        base_df.to_csv(df_loc, index=False)
+        pickle.dump(base_df, open(df_loc, "wb"))
     else:
         print(f"Loading dataset from {df_loc} (may take a while)")
-        base_df = pd.read_csv(df_loc)
-        base_df["fragment_token_strs"] = base_df["fragment_token_strs"].apply(lambda x: eval(x))
-        base_df["fragment_token_ids"] = base_df["fragment_token_ids"].apply(lambda x: eval(x))
+        base_df = pickle.load(open(df_loc, "rb"))
+    #     base_df["fragment_token_strs"] = base_df["fragment_token_strs"].apply(lambda x: eval(x))
+    #     base_df["fragment_token_ids"] = base_df["fragment_token_ids"].apply(lambda x: eval(x))
 
-    for feat_n in range(0, cfg.n_feats_explain):
-        base_df[f"feature_{feat_n}_activations"] = base_df[f"feature_{feat_n}_activations"].apply(lambda x: eval(x))
+    # for feat_n in range(0, cfg.n_feats_explain):
+    #     base_df[f"feature_{feat_n}_activations"] = base_df[f"feature_{feat_n}_activations"].apply(lambda x: eval(x))
 
     # start_time = datetime.now().strftime("%Y%m%d-%H%M%S")
     # save_folder = os.path.join("auto_interp_results", start_time)
 
     # save the autoencoder being investigated
     os.makedirs(transform_folder, exist_ok=True)
-    torch.save(autoencoder, os.path.join(transform_folder, "autoencoder.pt"))
+    if cfg.activation_transform == "feature_dict":
+        torch.save(autoencoder, os.path.join(transform_folder, "autoencoder.pt"))
     for feat_n in range(0, cfg.n_feats_explain):
         df = base_df.copy()[["fragment_token_strs", f"feature_{feat_n}_activations", f"feature_{feat_n}_mean"]]
         sorted_df = df.sort_values(by=f"feature_{feat_n}_mean", ascending=False)
@@ -376,7 +390,7 @@ async def main(cfg: dotdict) -> None:
         pickle.dump(neuron_record, open(os.path.join(feature_folder, "neuron_record.pkl"), "wb"))
         # write a file with the explanation and the score
         with open(os.path.join(feature_folder, "explanation.txt"), "w") as f:
-            f.write(f"{explanation}\n\nScore: {score:.2f}")
+            f.write(f"{explanation}\nScore: {score:.2f}\nExplainer model: {EXPLAINER_MODEL_NAME}\nSimulator model: {SIMULATOR_MODEL_NAME}\n")
     
     if cfg.upload_to_aws:
         upload_to_aws(transform_folder)
@@ -426,8 +440,40 @@ async def run_openai_example():
     scored_simulation = await simulate_and_score(simulator, valid_activation_records)
     print(f"score={scored_simulation.get_preferred_score():.2f}")
 
+def read_results():
+    results_folder = "auto_interp_results/nanoGPT_layer2_postnonlin"
+    transforms = ["random", "neuron_basis"]
+    scores = {}
+    for transform in transforms:
+        scores[transform] = []
+        for feature_ndx in range(128):
+            feature_folder = os.path.join(results_folder, transform, f"feature_{feature_ndx}")
+            if not os.path.exists(feature_folder):
+                continue
+            explanation_text = open(os.path.join(feature_folder, "explanation.txt")).read()
+            # score is on the second line
+            score = float(explanation_text.split("\n")[1].split(" ")[1])
+            print(f"{feature_ndx=}, {transform=}, {score=}")
+            scores[transform].append(score)
+    
+    # plot the scores as a histogram
+    import matplotlib.pyplot as plt
+    plt.hist(scores["random"], bins=20, alpha=0.5, label="random")
+    plt.hist(scores["neuron_basis"], bins=20, alpha=0.5, label="neuron_basis")
+    plt.legend(loc='upper right')
+    # plot means on that graph 
+    import numpy as np
+    plt.axvline(x=np.mean(scores["random"]), color="blue", linestyle="--")
+    plt.axvline(x=np.mean(scores["neuron_basis"]), color="orange", linestyle="--")
+
+    # save
+    save_path = os.path.join(results_folder, "scores.png")
+    print(f"Saving to {save_path}")
+    plt.savefig(save_path)
+
 
 if __name__ == "__main__":
+    # read_results()
     if len(sys.argv) > 1 and sys.argv[1] == "openai":
         asyncio.run(run_openai_example())
 
