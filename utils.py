@@ -8,8 +8,8 @@ from pathlib import Path
 import boto3
 from botocore.exceptions import NoCredentialsError
 
-VAST_NUM = 4
-VAST_PORT = 30503
+VAST_NUM = 5
+VAST_PORT = 34447
 SSH_DIRECTORY = "sparse_coding"
 dest_addr = f"root@ssh{VAST_NUM}.vast.ai"
 SSH_PYTHON = "/opt/conda/bin/python"
@@ -58,7 +58,7 @@ def setup():
     sync()
     copy_models()
     copy_secrets()
-    command = f'ssh -p {VAST_PORT} {dest_addr} "cd {SSH_DIRECTORY} && {SSH_PYTHON} -m venv .env && source .env/bin/activate && pip install -r requirements.txt" && apt install vim'
+    command = f'ssh -p {VAST_PORT} {dest_addr} "cd {SSH_DIRECTORY} && {SSH_PYTHON} -m venv .env --system-site-packages && source .env/bin/activate && pip install -r requirements.txt" && apt install vim'
     # command = f"ssh -p {VAST_PORT} {dest_addr} \"cd {SSH_DIRECTORY} && echo $PATH\""
     subprocess.call(command, shell=True)
     # clone neuron explainer, until i can load it from pip
