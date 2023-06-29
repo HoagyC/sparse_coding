@@ -37,6 +37,7 @@ def parse_args():
     parser.add_argument("--dataset_name", type=str, default="NeelNanda/pile-10k")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--layer", type=int, default=2)  # layer to extract mlp-post-non-lin features from, only if using real model
+    parser.add_argument("--use_residual", type=bool, default=False)  # whether to train on residual stream data
 
     parser.add_argument("--outputs_folder", type=str, default="outputs")
     parser.add_argument("--datasets_folder", type=str, default="activation_data")

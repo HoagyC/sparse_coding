@@ -9,7 +9,7 @@ import boto3
 from botocore.exceptions import NoCredentialsError
 
 VAST_NUM = 4
-VAST_PORT = 16356
+VAST_PORT = 30503
 SSH_DIRECTORY = "sparse_coding"
 dest_addr = f"root@ssh{VAST_NUM}.vast.ai"
 SSH_PYTHON = "/opt/conda/bin/python"
@@ -91,7 +91,11 @@ class dotdict(dict):
 def make_tensor_name(cfg):
     if cfg.use_residual:
         if cfg.model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]:
-            tensor_name = f"blocks.{cfg.layer}.resid_post"
+            tensor_name = f"blocks.{cfg.layer}.hook_resid_post"
+            if cfg.model_name == "gpt2":
+                cfg.mlp_width = 768
+            elif cfg.model_name == "EleutherAI/pythia-70m-deduped":
+                cfg.mlp_width = 512
     else:
         if cfg.model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]:
             tensor_name = f"blocks.{cfg.layer}.mlp.hook_post"
