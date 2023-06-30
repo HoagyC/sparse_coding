@@ -93,12 +93,12 @@ def generate_rand_dataset(
     device: Union[torch.device, str],
 ) -> Tuple[TensorType["n_ground_truth_components", "activation_dim"], TensorType["dataset_size", "n_ground_truth_components"], TensorType["dataset_size", "activation_dim"]]:
     dataset_thresh = torch.rand(dataset_size, n_ground_truth_components, device=device)
-    dataset_values = torch.rand(dataset_size, n_ground_truth_components, device=device)
 
     data_zero = torch.zeros_like(dataset_thresh, device=device)
+    data_one = torch.ones_like(dataset_thresh, device=device)
     dataset_codes = torch.where(
         dataset_thresh <= feature_probs,
-        dataset_values,
+        data_one,
         data_zero,
     )  # dim: dataset_size x n_ground_truth_components
 
@@ -139,12 +139,12 @@ def generate_correlated_dataset(
 
     # Generate sparse correlated codes
     dataset_thresh = torch.rand(dataset_size, n_ground_truth_components, device=device)
-    dataset_values = torch.rand(dataset_size, n_ground_truth_components, device=device)
 
     data_zero = torch.zeros_like(corr_thresh, device=device)
+    data_one = torch.ones_like(corr_thresh, device=device)
     dataset_codes = torch.where(
         dataset_thresh <= component_probs,
-        dataset_values,
+        data_one,
         data_zero,
     )
     # Ensure there are no datapoints w/ 0 features
