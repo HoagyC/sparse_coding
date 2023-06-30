@@ -92,21 +92,19 @@ def generate_rand_dataset(
     feats: TensorType["n_ground_truth_components", "activation_dim"],
     device: Union[torch.device, str],
 ) -> Tuple[TensorType["n_ground_truth_components", "activation_dim"], TensorType["dataset_size", "n_ground_truth_components"], TensorType["dataset_size", "activation_dim"]]:
-    dataset_thresh = torch.rand(dataset_size, n_ground_truth_components, device=device)
-
+    
+    # generate random feature strengths
+    feature_strengths = torch.rand((dataset_size, n_ground_truth_components), device=device)
     data_zero = torch.zeros_like(dataset_thresh, device=device)
-    data_one = torch.ones_like(dataset_thresh, device=device)
+    # only some features are activated, chosen at random
+    dataset_thresh = torch.rand(dataset_size, n_ground_truth_components, device=device)
     dataset_codes = torch.where(
         dataset_thresh <= feature_probs,
-        data_one,
+        feature_strengths,
         data_zero,
     )  # dim: dataset_size x n_ground_truth_components
 
-    # Multiply by a 2D random matrix of feature strengths
-    feature_strengths = torch.rand((dataset_size, n_ground_truth_components), device=device)
-    dataset = (dataset_codes * feature_strengths) @ feats
-
-    # dataset = dataset_codes @ feats
+    dataset = dataset_codes @ feats
 
     return feats, dataset_codes, dataset
 
@@ -137,14 +135,14 @@ def generate_correlated_dataset(
     component_probs *= scaler
     # So np.isclose(np.mean(component_probs), frac_nonzero) will be True
 
-    # Generate sparse correlated codes
-    dataset_thresh = torch.rand(dataset_size, n_ground_truth_components, device=device)
-
+    # generate random feature strengths
+    feature_strengths = torch.rand((dataset_size, n_ground_truth_components), device=device)
     data_zero = torch.zeros_like(corr_thresh, device=device)
-    data_one = torch.ones_like(corr_thresh, device=device)
+    # only some features are activated, chosen at random
+    dataset_thresh = torch.rand(dataset_size, n_ground_truth_components, device=device)
     dataset_codes = torch.where(
         dataset_thresh <= component_probs,
-        data_one,
+        feature_strengths,
         data_zero,
     )
     # Ensure there are no datapoints w/ 0 features
@@ -153,8 +151,7 @@ def generate_correlated_dataset(
     dataset_codes[zero_sample_index, random_index] = 1.0
 
     # Multiply by a 2D random matrix of feature strengths
-    feature_strengths = torch.rand((dataset_size, n_ground_truth_components), device=device)
-    dataset = (dataset_codes * feature_strengths) @ feats
+    dataset = dataset_codes @ feats
 
     return feats, dataset_codes, dataset
 
