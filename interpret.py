@@ -1,48 +1,32 @@
 import asyncio
-<<<<<<< HEAD
 from datetime import datetime
-=======
->>>>>>> 328b79d (residual-stream training support for some models)
 import importlib
 import json
 import os
 import pickle
 import requests
 import sys
-<<<<<<< HEAD
 from typing import Any, Dict, Union, List, Callable
-=======
-from typing import Any, Dict, Union, List
->>>>>>> 328b79d (residual-stream training support for some models)
 
 from baukit import Trace
 from datasets import load_dataset, ReadInstruction
 from einops import rearrange
+import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
-<<<<<<< HEAD
 from sklearn.decomposition import FastICA, PCA, NMF
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-=======
-import torch
-import torch.nn as nn
->>>>>>> 328b79d (residual-stream training support for some models)
 from tqdm import tqdm
 from transformer_lens import HookedTransformer
 from transformers import GPT2Tokenizer
 
 from argparser import parse_args
-<<<<<<< HEAD
 from comparisons import NoCredentialsError
 from utils import dotdict, make_tensor_name, upload_to_aws
 from nanoGPT_model import GPT
 from run import AutoEncoder, setup_data
-=======
-from utils import dotdict, make_tensor_name
-from nanoGPT_model import GPT
-from run import AutoEncoder
->>>>>>> 328b79d (residual-stream training support for some models)
 
 
 # set OPENAI_API_KEY environment variable from secrets.json['openai_key']
@@ -60,13 +44,8 @@ from neuron_explainer.explanations.scoring import simulate_and_score
 from neuron_explainer.explanations.simulator import ExplanationNeuronSimulator
 from neuron_explainer.fast_dataclasses import loads
 
-<<<<<<< HEAD
 EXPLAINER_MODEL_NAME = "gpt-4" # "gpt-3.5-turbo"
 SIMULATOR_MODEL_NAME = "text-davinci-003" # "text-davinci-003"
-=======
-EXPLAINER_MODEL_NAME = "gpt-3.5-turbo"
-SIMULATOR_MODEL_NAME = "text-davinci-003"
->>>>>>> 328b79d (residual-stream training support for some models)
 
 OPENAI_MAX_FRAGMENTS = 50000
 OPENAI_FRAGMENT_LEN = 64
@@ -92,7 +71,6 @@ def load_neuron(
         )
     return neuron_record
 
-<<<<<<< HEAD
 def make_activation_dataset(cfg, model):
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
     cfg.n_chunks = 1
@@ -104,7 +82,7 @@ def make_activation_dataset(cfg, model):
 
     total_activation_size = 1024 * 1024 * 1024
     elem_size = 4
-    activation_width = 128
+    activation_width = cfg.mlp_width
     n_activations = total_activation_size // (elem_size * activation_width)
 
     dataset = DataLoader(pickle.load(open(chunk_loc, "rb")), batch_size=n_activations, shuffle=True)
@@ -143,10 +121,6 @@ def activation_NMF(dataset, n_activations):
 
 
 def make_feature_activation_dataset(cfg, model: HookedTransformer, activation_transform: Callable[[torch.Tensor], Any], use_baukit: bool = False):
-=======
-
-def make_feature_activation_dataset(cfg, model: HookedTransformer, feature_dict: torch.Tensor, use_baukit: bool = False):
->>>>>>> 328b79d (residual-stream training support for some models)
     """
     Takes a dict of features and returns the top k activations for each feature in pile10k
     """
@@ -187,18 +161,11 @@ def make_feature_activation_dataset(cfg, model: HookedTransformer, feature_dict:
                 mlp_activation_data = rearrange(mlp_activation_data, "b s n -> (b s) n")
 
             # Project the activations into the feature space
-<<<<<<< HEAD
             feature_activation_data = activation_transform(mlp_activation_data.detach().cpu())
             if not isinstance(feature_activation_data, torch.Tensor):
                 feature_activation_data = torch.tensor(feature_activation_data)
 
             # Get average activation for each feature
-=======
-            feature_activation_data = torch.matmul(mlp_activation_data, feature_dict.to(torch.float32))
-
-            # Get average activation for each feature
-            assert feature_activation_data.shape == (OPENAI_FRAGMENT_LEN, feature_dict.shape[1])
->>>>>>> 328b79d (residual-stream training support for some models)
             feature_activation_means = torch.mean(feature_activation_data, dim=0)
 
             fragment_dict: Dict[str, Any] = {}
@@ -213,11 +180,7 @@ def make_feature_activation_dataset(cfg, model: HookedTransformer, feature_dict:
                 n_thrown += 1
                 continue
 
-<<<<<<< HEAD
             for j in range(feature_activation_means.shape[0]):
-=======
-            for j in range(feature_dict.shape[1]):
->>>>>>> 328b79d (residual-stream training support for some models)
                 fragment_dict[f"feature_{j}_mean"] = feature_activation_means[j].item()
                 fragment_dict[f"feature_{j}_activations"] = feature_activation_data[:, j].tolist()
                 assert len(fragment_dict[f"feature_{j}_activations"]) == len(fragment_dict["fragment_token_strs"])
@@ -235,55 +198,15 @@ def make_feature_activation_dataset(cfg, model: HookedTransformer, feature_dict:
     print(f"Threw away {n_thrown} fragments, made {len(df)} fragments")
     return df
 
-<<<<<<< HEAD
 async def main(cfg: dotdict) -> None:
-=======
-
-async def interpret_neuron(neuron_record, n_examples_per_split: int= 5):
-    slice_params = ActivationRecordSliceParams(n_examples_per_split=n_examples_per_split)
-    train_activation_records = neuron_record.train_activation_records(slice_params)
-    valid_activation_records = neuron_record.valid_activation_records(slice_params)
-
-    explainer = TokenActivationPairExplainer(
-        model_name=EXPLAINER_MODEL_NAME,
-        prompt_format=PromptFormat.HARMONY_V4,
-        max_concurrent=1,
-    )
-    explanations = await explainer.generate_explanations(
-    all_activation_records=train_activation_records,
-    max_activation=calculate_max_activation(train_activation_records),
-    num_samples=1,
-)
-    assert len(explanations) == 1
-    explanation = explanations[0]
-    print(f"{explanation=}")
-
-    # Simulate and score the explanation.
-    simulator = UncalibratedNeuronSimulator(
-        ExplanationNeuronSimulator(
-            SIMULATOR_MODEL_NAME,
-            explanation,
-            max_concurrent=1,
-            prompt_format=PromptFormat.INSTRUCTION_FOLLOWING,
-        )
-    )
-    scored_simulation = await simulate_and_score(simulator, valid_activation_records)
-    return scored_simulation
-
-
-async def main(cfg: dotdict):
->>>>>>> 328b79d (residual-stream training support for some models)
     # Load model
     if cfg.model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]:
         model = HookedTransformer.from_pretrained(cfg.model_name, device=cfg.device)
         use_baukit = False
-<<<<<<< HEAD
         if cfg.model_name == "gpt2":
             activation_width = 3072
         elif cfg.model_name == "EleutherAI/pythia-70m-deduped":
             activation_width = 2048
-=======
->>>>>>> 328b79d (residual-stream training support for some models)
     elif cfg.model_name == "nanoGPT":
         model_dict = torch.load(open(cfg.model_path, "rb"), map_location="cpu")["model"]
         model_dict = {k.replace("_orig_mod.", ""): v for k, v in model_dict.items()}
@@ -293,15 +216,11 @@ async def main(cfg: dotdict):
         model = GPT(model_cfg).to(cfg.device)
         model.load_state_dict(model_dict)
         use_baukit = True
-<<<<<<< HEAD
         activation_width = 128
-=======
->>>>>>> 328b79d (residual-stream training support for some models)
     else:
         raise ValueError("Model name not recognised")
     
     # Load feature dict
-<<<<<<< HEAD
     if cfg.activation_transform == "feature_dict":
         assert cfg.load_interpret_autoencoder is not None
         autoencoder = pickle.load(open(cfg.load_interpret_autoencoder, "rb"))
@@ -408,50 +327,20 @@ async def main(cfg: dotdict):
     if cfg.activation_transform == "feature_dict":
         torch.save(autoencoder, os.path.join(transform_folder, "autoencoder.pt"))
     for feat_n in range(0, cfg.n_feats_explain):
+        if os.path.exists(os.path.join(transform_folder, f"feature_{feat_n}")):
+            print(f"Feature {feat_n} already exists, skipping")
+            continue
         df = base_df.copy()[["fragment_token_strs", f"feature_{feat_n}_activations", f"feature_{feat_n}_mean"]]
         sorted_df = df.sort_values(by=f"feature_{feat_n}_mean", ascending=False)
         sorted_df = sorted_df.head(TOTAL_EXAMPLES)
         top_activation_records = []
         for i, row in sorted_df.iterrows():
             top_activation_records.append(ActivationRecord(row["fragment_token_strs"], row[f"feature_{feat_n}_activations"]))
-=======
-    assert cfg.load_autoencoders is not None
-    loaded_autoencoders = pickle.load(open(cfg.load_autoencoders, "rb"))
-    autoencoder = loaded_autoencoders[0][0]
-    feature_dict = autoencoder.encoder[0].weight.detach().t().to(cfg.device)
-
-    if not (cfg.load_activation_dataset and os.path.exists(cfg.load_activation_dataset)):
-        base_df = make_feature_activation_dataset(cfg, model, feature_dict, use_baukit=use_baukit)
-        # save the dataset, saving each column separately so that we can retrive just the columns we want later
-        # base_df.to_csv(cfg.save_activation_dataset, index=False)
-        layer = 2
-        for i in range(0, cfg.n_feats_explain):
-            print(f"Saving feature {i} of layer {layer}")
-            base_df[["fragment_id", f"feature_{i}_mean", f"feature_{i}_activations"]].to_csv(cfg.save_activation_dataset.replace(".csv", f"_layer_{layer}_feature_{i}.csv"), index=False)
-        base_df[["fragment_id", "fragment_token_strs", "fragment_token_ids"]].to_csv(cfg.save_activation_dataset, index=False)
-
-    base_df = pd.read_csv(cfg.load_activation_dataset)
-    for feature_num in range(0, cfg.n_feats_explain):
-        # Load the dataset
-        neuron_df = pd.read_csv(cfg.load_activation_dataset.replace(".csv", f"_layer_2_feature_{feature_num}.csv"))
-        # need to convert the activations and list of tokens from strings to lists
-        df = base_df.merge(neuron_df, on="fragment_id")
-        df[f"feature_{feature_num}_activations"] = df[f"feature_{feature_num}_activations"].apply(lambda x: eval(x))
-        df["fragment_token_strs"] = df["fragment_token_strs"].apply(lambda x: eval(x))
-        df["fragment_token_ids"] = df["fragment_token_ids"].apply(lambda x: eval(x))
-
-        sorted_df = df.sort_values(by=f"feature_{feature_num}_mean", ascending=False)
-        sorted_df = sorted_df.head(TOTAL_EXAMPLES)
-        top_activation_records = []
-        for i, row in sorted_df.iterrows():
-            top_activation_records.append(ActivationRecord(row["fragment_token_strs"], row[f"feature_{feature_num}_activations"]))
->>>>>>> 328b79d (residual-stream training support for some models)
         
         # Adding random fragments
         random_df = df.sample(n=TOTAL_EXAMPLES)
         random_activation_records = []
         for i, row in random_df.iterrows():
-<<<<<<< HEAD
             random_activation_records.append(ActivationRecord(row["fragment_token_strs"], row[f"feature_{feat_n}_activations"]))
         
         neuron_id = NeuronId(layer_index=2, neuron_index=feat_n)
@@ -491,15 +380,6 @@ async def main(cfg: dotdict):
         print(f"score={score:.2f}")
 
         feature_name = f"feature_{feat_n}"
-        if os.path.exists(os.path.join(transform_folder, f"feature_{feat_n}")):
-            n = 1
-            while True:
-                if os.path.exists(os.path.join(transform_folder, f"feature_{feat_n}_{n}")):
-                    n += 1
-                else:
-                    feature_name = f"feature_{feat_n}_{n}"
-                    break
-        
         feature_folder = os.path.join(transform_folder, feature_name)
         os.makedirs(feature_folder, exist_ok=True)
         pickle.dump(scored_simulation, open(os.path.join(feature_folder, "scored_simulation.pkl"), "wb"))
@@ -515,16 +395,6 @@ async def main(cfg: dotdict):
         
 
 
-=======
-            random_activation_records.append(ActivationRecord(row["fragment_token_strs"], row[f"feature_{feature_num}_activations"]))
-        
-        neuron_id = NeuronId(layer_index=2, neuron_index=feature_num)
-
-        neuron_record = NeuronRecord(neuron_id=neuron_id, random_sample=random_activation_records, most_positive_activation_records=top_activation_records)
-
-        scored_simulation = await interpret_neuron(neuron_record, OPENAI_EXAMPLES_PER_SPLIT)
-        print(f"score={scored_simulation.get_preferred_score():.2f}")
->>>>>>> 328b79d (residual-stream training support for some models)
 
 async def run_openai_example():
     neuron_record = load_neuron(9, 10)
@@ -554,33 +424,27 @@ async def run_openai_example():
     print(f"{explanation=}")
 
     # Simulate and score the explanation.
-<<<<<<< HEAD
     format = PromptFormat.HARMONY_V4 if SIMULATOR_MODEL_NAME == "gpt-3.5-turbo" else PromptFormat.INSTRUCTION_FOLLOWING
-=======
->>>>>>> 328b79d (residual-stream training support for some models)
     simulator = UncalibratedNeuronSimulator(
         ExplanationNeuronSimulator(
             SIMULATOR_MODEL_NAME,
             explanation,
             max_concurrent=1,
-<<<<<<< HEAD
             prompt_format=format, # INSTRUCTIONFOLLIWING
-=======
-            prompt_format=PromptFormat.INSTRUCTION_FOLLOWING,
->>>>>>> 328b79d (residual-stream training support for some models)
         )
     )
     scored_simulation = await simulate_and_score(simulator, valid_activation_records)
     print(f"score={scored_simulation.get_preferred_score():.2f}")
 
-<<<<<<< HEAD
 def read_results():
     results_folder = "auto_interp_results/pythia-70m-deduped_layer2_postnonlin"
-    transforms = ["random", "neuron_basis"]
+    transforms = os.listdir(results_folder)
+    transforms = [transform for transform in transforms if os.path.isdir(os.path.join(results_folder, transform))]
     scores = {}
     for transform in transforms:
         scores[transform] = []
-        for feature_ndx in range(10):
+        feature_ndx = 0
+        while os.path.exists(os.path.join(results_folder, transform, f"feature_{feature_ndx}")):
             feature_folder = os.path.join(results_folder, transform, f"feature_{feature_ndx}")
             if not os.path.exists(feature_folder):
                 continue
@@ -589,34 +453,35 @@ def read_results():
             score = float(explanation_text.split("\n")[1].split(" ")[1])
             print(f"{feature_ndx=}, {transform=}, {score=}")
             scores[transform].append(score)
+            feature_ndx += 1
     
     # plot the scores as a histogram
-    import matplotlib.pyplot as plt
-    plt.hist(scores["random"], bins=20, alpha=0.5, label="random")
-    plt.hist(scores["neuron_basis"], bins=20, alpha=0.5, label="neuron_basis")
+    colors = ["red", "blue", "green", "orange", "purple", "pink"]
+    for i, transform in enumerate(transforms):
+        plt.hist(scores[transform], bins=20, alpha=0.5, label=transform, color=colors[i])
+        plt.axvline(x=np.mean(scores[transform]), linestyle="--", color=colors[i])
+        print(f"{transform=}, mean={np.mean(scores[transform])}")
+
     plt.legend(loc='upper right')
     # plot means on that graph 
-    import numpy as np
-    plt.axvline(x=np.mean(scores["random"]), color="blue", linestyle="--")
-    plt.axvline(x=np.mean(scores["neuron_basis"]), color="orange", linestyle="--")
+
+    # add title and axis labels
+    plt.title("Pythia 70M Deduped Layer 2 Postnonli Auto-Interp Scores")
+    plt.xlabel("Score")
+    plt.ylabel("Count")
+
 
     # save
     save_path = os.path.join(results_folder, "scores.png")
     print(f"Saving to {save_path}")
     plt.savefig(save_path)
 
-=======
->>>>>>> 328b79d (residual-stream training support for some models)
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "openai":
         asyncio.run(run_openai_example())
-<<<<<<< HEAD
     elif len(sys.argv) > 1 and sys.argv[1] == "read_results":
         read_results()
-=======
-
->>>>>>> 328b79d (residual-stream training support for some models)
     else:
         cfg = parse_args()
         asyncio.run(main(cfg))

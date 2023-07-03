@@ -12,7 +12,7 @@ VAST_NUM = 5
 SSH_DIRECTORY = "sparse_coding"
 
 # DEST_ADDR = f"root@ssh{VAST_NUM}.vast.ai"
-DEST_ADDR = "mchorse@198.176.96.67"
+DEST_ADDR = "mchorse@207.53.234.65"
 SSH_PYTHON = "/opt/conda/bin/python"
 
 VAST_PORT = 22
