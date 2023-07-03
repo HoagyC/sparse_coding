@@ -2,11 +2,11 @@ import json
 import os
 import subprocess
 import sys
-from typing import Optional
+from typing import Optional, Union, List
 from pathlib import Path
 
 import boto3
-from botocore.exceptions import NoCredentialsError
+from botocore.exceptions import NoCredentialsError, ClientError
 
 VAST_NUM = 4
 # DEST_ADDR = f"root@ssh{VAST_NUM}.vast.ai"
@@ -154,6 +154,43 @@ def _upload_directory(path, s3_client):
         for file_name in files:
             full_file_name = os.path.join(root, file_name)
             s3_client.upload_file(str(full_file_name), BUCKET_NAME, str(full_file_name))
+
+def download_from_aws(files: Union[str, List[str]], force_redownload: bool = False) -> bool:
+    """
+    Download a file from an S3 bucket
+    :param files: List of files to download
+    :param force_redownload: If True, will download even if the file already exists
+    
+    Returns:
+        True if all files were downloaded successfully, False otherwise
+    """
+    secrets = json.load(open("secrets.json"))
+    if isinstance(files, str):
+        files = [files]
+    
+    if not force_redownload:
+        files = [f for f in files if not os.path.exists(f)]
+
+    s3 = boto3.client(
+        "s3",
+        aws_access_key_id=secrets["access_key"],
+        aws_secret_access_key=secrets["secret_key"],
+    )
+    all_correct = True
+    for filename in files:
+        try:
+            parent_dir = os.path.dirname(filename)
+            if not os.path.exists(parent_dir) and parent_dir != "":
+                os.makedirs(os.path.dirname(filename))
+            with open(filename, "wb") as f:
+                s3.download_fileobj(BUCKET_NAME, filename, f)
+
+            print(f"Successfully downloaded file: {filename}")
+        except ClientError:
+            print(f"File: {filename} does not exist")
+            all_correct = False
+
+    return all_correct
     
 
 if __name__ == "__main__":
