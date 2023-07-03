@@ -9,6 +9,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+n_dict_components, activation_size, batch_size = None, None, None
+
 class Encoder(metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def get_dict(self) -> TensorType["n_dict_components", "activation_size"]:

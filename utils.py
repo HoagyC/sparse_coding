@@ -8,15 +8,14 @@ from pathlib import Path
 import boto3
 from botocore.exceptions import NoCredentialsError
 
-VAST_NUM = 5
-SSH_DIRECTORY = "sparse_coding"
-
+VAST_NUM = 4
 # DEST_ADDR = f"root@ssh{VAST_NUM}.vast.ai"
-DEST_ADDR = "mchorse@207.53.234.65"
+DEST_ADDR = "ssh mchorse@207.53.234.65"
 SSH_PYTHON = "/opt/conda/bin/python"
 
-VAST_PORT = 22
+PORT = 22
 
+SSH_DIRECTORY = "sparse_coding"
 BUCKET_NAME = "sparse-coding"
 
 ACCESS_KEY_NAME_DICT = {
@@ -27,32 +26,32 @@ ACCESS_KEY_NAME_DICT = {
 
 def sync():
     """Sync the local directory with the remote host."""
-    command = f'rsync -rv --filter ":- .gitignore" --exclude ".git" -e "ssh -p {VAST_PORT}" . {DEST_ADDR}:{SSH_DIRECTORY}'
+    command = f'rsync -rv --filter ":- .gitignore" --exclude ".git" -e "ssh -p {PORT}" . {DEST_ADDR}:{SSH_DIRECTORY}'
     subprocess.call(command, shell=True)
 
 
 def copy_models():
     """Copy the models from local directory to the remote host."""
-    command = f"scp -P {VAST_PORT} -r models {DEST_ADDR}:{SSH_DIRECTORY}/models"
+    command = f"scp -P {PORT} -r models {DEST_ADDR}:{SSH_DIRECTORY}/models"
     subprocess.call(command, shell=True)
     # also copying across a few other files
-    command = f"scp -P {VAST_PORT} -r outputs/thinrun/autoencoders_cpu.pkl {DEST_ADDR}:{SSH_DIRECTORY}"
+    command = f"scp -P {PORT} -r outputs/thinrun/autoencoders_cpu.pkl {DEST_ADDR}:{SSH_DIRECTORY}"
     subprocess.call(command, shell=True)
 
 def copy_secrets():
     """Copy the secrets.json file from local directory to the remote host."""
-    command = f"scp -P {VAST_PORT} secrets.json {DEST_ADDR}:{SSH_DIRECTORY}"
+    command = f"scp -P {PORT} secrets.json {DEST_ADDR}:{SSH_DIRECTORY}"
     subprocess.call(command, shell=True)
 
 
 def copy_recent():
     """Get the most recent outputs folder in the remote host and copy across to same place in local directory."""
     # get the most recent folders
-    command = f'ssh -p {VAST_PORT} {DEST_ADDR} "ls -td {SSH_DIRECTORY}/outputs/* | head -1"'
+    command = f'ssh -p {PORT} {DEST_ADDR} "ls -td {SSH_DIRECTORY}/outputs/* | head -1"'
     output = subprocess.check_output(command, shell=True)
     output = output.decode("utf-8").strip()
     # copy across
-    command = f"scp -P {VAST_PORT} -r {DEST_ADDR}:{output} outputs"
+    command = f"scp -P {PORT} -r {DEST_ADDR}:{output} outputs"
     subprocess.call(command, shell=True)
 
 
@@ -61,11 +60,11 @@ def setup():
     sync()
     copy_models()
     copy_secrets()
-    command = f'ssh -p {VAST_PORT} {DEST_ADDR} "cd {SSH_DIRECTORY} && {SSH_PYTHON} -m venv .env && source .env/bin/activate && pip install -r requirements.txt" && apt install vim'
+    command = f'ssh -p {PORT} {DEST_ADDR} "cd {SSH_DIRECTORY} && {SSH_PYTHON} -m venv .env && source .env/bin/activate && pip install -r requirements.txt" && apt install vim'
     # command = f"ssh -p {VAST_PORT} {dest_addr} \"cd {SSH_DIRECTORY} && echo $PATH\""
     subprocess.call(command, shell=True)
     # clone neuron explainer, until i can load it from pip
-    command = f'ssh -p {VAST_PORT} {DEST_ADDR} "cd sparse_coding && git clone https://github.com/openai/automated-interpretability && mv automated-interpretability/neuron-explainer/neuron_explainer/ neuron_explainer"'
+    command = f'ssh -p {PORT} {DEST_ADDR} "cd sparse_coding && git clone https://github.com/openai/automated-interpretability && mv automated-interpretability/neuron-explainer/neuron_explainer/ neuron_explainer"'
     subprocess.call(command, shell=True)
 
 class dotdict(dict):
