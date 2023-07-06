@@ -43,8 +43,8 @@ class SAE(nn.Module):
         return x_hat, c
     
     def loss(self, x, x_hat, c):
-        l_reconstruction = torch.nn.MSELoss()(batch, x_hat)
-        l_l1 = self.l1_coef * torch.norm(dict_levels, 1, dim=1).mean()
+        l_reconstruction = torch.nn.MSELoss()(x, x_hat)
+        l_l1 = self.l1_coef * torch.norm(self.get_dict(), 1, dim=1).mean()
         l_bias_l2 = self.bias_l2_coef * torch.norm(self.decoder.bias, 2)
         return l_reconstruction + l_l1 + l_bias_l2, l_reconstruction, l_l1
     
@@ -119,5 +119,5 @@ class TiedSAE(nn.Module):
 
     def configure_optimizers(self, **kwargs):
         return torch.optim.Adam(self.parameters(), **kwargs)
-    
-Encoder.register(RICA)
+
+Encoder.register(TiedSAE)
