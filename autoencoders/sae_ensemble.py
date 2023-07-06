@@ -19,6 +19,9 @@ class SAE(nn.Module):
         self.register_buffer("l1_coef", torch.tensor(l1_coef))
     
     def forward(self, x):
+        return self.encoder(x)
+
+    def loss(self, x):
         c = self.encoder(x)
         
         # can't use this here due to vmap
@@ -32,29 +35,3 @@ class SAE(nn.Module):
         l_l1 = self.l1_coef * torch.norm(c, 1, dim=1).mean()
         
         return l_reconstruction + l_l1
-
-class SAEEnsemble():
-    def __init__(self, models, optimizer):
-        self.params, self.buffers = stack_module_state(models)
-        self.optimizer = optimizer
-        self.optim_states = torch.vmap(self.optimizer.init)(self.params)
-
-        self.modeldesc = copy.deepcopy(models[0]).to("meta")
-
-    def step_batch(self, minibatches):
-        def compute_loss(params, buffers, minibatch):
-            losses = functional_call(self.modeldesc, (params, buffers), minibatch)
-            return (losses, losses)
-        
-        def compute_grads(params, buffers, minibatch):
-            return torch.func.grad(compute_loss, has_aux=True)(params, buffers, minibatch)
-        
-        grads, aux = torch.vmap(compute_grads)(self.params, self.buffers, minibatches)
-        updates, self.optim_states = torch.vmap(self.optimizer.update)(grads, self.optim_states)
-
-        def apply_updates(params, updates):
-            return torchopt.apply_updates(params, updates, inplace=False)
-
-        self.params = torch.vmap(apply_updates)(self.params, updates)
-
-        return aux
