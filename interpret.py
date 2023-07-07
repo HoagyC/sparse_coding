@@ -208,7 +208,7 @@ def make_feature_activation_dataset(cfg, model: HookedTransformer, activation_fn
     iter_dataset = iter(sentence_dataset)
     with torch.no_grad():
         while n_added < OPENAI_MAX_FRAGMENTS:
-            fragments: List[torch.tensor] = []
+            fragments: List[torch.Tensor] = []
             while len(fragments) < batch_size:
                 print(f"Added {n_added} fragments, thrown {n_thrown} fragments\t\t\t\t\t\t", end="\r")
                 sentence = next(iter_dataset)
