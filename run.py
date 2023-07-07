@@ -692,7 +692,7 @@ def run_toy_model(cfg):
     if(len(learned_dict_ratios) > 1):
         # run MMCS-with-larger at the end of each mini run
         learned_dicts = [[auto_e.decoder.weight.detach().cpu().data.t() for auto_e in l1] for l1 in auto_encoders]
-        mmcs_with_larger, feats_above_threshold, full_max_cosine_sim_for_histograms = run_mmcs_with_larger(cfg, learned_dicts, threshold=cfg.threshold)
+        mmcs_with_larger, feats_above_threshold, full_max_cosine_sim_for_histograms = run_mmcs_with_larger(learned_dicts, threshold=cfg.threshold, device=cfg.device)
 
         with open(os.path.join(outputs_folder, "larger_dict_compare.pkl"), "wb") as f:
             pickle.dump(mmcs_with_larger, f)
@@ -829,7 +829,7 @@ def save_activation_chunk(dataset, n_saved_chunks, cfg):
     
 
 
-def run_mmcs_with_larger(cfg, learned_dicts, threshold=0.9):
+def run_mmcs_with_larger(learned_dicts, threshold=0.9, device: Union[str, torch.device] = "cpu"):
     n_l1_coefs, n_dict_sizes = len(learned_dicts), len(learned_dicts[0])
     av_mmcs_with_larger_dicts = np.zeros((n_l1_coefs, n_dict_sizes))
     feats_above_threshold = np.zeros((n_l1_coefs, n_dict_sizes))
@@ -841,7 +841,7 @@ def run_mmcs_with_larger(cfg, learned_dicts, threshold=0.9):
             continue
         smaller_dict = learned_dicts[l1_ndx][dict_size_ndx]
         # Clone the larger dict, because we're going to zero it out to do replacements
-        larger_dict_clone = learned_dicts[l1_ndx][dict_size_ndx + 1].clone().to(cfg.device)
+        larger_dict_clone = learned_dicts[l1_ndx][dict_size_ndx + 1].clone().to(device)
         smaller_dict_features, _ = smaller_dict.shape
         larger_dict_features, _ = larger_dict_clone.shape
         # Hungary algorithm
@@ -849,7 +849,7 @@ def run_mmcs_with_larger(cfg, learned_dicts, threshold=0.9):
         # Calculate all cosine similarities and store in a 2D array
         cos_sims = np.zeros((smaller_dict_features, larger_dict_features))
         for idx, vector in enumerate(smaller_dict):
-            cos_sims[idx] = torch.nn.functional.cosine_similarity(vector.to(cfg.device), larger_dict_clone, dim=1).cpu().numpy()
+            cos_sims[idx] = torch.nn.functional.cosine_similarity(vector.to(device), larger_dict_clone, dim=1).cpu().numpy()
         # Convert to a minimization problem
         cos_sims = 1 - cos_sims
         # Use the Hungarian algorithm to solve the assignment problem
@@ -1020,7 +1020,7 @@ def run_real_data_model(cfg: dotdict):
 
         # run MMCS-with-larger at the end of each mini run
         learned_dicts = [[auto_e.decoder.weight.detach().cpu().data.t() for auto_e in l1] for l1 in auto_encoders]
-        mmcs_with_larger, feats_above_threshold, mcs = run_mmcs_with_larger(cfg, learned_dicts, threshold=cfg.threshold)
+        mmcs_with_larger, feats_above_threshold, mcs = run_mmcs_with_larger(learned_dicts, threshold=cfg.threshold, device=cfg.device)
 
         # also just report them as variables
         for l1_ndx, dict_size_ndx in list(itertools.product(range(len(l1_range)), range(len(dict_sizes)))):
@@ -1105,7 +1105,7 @@ def run_real_data_model(cfg: dotdict):
 
     # Compare each learned dictionary to the larger ones
     learned_dicts = [[auto_e.decoder.weight.detach().cpu().data.t() for auto_e in l1] for l1 in auto_encoders]
-    mmcs_with_larger, feats_above_threshold, mcs = run_mmcs_with_larger(cfg, learned_dicts, threshold=cfg.threshold)
+    mmcs_with_larger, feats_above_threshold, mcs = run_mmcs_with_larger(learned_dicts, threshold=cfg.threshold, device=cfg.device)
 
     with open(os.path.join(outputs_folder, "larger_dict_compare.pkl"), "wb") as f:
         pickle.dump(mmcs_with_larger, f)

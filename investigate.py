@@ -46,7 +46,7 @@ def main(cfg):
     ae1, ae2 = autoencoders[0][2:4]
     aes = [[ae1, ae2]]
     learned_dicts = [[auto_e.decoder.weight.detach().cpu().data.t().to(torch.float32) for auto_e in l1] for l1 in aes]
-    mmcs_with_larger, feats_above_threshold, full_max_cosine_sim_for_histograms = run_mmcs_with_larger(cfg, learned_dicts, threshold=cfg.threshold)
+    mmcs_with_larger, feats_above_threshold, full_max_cosine_sim_for_histograms = run_mmcs_with_larger(learned_dicts, threshold=cfg.threshold, device=cfg.device)
 
     # now we want to check what the sparsity of the features is, which we will do by looking at the entropy of the features
     # we will also look at the entropy of the features that are above the threshold and those that are below the threshold to compare

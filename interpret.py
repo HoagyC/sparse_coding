@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 from datetime import datetime
 import importlib
@@ -140,8 +141,9 @@ def flex_activation_function(input, activation_str, **kwargs):
     elif activation_str == "neuron_basis":
         return input
     elif activation_str == "feature_dict":
-        assert "feature_dict" in kwargs
-        return input @ kwargs["feature_dict"].to(kwargs["device"])
+        assert "autoencoder" in kwargs
+        reconstruction, dict_activations = kwargs["autoencoder"](input)
+        return dict_activations
     else:
         raise ValueError(f"Unknown activation function {activation_str}")
 
@@ -182,11 +184,7 @@ def make_feature_activation_dataset(cfg, model: HookedTransformer, activation_fn
     """
     Takes a dict of features and returns the top k activations for each feature in pile10k
     """
-    max_sentences = 10000
-    sentence_dataset = load_dataset("openwebtext", split="train[:1%](pct1_dropremainder)")
-    if max_sentences is not None and max_sentences < len(sentence_dataset):
-        sentence_dataset = sentence_dataset.select(range(max_sentences))
-
+    sentence_dataset = load_dataset("openwebtext", split="train")
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
     tensor_name = make_tensor_name(cfg)
     # make list of sentence, tokenization pairs
@@ -199,6 +197,7 @@ def make_feature_activation_dataset(cfg, model: HookedTransformer, activation_fn
 
     n_thrown = 0
     n_added = 0
+    batch_size = 20
 
     fragment_token_ids_list = []
     fragment_token_strs_list = []
@@ -206,17 +205,28 @@ def make_feature_activation_dataset(cfg, model: HookedTransformer, activation_fn
     activation_means_table = np.zeros((OPENAI_MAX_FRAGMENTS, cfg.mlp_width), dtype=np.float16)
     activation_data_table = np.zeros((OPENAI_MAX_FRAGMENTS, cfg.mlp_width * OPENAI_FRAGMENT_LEN), dtype=np.float16)
 
+    iter_dataset = iter(sentence_dataset)
     with torch.no_grad():
-        for sentence_id, sentence in tqdm(enumerate(sentence_dataset)):
-            # split the sentence into fragments
-            tokens = tokenizer_model.to_tokens(sentence["text"], prepend_bos=False)
-            num_fragments = tokens.shape[1] // OPENAI_FRAGMENT_LEN
-            # now we want to call process_fragment on each fragment, distrubuting the work across GPUs
-            # we can do this by making a list of all the fragments, and then calling process_fragment on each on
-            # and then concatenating the results
-            tokens = tokens[:, :num_fragments * OPENAI_FRAGMENT_LEN] # shape is (1, num_fragments * OPENAI_FRAGMENT_LEN)
-            tokens.squeeze_(0) # shape is now (num_fragments * OPENAI_FRAGMENT_LEN)
-            tokens = tokens.reshape(num_fragments, OPENAI_FRAGMENT_LEN) # shape is now (num_fragments, OPENAI_FRAGMENT_LEN)
+        while n_added < OPENAI_MAX_FRAGMENTS:
+            fragments: List[torch.tensor] = []
+            while len(fragments) < batch_size:
+                print(f"Added {n_added} fragments, thrown {n_thrown} fragments\t\t\t\t\t\t", end="\r")
+                sentence = next(iter_dataset)
+                # split the sentence into fragments
+                sentence_tokens = tokenizer_model.to_tokens(sentence["text"], prepend_bos=False)
+                n_tokens = sentence_tokens.shape[1]
+                # get a random fragment from the sentence - only taking one fragment per sentence so examples aren't correlated
+                token_start = np.random.randint(0, n_tokens - OPENAI_FRAGMENT_LEN)
+                fragment_tokens = sentence_tokens[:, token_start:token_start + OPENAI_FRAGMENT_LEN]
+                token_strs = tokenizer_model.to_str_tokens(fragment_tokens[0])
+                if REPLACEMENT_CHAR in token_strs:
+                    n_thrown += 1
+                    continue
+
+                fragments.append(fragment_tokens)
+            
+            tokens = torch.cat(fragments, dim=0)
+            assert tokens.shape == (batch_size, OPENAI_FRAGMENT_LEN), tokens.shape
 
             if use_baukit:
                 with Trace(model, tensor_name) as ret:
@@ -227,22 +237,19 @@ def make_feature_activation_dataset(cfg, model: HookedTransformer, activation_fn
                 _, cache = model.run_with_cache(tokens)
                 mlp_activation_data = cache[tensor_name].to(cfg.device)  # NOTE: could do all layers at once, but currently just doing 1 layer
 
-            for i in range(num_fragments):
+            for i in range(batch_size):
                 fragment_tokens = tokens[i:i+1, :]
                 activation_data = mlp_activation_data[i:i+1, :].squeeze(0)
-
                 token_ids =  fragment_tokens[0].tolist()
-                token_strs = tokenizer_model.to_str_tokens(fragment_tokens[0])
-
-                if REPLACEMENT_CHAR in token_strs:
-                    n_thrown += 1
-                    continue
                     
                 feature_activation_data = flex_activation_function(activation_data, cfg.activation_transform, **activation_fn_kwargs)
                 feature_activation_means = torch.mean(feature_activation_data, dim=0)
 
                 activation_means_table[n_added, :] = feature_activation_means.cpu().numpy()
-                activation_data_table[n_added, :] = feature_activation_data.cpu().numpy().flatten()
+                feature_activation_data = feature_activation_data.cpu().numpy()
+
+                activation_data_table[n_added, :] = feature_activation_data.flatten()
+    
                 fragment_token_ids_list.append(token_ids)
                 fragment_token_strs_list.append(token_strs)
                 
@@ -251,16 +258,16 @@ def make_feature_activation_dataset(cfg, model: HookedTransformer, activation_fn
                 if n_added >= OPENAI_MAX_FRAGMENTS:
                     break
             
-            if n_added >= OPENAI_MAX_FRAGMENTS:
-                break
-
+    print(f"Added {n_added} fragments, thrown {n_thrown} fragments")
     # Now we build the dataframe from the numpy arrays and the lists
     print(f"Making dataframe from {n_added} fragments")
     df = pd.DataFrame()
     df["fragment_token_ids"] = fragment_token_ids_list
     df["fragment_token_strs"] = fragment_token_strs_list
     means_column_names = [f"feature_{i}_mean" for i in range(cfg.mlp_width)]
-    activations_column_names = [f"feature_{i}_activation_{j}" for j in range(OPENAI_FRAGMENT_LEN) for i in range(cfg.mlp_width)]
+    activations_column_names = [f"feature_{i}_activation_{j}" for j in range(OPENAI_FRAGMENT_LEN) for i in range(cfg.mlp_width)] # nested for loops are read left to right
+    
+    assert feature_activation_data.shape == (OPENAI_FRAGMENT_LEN, cfg.mlp_width)
     df = pd.concat([df, pd.DataFrame(activation_means_table, columns=means_column_names)], axis=1)
     df = pd.concat([df, pd.DataFrame(activation_data_table, columns=activations_column_names)], axis=1)
     print(f"Threw away {n_thrown} fragments, made {len(df)} fragments")
@@ -291,10 +298,11 @@ async def main(cfg: dotdict) -> None:
     # Load feature dict
     if cfg.activation_transform == "feature_dict":
         assert cfg.load_interpret_autoencoder is not None
-        autoencoder = pickle.load(open(cfg.load_interpret_autoencoder, "rb"))
-        feature_dict = autoencoder.encoder[0].weight.detach().t()
+        autoencoder = pickle.load(open(cfg.load_interpret_autoencoder, "rb")).to(cfg.device)
     
-    dataset, n_activations = make_activation_dataset(cfg, model)
+    if cfg.activation_transform in ["ica", "pca", "nmf"]:
+        activation_dataset, n_activations = make_activation_dataset(cfg, model)
+
     activations_name = f"{cfg.model_name.split('/')[-1]}_layer{cfg.layer}_postnonlin"
     activation_fn_kwargs = {"device": cfg.device}
     if cfg.activation_transform == "neuron_basis":
@@ -307,7 +315,7 @@ async def main(cfg: dotdict) -> None:
             print("Loading ICA")
             ica = pickle.load(open(ica_path, "rb"))
         else:
-            ica = activation_ICA(dataset, n_activations)
+            ica = activation_ICA(activation_dataset, n_activations)
             os.makedirs(os.path.dirname(ica_path), exist_ok=True)
             pickle.dump(ica, open(ica_path, "wb"))
         
@@ -320,7 +328,7 @@ async def main(cfg: dotdict) -> None:
             print("Loading PCA")
             pca = pickle.load(open(pca_path, "rb"))
         else:
-            pca = activation_PCA(dataset, n_activations)
+            pca = activation_PCA(activation_dataset, n_activations)
             os.makedirs(os.path.dirname(pca_path), exist_ok=True)
             pickle.dump(pca, open(pca_path, "wb"))
         activation_fn_kwargs.update({"pca": pca})
@@ -332,14 +340,14 @@ async def main(cfg: dotdict) -> None:
             print("Loading NMF")
             nmf = pickle.load(open(nmf_path, "rb"))
         else:
-            nmf = activation_NMF(dataset, n_activations)
+            nmf = activation_NMF(activation_dataset, n_activations)
             os.makedirs(os.path.dirname(nmf_path), exist_ok=True)
             pickle.dump(nmf, open(nmf_path, "wb"))
         activation_fn_kwargs.update({"nmf": nmf})
 
     elif cfg.activation_transform == "feature_dict":
         print("Using feature dict activation transform")
-        activation_fn_kwargs.update({"feature_dict": feature_dict})
+        activation_fn_kwargs.update({"autoencoder": autoencoder})
 
     elif cfg.activation_transform == "random":
         print("Using random activation transform")
@@ -387,6 +395,10 @@ async def main(cfg: dotdict) -> None:
         if os.path.exists(os.path.join(transform_folder, f"feature_{feat_n}")):
             print(f"Feature {feat_n} already exists, skipping")
             continue
+
+        # logan_id_list = [1910, 1597, 1991, 1672,  781,  239, 1375, 1048,  232, 1943,  885]
+        # if feat_n not in logan_id_list:
+        #     continue
         activation_col_names = [f"feature_{feat_n}_activation_{i}" for i in range(OPENAI_FRAGMENT_LEN)]
         read_fields = ["fragment_token_strs", f"feature_{feat_n}_mean", *activation_col_names]
         df = base_df[read_fields].copy()
@@ -422,7 +434,7 @@ async def main(cfg: dotdict) -> None:
     )
         assert len(explanations) == 1
         explanation = explanations[0]
-        print(f"{explanation=}")
+        print(f"Feature {feat_n}, {explanation=}")
 
         # Simulate and score the explanation.
         format = PromptFormat.HARMONY_V4 if SIMULATOR_MODEL_NAME == "gpt-3.5-turbo" else PromptFormat.INSTRUCTION_FOLLOWING
@@ -436,7 +448,7 @@ async def main(cfg: dotdict) -> None:
         )
         scored_simulation = await simulate_and_score(simulator, valid_activation_records)
         score = scored_simulation.get_preferred_score()
-        print(f"score={score:.2f}")
+        print(f"Feature {feat_n}, score={score:.2f}")
 
         feature_name = f"feature_{feat_n}"
         feature_folder = os.path.join(transform_folder, feature_name)
@@ -446,6 +458,7 @@ async def main(cfg: dotdict) -> None:
         # write a file with the explanation and the score
         with open(os.path.join(feature_folder, "explanation.txt"), "w") as f:
             f.write(f"{explanation}\nScore: {score:.2f}\nExplainer model: {EXPLAINER_MODEL_NAME}\nSimulator model: {SIMULATOR_MODEL_NAME}\n")
+
     
     if cfg.upload_to_aws:
         upload_to_aws(transform_folder)
@@ -495,8 +508,9 @@ async def run_openai_example():
     scored_simulation = await simulate_and_score(simulator, valid_activation_records)
     print(f"score={scored_simulation.get_preferred_score():.2f}")
 
-def read_results():
-    results_folder = "auto_interp_results/pythia-70m-deduped_layer2_postnonlin"
+def read_results(cfg):
+    activations_name = f"{cfg.model_name.split('/')[-1]}_layer{cfg.layer}_postnonlin"
+    results_folder = os.path.join("auto_interp_results", activations_name)
     transforms = os.listdir(results_folder)
     transforms = [transform for transform in transforms if os.path.isdir(os.path.join(results_folder, transform))]
     scores = {}
@@ -513,19 +527,26 @@ def read_results():
             print(f"{feature_ndx=}, {transform=}, {score=}")
             scores[transform].append(score)
             feature_ndx += 1
+
     
     # plot the scores as a histogram
     colors = ["red", "blue", "green", "orange", "purple", "pink"]
     for i, transform in enumerate(transforms):
         plt.hist(scores[transform], bins=20, alpha=0.5, label=transform, color=colors[i])
-        plt.axvline(x=np.mean(scores[transform]), linestyle="--", color=colors[i])
+        plt.axvline(x=np.mean(scores[transform]), linestyle="-", color=colors[i])
+        # also want to plot confidence intervals
+        sd = np.std(scores[transform])
+        n = len(scores[transform])
+        ci = 1.96 * sd / np.sqrt(n)
+        plt.axvline(x=np.mean(scores[transform]) + ci, linestyle="--", color=colors[i])
+        plt.axvline(x=np.mean(scores[transform]) - ci, linestyle="--", color=colors[i])
         print(f"{transform=}, mean={np.mean(scores[transform])}")
 
     plt.legend(loc='upper right')
     # plot means on that graph 
 
     # add title and axis labels
-    plt.title("Pythia 70M Deduped Layer 2 Postnonli Auto-Interp Scores")
+    plt.title(f"{cfg.model_name}. Layer {cfg.layer}. Postnonlin auto-interp scores")
     plt.xlabel("Score")
     plt.ylabel("Count")
 
@@ -540,7 +561,12 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "openai":
         asyncio.run(run_openai_example())
     elif len(sys.argv) > 1 and sys.argv[1] == "read_results":
-        read_results()
+        # parse --layer and --model_name from command line using custom parser
+        argparser = argparse.ArgumentParser()
+        argparser.add_argument("--layer", type=int, required=True)
+        argparser.add_argument("--model_name", type=str, required=True)
+        cfg = argparser.parse_args(sys.argv[2:])
+        read_results(cfg)
     else:
-        cfg = parse_args()
-        asyncio.run(main(cfg))
+        default_cfg = parse_args()
+        asyncio.run(main(default_cfg))

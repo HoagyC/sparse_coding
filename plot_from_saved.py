@@ -1,4 +1,4 @@
-from run import *
+from run import run_mmcs_with_larger, AutoEncoder, plot_hist
 
 import torch
 
@@ -23,7 +23,7 @@ def main(filepath: str, cfg: dotdict, outputs_folder: str = "outputs"):
             auto_encoders[l1_ndx][dict_ndx].load_state_dict(model_state_dicts[f"l1={l1_coef:.2E}_ds={dict_size}"])
     
     learned_dicts = [[auto_e.decoder.weight.detach().cpu().data.t() for auto_e in l1] for l1 in auto_encoders]
-    mmcs_with_larger, feats_above_threshold, mcs = run_mmcs_with_larger(cfg, learned_dicts, threshold=cfg.threshold)
+    mmcs_with_larger, feats_above_threshold, mcs = run_mmcs_with_larger(learned_dicts, threshold=cfg.threshold, device=cfg.device)
 
     print("calculated mmcs")
 
