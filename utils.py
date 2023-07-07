@@ -15,7 +15,7 @@ SSH_PYTHON = "/opt/conda/bin/python"
 
 PORT = 22
 
-SSH_DIRECTORY = "sparse_coding"
+SSH_DIRECTORY = "sparse_coding_aidan"
 BUCKET_NAME = "sparse-coding"
 
 ACCESS_KEY_NAME_DICT = {
@@ -60,7 +60,7 @@ def setup():
     sync()
     copy_models()
     copy_secrets()
-    command = f'ssh -p {PORT} {DEST_ADDR} "cd {SSH_DIRECTORY} && {SSH_PYTHON} -m venv .env && source .env/bin/activate && pip install -r requirements.txt" && apt install vim'
+    command = f'ssh -p {VAST_PORT} {dest_addr} "cd {SSH_DIRECTORY} && {SSH_PYTHON} -m venv .env --system-site-packages && source .env/bin/activate && pip install -r requirements.txt" && apt install vim'
     # command = f"ssh -p {VAST_PORT} {dest_addr} \"cd {SSH_DIRECTORY} && echo $PATH\""
     subprocess.call(command, shell=True)
     # clone neuron explainer, until i can load it from pip

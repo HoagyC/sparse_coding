@@ -986,7 +986,8 @@ def run_real_data_model(cfg: dotdict):
     learned_dicts: List[List[Optional[torch.Tensor]]] = [[None for _ in range(len(dict_sizes))] for _ in range(len(l1_range))]
 
     start_time = datetime.now().strftime("%Y%m%d-%H%M%S")
-    outputs_folder = os.path.join(cfg.outputs_folder, start_time)
+    outputs_folder_ = os.path.join(cfg.outputs_folder, start_time)
+    outputs_folder = outputs_folder_
     os.makedirs(outputs_folder, exist_ok=True)
 
     if cfg.use_wandb:
@@ -998,7 +999,7 @@ def run_real_data_model(cfg: dotdict):
     step_n = 0
     for mini_run in tqdm(range(cfg.mini_runs)):
         if cfg.save_after_mini:
-            outputs_folder = os.path.join(outputs_folder, str(mini_run))
+            outputs_folder = os.path.join(outputs_folder_, str(mini_run))
             os.makedirs(outputs_folder, exist_ok=True)
 
         for l1_ndx, dict_size_ndx in list(itertools.product(range(len(l1_range)), range(len(dict_sizes)))):

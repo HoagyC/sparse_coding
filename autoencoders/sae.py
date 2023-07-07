@@ -119,5 +119,5 @@ class TiedSAE(nn.Module):
 
     def configure_optimizers(self, **kwargs):
         return torch.optim.Adam(self.parameters(), **kwargs)
-    
+
 Encoder.register(TiedSAE)
