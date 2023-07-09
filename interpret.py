@@ -22,7 +22,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformer_lens import HookedTransformer
-from transformers import GPT2Tokenizer
+from transformers import GPT2Tokenizer, AutoTokenizer
 
 from argparser import parse_args
 from comparisons import NoCredentialsError
@@ -78,9 +78,15 @@ def load_neuron(
     return neuron_record
 
 def make_activation_dataset(cfg, model):
-    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+    if cfg.model_name in ["gpt2", "nanoGPT"]:
+        tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+    elif cfg.model_name == "EleutherAI/pythia-70m-deduped":
+        tokenizer = AutoTokenizer.from_pretrained("EleutherAI/pythia-70m-deduped")
+    else:
+        raise NotImplementedError
     cfg.n_chunks = 1
-    dataset_name = cfg.dataset_name.split("/")[-1] + "-" + cfg.model_name.split("/")[-1] + "-" + str(cfg.layer)
+    dataset_name = cfg.dataset_name.split("/")[-
+    1] + "-" + cfg.model_name.split("/")[-1] + "-" + str(cfg.layer)
     cfg.dataset_folder = os.path.join(cfg.datasets_folder, dataset_name)
     if not os.path.exists(cfg.dataset_folder) or len(os.listdir(cfg.dataset_folder)) == 0:
         setup_data(cfg, tokenizer, model, use_baukit=True, chunk_size_gb=10)
@@ -185,12 +191,15 @@ def make_feature_activation_dataset(cfg, model: HookedTransformer, activation_fn
     Takes a dict of features and returns the top k activations for each feature in pile10k
     """
     sentence_dataset = load_dataset("openwebtext", split="train")
-    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+    if cfg.model_name == "nanoGPT":
+        tokenizer_model_str = "gpt2"
+    else:
+        tokenizer_model_str = cfg.model_name
+    
     tensor_name = make_tensor_name(cfg)
     # make list of sentence, tokenization pairs
-
     print(f"Computing internals for all {len(sentence_dataset)} sentences")
-    tokenizer_model = HookedTransformer.from_pretrained("gpt2", device="cpu") # as copilot likes to say, this is a hack
+    tokenizer_model = HookedTransformer.from_pretrained(tokenizer_model_str, device="cpu") # as copilot likes to say, this is a hack
 
     # Make dataframe with columns for each feature, and rows for each sentence fragment
     # each row should also have the full sentence, the current tokens and the previous tokens
@@ -392,13 +401,13 @@ async def main(cfg: dotdict) -> None:
 
         
     for feat_n in range(0, cfg.n_feats_explain):
-        if os.path.exists(os.path.join(transform_folder, f"feature_{feat_n}")):
-            print(f"Feature {feat_n} already exists, skipping")
-            continue
-
-        # logan_id_list = [1910, 1597, 1991, 1672,  781,  239, 1375, 1048,  232, 1943,  885]
-        # if feat_n not in logan_id_list:
+        # if os.path.exists(os.path.join(transform_folder, f"feature_{feat_n}")):
+        #     print(f"Feature {feat_n} already exists, skipping")
         #     continue
+
+        logan_id_list = [1910, 1597, 1991, 1672,  781,  239, 1375, 1048,  232, 1943,  885]
+        if feat_n not in logan_id_list:
+            continue
         activation_col_names = [f"feature_{feat_n}_activation_{i}" for i in range(OPENAI_FRAGMENT_LEN)]
         read_fields = ["fragment_token_strs", f"feature_{feat_n}_mean", *activation_col_names]
         df = base_df[read_fields].copy()
@@ -458,14 +467,10 @@ async def main(cfg: dotdict) -> None:
         # write a file with the explanation and the score
         with open(os.path.join(feature_folder, "explanation.txt"), "w") as f:
             f.write(f"{explanation}\nScore: {score:.2f}\nExplainer model: {EXPLAINER_MODEL_NAME}\nSimulator model: {SIMULATOR_MODEL_NAME}\n")
-
+        
     
     if cfg.upload_to_aws:
         upload_to_aws(transform_folder)
-
-        
-        
-
 
 
 async def run_openai_example():

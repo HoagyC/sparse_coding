@@ -10,12 +10,12 @@ from botocore.exceptions import NoCredentialsError, ClientError
 
 VAST_NUM = 4
 # DEST_ADDR = f"root@ssh{VAST_NUM}.vast.ai"
-DEST_ADDR = "ssh mchorse@207.53.234.65"
+DEST_ADDR = "mchorse@198.176.97.26"
 SSH_PYTHON = "/opt/conda/bin/python"
 
 PORT = 22
 
-SSH_DIRECTORY = "sparse_coding_aidan"
+SSH_DIRECTORY = "sparse_coding"
 BUCKET_NAME = "sparse-coding"
 
 ACCESS_KEY_NAME_DICT = {
@@ -60,7 +60,7 @@ def setup():
     sync()
     copy_models()
     copy_secrets()
-    command = f'ssh -p {VAST_PORT} {dest_addr} "cd {SSH_DIRECTORY} && {SSH_PYTHON} -m venv .env --system-site-packages && source .env/bin/activate && pip install -r requirements.txt" && apt install vim'
+    command = f'ssh -p {PORT} {DEST_ADDR} "cd {SSH_DIRECTORY} && {SSH_PYTHON} -m venv .env --system-site-packages && source .env/bin/activate && pip install -r requirements.txt" && apt install vim'
     # command = f"ssh -p {VAST_PORT} {dest_addr} \"cd {SSH_DIRECTORY} && echo $PATH\""
     subprocess.call(command, shell=True)
     # clone neuron explainer, until i can load it from pip
