@@ -112,15 +112,33 @@ class FunctionalEnsemble():
             leaf.share_memory_()
     
     def step_batch(self, minibatches, expand_dims=True):
-        if expand_dims:
-            minibatches = minibatches.expand(self.n_models, *minibatches.shape)
-        
-        def calc_grads(params, buffers, batch):
-            return torch.func.grad(self.loss_func)(params, buffers, batch)
-        
-        grads = torch.vmap(calc_grads)(self.params, self.buffers, minibatches)
-        updates, self.optim_states = torch.vmap(self.optimizer.update)(grads, self.optim_states)
-        torchopt.apply_updates(self.params, updates)
+        with torch.no_grad():
+            if expand_dims:
+                minibatches = minibatches.expand(self.n_models, *minibatches.shape)
+            
+            def calc_grads(params, buffers, batch):
+                return torch.func.grad(self.loss_func, has_aux=True)(params, buffers, batch)
+            
+            for k in self.params.keys():
+                if torch.isnan(self.params[k]).any():
+                    raise ValueError("NaN parameter encountered for key {}".format(k))
+
+            # check for nan
+            grads, (loss, aux) = torch.vmap(calc_grads)(self.params, self.buffers, minibatches)
+
+            for k in loss.keys():
+                if torch.isnan(loss[k]).any():
+                    raise ValueError("NaN loss encountered for key {}".format(k))
+
+            updates, self.optim_states = torch.vmap(self.optimizer.update)(grads, self.optim_states)
+            torchopt.apply_updates(self.params, updates)
+
+            for k in loss.keys():
+                loss[k] = loss[k].detach().cpu().numpy()
+            for k in aux.keys():
+                aux[k] = aux[k].detach().cpu().numpy()
+
+            return loss, aux
 
 # leaks memory somewhere; DO NOT USE
 class VectorizedEnsemble():

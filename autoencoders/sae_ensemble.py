@@ -18,7 +18,7 @@ class SAE(nn.Module):
 
         self.decoder = nn.Parameter(torch.empty((n_dict_components, activation_size), device=self.device))
         # Initialize the decoder weights orthogonally
-        nn.init.orthogonal_(self.decoder)
+        nn.init.xavier_uniform_(self.decoder)
 
         self.encoder = nn.Sequential(nn.Linear(activation_size, n_dict_components, device=self.device), nn.ReLU())
         self.register_buffer("l1_coef", torch.tensor(l1_coef))
@@ -40,30 +40,46 @@ class SAE(nn.Module):
 
 class FunctionalSAE:
     @staticmethod
-    def init(activation_size, n_dict_components, l1_alpha, device=None):
+    def init(activation_size, n_dict_components, l1_alpha, bias_decay=0.0, device=None):
         params = {}
         buffers = {}
 
-        params["decoder"] = torch.empty((n_dict_components, activation_size), device=device)
-        nn.init.orthogonal_(params["decoder"])
-
         params["encoder"] = torch.empty((n_dict_components, activation_size), device=device)
-        nn.init.orthogonal_(params["encoder"])
+        nn.init.xavier_uniform_(params["encoder"])
+
+        params["encoder_bias"] = torch.empty((n_dict_components,), device=device)
+        nn.init.zeros_(params["encoder_bias"])
+
+        params["decoder"] = torch.empty((n_dict_components, activation_size), device=device)
+        nn.init.xavier_uniform_(params["decoder"])
 
         buffers["l1_alpha"] = torch.tensor(l1_alpha, device=device)
-    
+        buffers["bias_decay"] = torch.tensor(bias_decay, device=device)
+
         return params, buffers
     
     @staticmethod
     def loss(params, buffers, batch):
         c = torch.einsum("nd,bd->bn", params["encoder"], batch)
-        c = F.relu(c)
+        c = c + params["encoder_bias"]
+        c = torch.clamp(c, min=0.0)
 
-        normed_weights = nn.functional.normalize(params["decoder"], dim=0)
+        encoder_norms = torch.norm(params["encoder"], 2, dim=-1)
+        normed_weights = params["encoder"] / torch.clamp(encoder_norms, 1e-8)[:, None]
 
         x_hat = torch.einsum("nd,bn->bd", normed_weights, c)
 
-        l_reconstruction = F.mse_loss(x_hat, batch)
-        l_l1 = buffers["l1_alpha"] * torch.norm(c, 1, dim=1).mean()
+        l_reconstruction = torch.norm(x_hat - batch, 2, dim=-1).mean()
+        l_l1 = buffers["l1_alpha"] * torch.norm(c, 1, dim=-1).mean()
+        l_bias_decay = buffers["bias_decay"] * torch.norm(params["decoder"], 2)
         
-        return l_reconstruction + l_l1
+        loss_data = {
+            "l_reconstruction": l_reconstruction,
+            "l_l1": l_l1,
+        }
+
+        aux_data = {
+            "c": c,
+        }
+
+        return l_reconstruction + l_l1 + l_bias_decay, (loss_data, aux_data)
