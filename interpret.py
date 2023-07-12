@@ -142,8 +142,19 @@ def flex_activation_function(input, activation_str, **kwargs):
     elif activation_str == "random":
         assert "random_matrix" in kwargs
         return input @ kwargs["random_matrix"].to(kwargs["device"])
+    elif activation_str == "random_bias":
+        assert "random_matrix" in kwargs
+        assert "bias" in kwargs
+        assert len(kwargs["bias"]) <= input.shape[1]
+        return torch.relu(input @ kwargs["random_matrix"].to(kwargs["device"]) + kwargs["bias"])
     elif activation_str == "neuron_basis":
         return input
+    elif activation_str == "neuron_basis_bias":
+        # here we take the neuron basis, add a (probably negative) bias term, and then apply a relu
+        assert "bias" in kwargs
+        assert len(kwargs["bias"]) <= input.shape[1]
+        breakpoint()
+        return torch.relu(input + kwargs["bias"][:input.shape[1]])
     elif activation_str == "feature_dict":
         assert "autoencoder" in kwargs
         reconstruction, dict_activations = kwargs["autoencoder"](input)
@@ -321,7 +332,7 @@ async def main(cfg: dotdict) -> None:
         raise ValueError("Model name not recognised")
     
     # Load feature dict
-    if cfg.activation_transform == "feature_dict":
+    if cfg.activation_transform in ["feature_dict", "neuron_basis_bias", "random_bias"]:
         assert cfg.load_interpret_autoencoder is not None
         autoencoder = pickle.load(open(cfg.load_interpret_autoencoder, "rb")).to(cfg.device)
     
@@ -332,7 +343,9 @@ async def main(cfg: dotdict) -> None:
     activation_fn_kwargs = {"device": cfg.device}
     if cfg.activation_transform == "neuron_basis":
         print("Using neuron basis activation transform")
-
+    elif cfg.activation_transform == "neuron_basis_bias":
+        print("Using neuron basis bias activation transform")
+        activation_fn_kwargs.update({"bias": autoencoder.encoder[0].bias})
     elif cfg.activation_transform == "ica":
         print("Using ICA activation transform")
         ica_path = os.path.join("auto_interp_results", activations_name, "ica_1gb.pkl")
@@ -384,7 +397,21 @@ async def main(cfg: dotdict) -> None:
             random_direction_matrix = torch.randn(activation_width, activation_width)
             os.makedirs(os.path.dirname(random_path), exist_ok=True)
             pickle.dump(random_direction_matrix, open(random_path, "wb"))
+        
         activation_fn_kwargs.update({"random_matrix": random_direction_matrix})
+    elif cfg.activation_transform == "random_bias":
+        print("Using random activation transform")
+        random_path = os.path.join("auto_interp_results", activations_name, "random_dirs.pkl")
+        if os.path.exists(random_path):
+            print("Loading random directions")
+            random_direction_matrix = pickle.load(open(random_path, "rb"))
+        else:
+            random_direction_matrix = torch.randn(activation_width, activation_width)
+            os.makedirs(os.path.dirname(random_path), exist_ok=True)
+            pickle.dump(random_direction_matrix, open(random_path, "wb"))
+        
+        activation_fn_kwargs.update({"random_matrix": random_direction_matrix})
+        activation_fn_kwargs.update({"bias": autoencoder.encoder[0].bias})
 
     else:
         raise ValueError(f"Activation transform {cfg.activation_transform} not recognised")
@@ -397,7 +424,7 @@ async def main(cfg: dotdict) -> None:
     transform_folder = os.path.join("auto_interp_results", activations_name, transform_name)
     df_loc = os.path.join(transform_folder, f"activation_df.hdf")
 
-    if not (cfg.load_activation_dataset and os.path.exists(df_loc)):
+    if not (cfg.load_activation_dataset and os.path.exists(df_loc)) or cfg.refresh_data:
         base_df = make_feature_activation_dataset(
             cfg.model_name,
             model,
