@@ -29,6 +29,11 @@ def sync():
     command = f'rsync -rv --filter ":- .gitignore" --exclude ".git" -e "ssh -p {PORT}" . {DEST_ADDR}:{SSH_DIRECTORY}'
     subprocess.call(command, shell=True)
 
+def autointerp_sync():
+    """Sync the local directory with the remote host's auto interp results, excluding hdf files."""
+    command = f'rsync -r --exclude "*.hdf" -e "ssh {DEST_ADDR}:{SSH_DIRECTORY}/auto_interp_results .'
+    print(command)
+    subprocess.call(command, shell=True)
 
 def copy_models():
     """Copy the models from local directory to the remote host."""
@@ -192,3 +197,5 @@ if __name__ == "__main__":
         setup()
     elif sys.argv[1] == "secrets":
         copy_secrets()
+    elif sys.argv[1] == "interp_sync":
+        autointerp_sync()
