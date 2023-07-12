@@ -60,11 +60,8 @@ def setup():
     sync()
     copy_models()
     copy_secrets()
-    command = f'ssh -p {PORT} {DEST_ADDR} "cd {SSH_DIRECTORY} && {SSH_PYTHON} -m venv .env --system-site-packages && source .env/bin/activate && pip install -r requirements.txt" && apt install vim'
+    command = f'ssh -p {PORT} {DEST_ADDR} "cd {SSH_DIRECTORY} && sudo apt -y install python3.9 python3.9-venv && python3.9 -m venv .env --system-site-packages && source .env/bin/activate && pip install -r requirements.txt" && apt install vim'
     # command = f"ssh -p {VAST_PORT} {dest_addr} \"cd {SSH_DIRECTORY} && echo $PATH\""
-    subprocess.call(command, shell=True)
-    # clone neuron explainer, until i can load it from pip
-    command = f'ssh -p {PORT} {DEST_ADDR} "cd sparse_coding && git clone https://github.com/openai/automated-interpretability && mv automated-interpretability/neuron-explainer/neuron_explainer/ neuron_explainer"'
     subprocess.call(command, shell=True)
 
 class dotdict(dict):
@@ -90,27 +87,18 @@ class dotdict(dict):
     def __delattr__(self, name):
         del self[name]
 
-def make_tensor_name(cfg):
-    if cfg.use_residual:
-        if cfg.model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]:
-            tensor_name = f"blocks.{cfg.layer}.hook_resid_post"
-            if cfg.model_name == "gpt2":
-                cfg.mlp_width = 768
-            elif cfg.model_name == "EleutherAI/pythia-70m-deduped":
-                cfg.mlp_width = 512
+def make_tensor_name(layer: int, use_residual: bool, model_name: str) -> str:
+    """Make the tensor name for a given layer and model."""
+    if use_residual:
+        if model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]:
+            tensor_name = f"blocks.{layer}.hook_resid_post"
     else:
-        if cfg.model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]:
-            tensor_name = f"blocks.{cfg.layer}.mlp.hook_post"
-            if cfg.model_name == "gpt2":
-                cfg.mlp_width = 3072
-            elif cfg.model_name == "EleutherAI/pythia-70m-deduped":
-                cfg.mlp_width = 2048
-        elif cfg.model_name == "nanoGPT":
-            tensor_name = f"transformer.h.{cfg.layer}.mlp.c_fc"
-            cfg.mlp_width = 128
+        if model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]:
+            tensor_name = f"blocks.{layer}.mlp.hook_post"
+        elif model_name == "nanoGPT":
+            tensor_name = f"transformer.h.{layer}.mlp.c_fc"
         else:
-            raise NotImplementedError(f"Model {cfg.model_name} not supported")
-
+            raise NotImplementedError(f"Model {model_name} not supported")
     return tensor_name
 
 def upload_to_aws(local_file_name) -> bool:

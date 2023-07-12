@@ -184,52 +184,70 @@ def process_fragment(cfg, fragment_id, fragment_tokens, activation_data, tokeniz
 
     return fragment_dict
 
-def make_feature_activation_dataset(cfg, model: HookedTransformer, activation_fn_kwargs: Dict, use_baukit: bool = False):
+def make_feature_activation_dataset(
+        model_name: str,
+        model: HookedTransformer, 
+        layer: int,
+        use_residual: bool,
+        activation_fn_name: str,
+        activation_fn_kwargs: Dict, 
+        activation_dim: int,
+        use_baukit: bool = False,
+        device: str = "cpu",
+        n_fragments = OPENAI_MAX_FRAGMENTS,
+        random_fragment = True, # used for debugging
+    ):
     """
-    Takes a dict of features and returns the top k activations for each feature in pile10k
+    Takes a specified point of a model, and a dataset. 
+    Returns a dataset which contains the activations of the model at that point, 
+    for each fragment in the dataset, transformed into the feature space
     """
-    sentence_dataset = load_dataset("openwebtext", split="train")
-    if cfg.model_name == "nanoGPT":
-        tokenizer_model_str = "gpt2"
+    sentence_dataset = load_dataset("openwebtext", split="train", streaming=True)
+
+    if model_name == "nanoGPT":
+        tokenizer_model = HookedTransformer.from_pretrained("gpt2")
     else:
-        tokenizer_model_str = cfg.model_name
+        tokenizer_model = model
     
-    tensor_name = make_tensor_name(cfg)
+    tensor_name = make_tensor_name(layer, use_residual, model_name)
     # make list of sentence, tokenization pairs
-    print(f"Computing internals for all {len(sentence_dataset)} sentences")
-    tokenizer_model = HookedTransformer.from_pretrained(tokenizer_model_str, device="cpu") # as copilot likes to say, this is a hack
+    
+    iter_dataset = iter(sentence_dataset)
 
     # Make dataframe with columns for each feature, and rows for each sentence fragment
     # each row should also have the full sentence, the current tokens and the previous tokens
 
     n_thrown = 0
     n_added = 0
-    batch_size = 20
+    batch_size = min(20, n_fragments)
 
     fragment_token_ids_list = []
     fragment_token_strs_list = []
 
-    activation_means_table = np.zeros((OPENAI_MAX_FRAGMENTS, cfg.mlp_width), dtype=np.float16)
-    activation_data_table = np.zeros((OPENAI_MAX_FRAGMENTS, cfg.mlp_width * OPENAI_FRAGMENT_LEN), dtype=np.float16)
-
-    iter_dataset = iter(sentence_dataset)
+    activation_means_table = np.zeros((n_fragments, activation_dim), dtype=np.float16)
+    activation_data_table = np.zeros((n_fragments, activation_dim * OPENAI_FRAGMENT_LEN), dtype=np.float16)
     with torch.no_grad():
-        while n_added < OPENAI_MAX_FRAGMENTS:
+        while n_added < n_fragments:
             fragments: List[torch.Tensor] = []
+            fragment_strs: List[str] = []
             while len(fragments) < batch_size:
                 print(f"Added {n_added} fragments, thrown {n_thrown} fragments\t\t\t\t\t\t", end="\r")
                 sentence = next(iter_dataset)
                 # split the sentence into fragments
                 sentence_tokens = tokenizer_model.to_tokens(sentence["text"], prepend_bos=False)
                 n_tokens = sentence_tokens.shape[1]
-                # get a random fragment from the sentence - only taking one fragment per sentence so examples aren't correlated
-                token_start = np.random.randint(0, n_tokens - OPENAI_FRAGMENT_LEN)
+                # get a random fragment from the sentence - only taking one fragment per sentence so examples aren't correlated]
+                if random_fragment:
+                    token_start = np.random.randint(0, n_tokens - OPENAI_FRAGMENT_LEN)
+                else:
+                    token_start = 0
                 fragment_tokens = sentence_tokens[:, token_start:token_start + OPENAI_FRAGMENT_LEN]
                 token_strs = tokenizer_model.to_str_tokens(fragment_tokens[0])
                 if REPLACEMENT_CHAR in token_strs:
                     n_thrown += 1
                     continue
 
+                fragment_strs.append(token_strs)
                 fragments.append(fragment_tokens)
             
             tokens = torch.cat(fragments, dim=0)
@@ -238,18 +256,18 @@ def make_feature_activation_dataset(cfg, model: HookedTransformer, activation_fn
             if use_baukit:
                 with Trace(model, tensor_name) as ret:
                     _ = model(tokens)
-                    mlp_activation_data = ret.output.to(cfg.device)
+                    mlp_activation_data = ret.output.to(device)
                     mlp_activation_data = nn.functional.gelu(mlp_activation_data)
             else:
                 _, cache = model.run_with_cache(tokens)
-                mlp_activation_data = cache[tensor_name].to(cfg.device)  # NOTE: could do all layers at once, but currently just doing 1 layer
+                mlp_activation_data = cache[tensor_name].to(device)  # NOTE: could do all layers at once, but currently just doing 1 layer
 
             for i in range(batch_size):
                 fragment_tokens = tokens[i:i+1, :]
                 activation_data = mlp_activation_data[i:i+1, :].squeeze(0)
                 token_ids =  fragment_tokens[0].tolist()
                     
-                feature_activation_data = flex_activation_function(activation_data, cfg.activation_transform, **activation_fn_kwargs)
+                feature_activation_data = flex_activation_function(activation_data, activation_fn_name, **activation_fn_kwargs)
                 feature_activation_means = torch.mean(feature_activation_data, dim=0)
 
                 activation_means_table[n_added, :] = feature_activation_means.cpu().numpy()
@@ -258,11 +276,11 @@ def make_feature_activation_dataset(cfg, model: HookedTransformer, activation_fn
                 activation_data_table[n_added, :] = feature_activation_data.flatten()
     
                 fragment_token_ids_list.append(token_ids)
-                fragment_token_strs_list.append(token_strs)
+                fragment_token_strs_list.append(fragment_strs[i])
                 
                 n_added += 1
 
-                if n_added >= OPENAI_MAX_FRAGMENTS:
+                if n_added >= n_fragments:
                     break
             
     print(f"Added {n_added} fragments, thrown {n_thrown} fragments")
@@ -271,10 +289,10 @@ def make_feature_activation_dataset(cfg, model: HookedTransformer, activation_fn
     df = pd.DataFrame()
     df["fragment_token_ids"] = fragment_token_ids_list
     df["fragment_token_strs"] = fragment_token_strs_list
-    means_column_names = [f"feature_{i}_mean" for i in range(cfg.mlp_width)]
-    activations_column_names = [f"feature_{i}_activation_{j}" for j in range(OPENAI_FRAGMENT_LEN) for i in range(cfg.mlp_width)] # nested for loops are read left to right
+    means_column_names = [f"feature_{i}_mean" for i in range(activation_dim)]
+    activations_column_names = [f"feature_{i}_activation_{j}" for j in range(OPENAI_FRAGMENT_LEN) for i in range(activation_dim)] # nested for loops are read left to right
     
-    assert feature_activation_data.shape == (OPENAI_FRAGMENT_LEN, cfg.mlp_width)
+    assert feature_activation_data.shape == (OPENAI_FRAGMENT_LEN, activation_dim)
     df = pd.concat([df, pd.DataFrame(activation_means_table, columns=means_column_names)], axis=1)
     df = pd.concat([df, pd.DataFrame(activation_data_table, columns=activations_column_names)], axis=1)
     print(f"Threw away {n_thrown} fragments, made {len(df)} fragments")
@@ -380,7 +398,17 @@ async def main(cfg: dotdict) -> None:
     df_loc = os.path.join(transform_folder, f"activation_df.hdf")
 
     if not (cfg.load_activation_dataset and os.path.exists(df_loc)):
-        base_df = make_feature_activation_dataset(cfg, model, activation_fn_kwargs, use_baukit=use_baukit)
+        base_df = make_feature_activation_dataset(
+            cfg.model_name,
+            model,
+            layer=cfg.layer,
+            use_residual=cfg.use_residual,
+            activation_fn_name=cfg.activation_transform,
+            activation_fn_kwargs=activation_fn_kwargs,
+            activation_dim=activation_width,
+            device=cfg.device,
+            use_baukit=use_baukit,
+        )
         # save the dataset, saving each column separately so that we can retrive just the columns we want later
         print(f"Saving dataset to {df_loc}")
         os.makedirs(transform_folder, exist_ok=True)
@@ -395,17 +423,16 @@ async def main(cfg: dotdict) -> None:
     os.makedirs(transform_folder, exist_ok=True)
     if cfg.activation_transform == "feature_dict":
         torch.save(autoencoder, os.path.join(transform_folder, "autoencoder.pt"))
-
-
         
     for feat_n in range(0, cfg.n_feats_explain):
-        # if os.path.exists(os.path.join(transform_folder, f"feature_{feat_n}")):
-        #     print(f"Feature {feat_n} already exists, skipping")
+        if os.path.exists(os.path.join(transform_folder, f"feature_{feat_n}")):
+            print(f"Feature {feat_n} already exists, skipping")
+            continue
+
+        # logan_id_list = [1910, 1597, 1991, 1672,  781,  239, 1375, 1048,  232, 1943,  885]
+        # if feat_n not in logan_id_list:
         #     continue
 
-        logan_id_list = [1910, 1597, 1991, 1672,  781,  239, 1375, 1048,  232, 1943,  885]
-        if feat_n not in logan_id_list:
-            continue
         activation_col_names = [f"feature_{feat_n}_activation_{i}" for i in range(OPENAI_FRAGMENT_LEN)]
         read_fields = ["fragment_token_strs", f"feature_{feat_n}_mean", *activation_col_names]
         df = base_df[read_fields].copy()
@@ -415,12 +442,29 @@ async def main(cfg: dotdict) -> None:
         for i, row in sorted_df.iterrows():
             top_activation_records.append(ActivationRecord(row["fragment_token_strs"], [row[f"feature_{feat_n}_activation_{j}"] for j in range(OPENAI_FRAGMENT_LEN)]))
         
+        random_activation_records: List[ActivationRecord] = []
         # Adding random fragments
-        random_df = df.sample(n=TOTAL_EXAMPLES)
-        random_activation_records = []
-        for i, row in random_df.iterrows():
-            random_activation_records.append(ActivationRecord(row["fragment_token_strs"], [row[f"feature_{feat_n}_activation_{j}"] for j in range(OPENAI_FRAGMENT_LEN)]))
+        # random_df = df.sample(n=TOTAL_EXAMPLES)
+        # for i, row in random_df.iterrows():
+        #     random_activation_records.append(ActivationRecord(row["fragment_token_strs"], [row[f"feature_{feat_n}_activation_{j}"] for j in range(OPENAI_FRAGMENT_LEN)]))
         
+        # making sure that the have some variation in each of the features, though need to be careful that this doesn't bias the results
+        random_ordering = torch.randperm(len(df)).tolist()
+        skip_feature = False
+        while len(random_activation_records) < TOTAL_EXAMPLES:
+            try:
+                i = random_ordering.pop()
+            except IndexError:  
+                skip_feature = True
+                break
+            # if there are no activations for this fragment, skip it
+            if df.iloc[i][f"feature_{feat_n}_mean"] == 0:
+                continue
+            random_activation_records.append(ActivationRecord(df.iloc[i]["fragment_token_strs"], [df.iloc[i][f"feature_{feat_n}_activation_{j}"] for j in range(OPENAI_FRAGMENT_LEN)]))
+        if skip_feature:
+            print(f"Skipping feature {feat_n} due to lack of activating examples")
+            continue
+
         neuron_id = NeuronId(layer_index=2, neuron_index=feat_n)
 
         neuron_record = NeuronRecord(neuron_id=neuron_id, random_sample=random_activation_records, most_positive_activation_records=top_activation_records)
@@ -560,6 +604,7 @@ def read_results(cfg):
     plt.savefig(save_path)
 
 
+
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "openai":
         asyncio.run(run_openai_example())
@@ -572,4 +617,5 @@ if __name__ == "__main__":
         read_results(cfg)
     else:
         default_cfg = parse_args()
+        default_cfg.chunk_size_gb = 10
         asyncio.run(main(default_cfg))

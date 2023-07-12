@@ -757,7 +757,7 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
                     momentum_mag = get_size_of_momentum(cfg, optimizer)
 
                     print(
-                        f"L1 Coef: {cfg.l1_alpha:.2E} | Dict ratio: {cfg.n_components_dictionary / cfg.mlp_width} | "
+                        f"L1 Coef: {cfg.l1_alpha:.2E} | Dict ratio: {cfg.n_components_dictionary / cfg.activation_dim} | "
                         + f"Batch: {batch_idx+1}/{len(dataset)} | Chunk: {chunk_ndx+1}/{n_chunks_in_folder} | Minirun: {mini_run + 1}/{n_mini_runs} | "
                         + f"Epoch: {epoch+1}/{cfg.epochs} | Reconstruction loss: {running_recon_loss:.6f} | l1: {l_l1:.6f}"
                     )
@@ -784,10 +784,10 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
     return auto_encoder, running_recon_loss, running_l1_loss, feature_activations, total_batches
 
 
-def make_activation_dataset(cfg, sentence_dataset: DataLoader, model: HookedTransformer, tensor_name: str, baukit: bool = False, chunk_size_gb: int = 2) -> pd.DataFrame:
+def make_activation_dataset(cfg, sentence_dataset: DataLoader, model: HookedTransformer, tensor_name: str, baukit: bool = False) -> pd.DataFrame:
     print(f"Running model and saving activations to {cfg.dataset_folder}")
     with torch.no_grad():
-        chunk_size = chunk_size_gb * (2**30)  # 2GB
+        chunk_size = cfg.chunk_size_gb * (2**30)  # 2GB
         activation_size = cfg.activation_dim * 2 * cfg.model_batch_size * cfg.max_length  # 3072 mlp activations, 2 bytes per half, 1024 context window
         max_chunks = chunk_size // activation_size
         dataset = []
@@ -827,7 +827,6 @@ def save_activation_chunk(dataset, n_saved_chunks, cfg):
     with open(cfg.dataset_folder + "/" + str(n_saved_chunks) + ".pkl", "wb") as f:
         pickle.dump(dataset_obj, f)
     
-
 
 def run_mmcs_with_larger(learned_dicts, threshold=0.9, device: Union[str, torch.device] = "cpu"):
     n_l1_coefs, n_dict_sizes = len(learned_dicts), len(learned_dicts[0])
@@ -901,16 +900,16 @@ def get_size_of_momentum(cfg: dotdict, optimizer: torch.optim.Optimizer):
     assert adam_momentum_tensor.shape == decoder_shape
     return adam_momentum_tensor.detach().abs().sum().item()  # sum of absolute values of all elements
 
-def setup_data(cfg, tokenizer, model, use_baukit=False, start_line=0, chunk_size_gb=2):
+def setup_data(cfg, tokenizer, model, use_baukit=False, start_line=0):
     sentence_len_lower = 1000
     max_lines = int((cfg.chunk_size_gb * 1e9  * cfg.n_chunks)/ (cfg.activation_dim * sentence_len_lower * 2))
     print(f"Setting max_lines to {max_lines} to minimize sentences processed")
 
     sentence_dataset = make_sentence_dataset(cfg.dataset_name, max_lines=max_lines, start_line=start_line)
-    tensor_name = make_tensor_name(cfg)
+    tensor_name = make_tensor_name(cfg.layer, cfg.use_residual, cfg.model_name)
     tokenized_sentence_dataset, bits_per_byte = chunk_and_tokenize(sentence_dataset, tokenizer, max_length=cfg.max_length)
     token_loader = DataLoader(tokenized_sentence_dataset, batch_size=cfg.model_batch_size, shuffle=True)
-    make_activation_dataset(cfg, token_loader, model, tensor_name, use_baukit, chunk_size_gb=chunk_size_gb)
+    make_activation_dataset(cfg, token_loader, model, tensor_name, use_baukit)
     n_lines = len(sentence_dataset)
     return n_lines
 
