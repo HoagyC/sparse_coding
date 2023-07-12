@@ -51,7 +51,7 @@ def dispatch_on_chunk(ensembles, args, tags, dataset, logger=None, interval=0):
             " | ", *[
                 progressbar.Variable(tags[i], precision=0, width=1, format="{formatted_value}") for i in range(len(tags))
             ]
-        ], max_value=sum(n_batches for _, _, _, n_batches in queues))
+        ], max_value=sum(n_batches + 1 for _, _, _, n_batches in queues))
 
     while True:
         done = [finished.value for _, finished, _, _ in queues]
@@ -95,18 +95,21 @@ def train_as_process(instance, args, queues, logger, interval):
 
     logger_data = []
     losses = []
+    aux_buffer = []
     for n_batch, batch_idxs in enumerate(iter(sampler)):
         batch = dataset[batch_idxs].to(device)
         
         loss, aux = ensemble.step_batch(batch)
 
         losses.append(loss)
+        aux_buffer.append(aux)
 
         progress.value = n_batch + 1
 
         if logger is not None and n_batch % interval == 0:
-            data = logger(ensemble, n_batch, loss, aux)
+            data = logger(ensemble, n_batch, logger_data, losses, aux_buffer)
             logger_data.append((n_batch, data))
+            aux_buffer = []
     
     finished.value = 1
 
@@ -114,8 +117,6 @@ def train_as_process(instance, args, queues, logger, interval):
         queue.put((losses, logger_data))
     else:
         queue.put(losses)
-
-    return
 
 if __name__ == "__main__":
     from autoencoders.sae_ensemble import FunctionalSAE

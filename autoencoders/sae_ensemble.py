@@ -74,6 +74,7 @@ class FunctionalSAE:
         l_bias_decay = buffers["bias_decay"] * torch.norm(params["decoder"], 2)
         
         loss_data = {
+            "loss": l_reconstruction + l_l1 + l_bias_decay,
             "l_reconstruction": l_reconstruction,
             "l_l1": l_l1,
         }

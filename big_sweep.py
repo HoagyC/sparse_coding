@@ -126,6 +126,19 @@ def init_ensembles(cfg):
 
     return ensembles, ensemble_args, ensemble_tags
 
+def dead_features_logger(ensemble, n_batch, logger_data, losses, aux_buffer):
+    # c: np.array(n_models, n_logs, batch_size, n_features)
+    c = np.stack([aux["c"] for aux in aux_buffer], axis=1)
+    # count_nonzero: np.array(n_models, n_features)
+    count_nonzero = (c != 0).sum(axis=(1, 2))
+    # mean: np.array(n_models, n_features)
+    mean = c.mean(axis=(1, 2))
+    # mean_nonzero: np.array(n_models, n_features)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mean_nonzero = c.sum(axis=(1, 2)) / count_nonzero
+        mean_nonzero[np.isnan(mean_nonzero)] = 0
+    return {"mean": mean, "mean_nonzero": mean_nonzero, "count_nonzero": count_nonzero}
+
 def main():
     torch.set_grad_enabled(False)
     mp.set_start_method("spawn", force=True)
@@ -136,9 +149,10 @@ def main():
 
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.dataset_folder = "activation_data"
+    cfg.output_folder = "output"
 
     cfg.batch_size = 1024
-    cfg.lr = 3e-4
+    cfg.lr = 1e-3
 
     os.makedirs(cfg.dataset_folder, exist_ok=True)
 
@@ -171,23 +185,33 @@ def main():
         chunk_loc = os.path.join(cfg.dataset_folder, f"{chunk_idx}.pt")
         chunk = torch.load(chunk_loc).to(dtype=torch.float32)
 
-        outputs = dispatch_on_chunk(ensembles, args, tags, chunk)
+        print(chunk.shape[0] // cfg.batch_size)
 
-        sum_losses = [0 for _ in range(10)]
-        for j in range(len(ensembles)):
-            for k in range(10):
-                sum_losses[k] += outputs[j][k]["l_l1"].sum().item()
+        outputs = dispatch_on_chunk(ensembles, args, tags, chunk, logger=dead_features_logger, interval=9)
 
-        print("Losses over time:", sum_losses)
+        losses = [output[0] for output in outputs]
+        logger_data = [output[1] for output in outputs]
+
+        sum_losses = [[0 for _ in range(ensemble.n_models)] for ensemble in ensembles]
+        for j in range(len(losses)):
+            for k in range(len(losses[j])):
+                for l in range(ensembles[j].n_models):
+                    sum_losses[j][l] += losses[j][k]["loss"][l]
+
+        mean_losses = [[sum_loss / len(outputs) for sum_loss in sum_losses[j]] for j in range(len(ensembles))]
+        mean_mean_loss = sum([mean_loss for mean_loss in chain(*mean_losses)]) / len(ensembles)
+
+        print("Mean mean loss on chunk:", mean_mean_loss)
         print(f"Chunk {i+1}/{n_chunks} done, saving")
 
-        iter_folder = os.path.join(cfg.output_folder, f"{i}")
+        iter_folder = os.path.join(cfg.output_folder, f"_{i}")
         os.makedirs(iter_folder, exist_ok=True)
         
         for i in range(len(ensembles)):
-            torch.save(ensembles[i].state_dict()["params"], os.path.join(iter_folder, f"ensemble_{ensemble_tags[i]}.pt"))
+            torch.save(ensembles[i].state_dict()["params"], os.path.join(iter_folder, f"ensemble_{tags[i]}.pt"))
         
         torch.save(logger_data, os.path.join(iter_folder, "logger_data.pt"))
+        torch.save(losses, os.path.join(iter_folder, "losses.pt"))
 
 if __name__ == "__main__":
     main()
