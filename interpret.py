@@ -591,13 +591,20 @@ def read_results(cfg):
     for transform in transforms:
         scores[transform] = []
         feature_ndx = 0
-        while os.path.exists(os.path.join(results_folder, transform, f"feature_{feature_ndx}")):
-            feature_folder = os.path.join(results_folder, transform, f"feature_{feature_ndx}")
-            if not os.path.exists(feature_folder):
+        # list all the features by looking for folders
+        feat_folders = [x for x in os.listdir(os.path.join(results_folder, transform)) if x.startswith("feature_")]
+        print(f"{transform=}, {len(feat_folders)=}")
+        for feature_folder in feat_folders:
+            folder = os.path.join(results_folder, transform, feature_folder)
+            if not os.path.exists(folder):
                 continue
-            explanation_text = open(os.path.join(feature_folder, "explanation.txt")).read()
-            # score is on the second line
-            score = float(explanation_text.split("\n")[1].split(" ")[1])
+            explanation_text = open(os.path.join(folder, "explanation.txt")).read()
+            # score should be on the second line but if explanation had newlines could be on the third or below
+            # score = float(explanation_text.split("\n")[1].split(" ")[1])
+            lines = explanation_text.split("\n")
+            # find the line containing "Score: "
+            score_line = [line for line in lines if "Score: " in line][0]
+            score = float(score_line.split(" ")[1])
             print(f"{feature_ndx=}, {transform=}, {score=}")
             scores[transform].append(score)
             feature_ndx += 1
