@@ -10,7 +10,7 @@ def parse_args() -> dotdict:
     parser.add_argument("--learned_dict_ratio", type=float, default=1.0)
     parser.add_argument("--max_length", type=int, default=256)  # when tokenizing, truncate to this length, basically the context size
     parser.add_argument("--load_autoencoders", type=str, default="")
-    parser.add_argument("--mlp_width", type=int, default=256)
+    parser.add_argument("--activation_dim", type=int, default=256)
 
     parser.add_argument("--model_batch_size", type=int, default=4)
     parser.add_argument("--batch_size", type=int, default=256)

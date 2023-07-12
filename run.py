@@ -432,7 +432,7 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
 
     if not data_generator:
         data_generator = RandomDatasetGenerator(
-            activation_dim=cfg.mlp_width,
+            activation_dim=cfg.activation_dim,
             n_ground_truth_components=cfg.n_ground_truth_components,
             batch_size=cfg.batch_size,
             feature_num_nonzero=cfg.feature_num_nonzero,
@@ -442,7 +442,7 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
         )
 
     t_type = torch.float32
-    auto_encoder = AutoEncoder(cfg.mlp_width, cfg.n_components_dictionary, t_type, l1_coef=cfg.l1_alpha).to(device)
+    auto_encoder = AutoEncoder(cfg.activation_dim, cfg.n_components_dictionary, t_type, l1_coef=cfg.l1_alpha).to(device)
 
     ground_truth_features = data_generator.feats
     # Train the model
@@ -573,8 +573,8 @@ def plot_mat(mat, l1_alphas, learned_dict_ratios, show: bool = True, save_folder
 
 def compare_mmcs_with_larger_dicts(dict: npt.NDArray, larger_dicts: List[npt.NDArray]) -> float:
     """
-    :param dict: The dict to compare to others. Shape (mlp_width, n_dict_elements)
-    :param larger_dicts: A list of dicts to compare to. Shape (mlp_width, n_dict_elements(variable)]) * n_larger_dicts
+    :param dict: The dict to compare to others. Shape (activation_dim, n_dict_elements)
+    :param larger_dicts: A list of dicts to compare to. Shape (activation_dim, n_dict_elements(variable)]) * n_larger_dicts
     :return The mean max cosine similarity of the dict to the larger dicts
 
     Takes a dict, and for each element finds the most similar element in each of the larger dicts, takes the average
@@ -620,7 +620,7 @@ def recalculate_results(auto_encoder, data_generator):
 
 def run_toy_model(cfg):
     start_time = datetime.now().strftime("%Y%m%d-%H%M%S")
-    cfg.model_name = f"toy{cfg.mlp_width}{cfg.learned_dict_ratio}"
+    cfg.model_name = f"toy{cfg.activation_dim}{cfg.learned_dict_ratio}"
 
     if cfg.use_wandb:
         secrets = json.load(open("secrets.json"))
@@ -631,7 +631,7 @@ def run_toy_model(cfg):
     
     # Using a single data generator for all runs so that can compare learned dicts
     data_generator = RandomDatasetGenerator(
-        activation_dim=cfg.mlp_width,
+        activation_dim=cfg.activation_dim,
         n_ground_truth_components=cfg.n_ground_truth_components,
         batch_size=cfg.batch_size,
         feature_num_nonzero=cfg.feature_num_nonzero,
@@ -788,7 +788,7 @@ def make_activation_dataset(cfg, sentence_dataset: DataLoader, model: HookedTran
     print(f"Running model and saving activations to {cfg.dataset_folder}")
     with torch.no_grad():
         chunk_size = chunk_size_gb * (2**30)  # 2GB
-        activation_size = cfg.mlp_width * 2 * cfg.model_batch_size * cfg.max_length  # 3072 mlp activations, 2 bytes per half, 1024 context window
+        activation_size = cfg.activation_dim * 2 * cfg.model_batch_size * cfg.max_length  # 3072 mlp activations, 2 bytes per half, 1024 context window
         max_chunks = chunk_size // activation_size
         dataset = []
         n_saved_chunks = 0
@@ -897,13 +897,13 @@ def get_size_of_momentum(cfg: dotdict, optimizer: torch.optim.Optimizer):
     Returns the size of the momentum vector for a given optimizer, for the decoder.
     """
     adam_momentum_tensor = optimizer.state_dict()["state"][0]["exp_avg"]
-    decoder_shape = cfg.mlp_width, cfg.n_components_dictionary  # decoder is Linear(n_components, mlp_width) so tensor is stored as (mlp_width, n_components)
+    decoder_shape = cfg.activation_dim, cfg.n_components_dictionary  # decoder is Linear(n_components, activation_dim) so tensor is stored as (activation_dim, n_components)
     assert adam_momentum_tensor.shape == decoder_shape
     return adam_momentum_tensor.detach().abs().sum().item()  # sum of absolute values of all elements
 
 def setup_data(cfg, tokenizer, model, use_baukit=False, start_line=0, chunk_size_gb=2):
     sentence_len_lower = 1000
-    max_lines = int((chunk_size_gb * 1e9  * cfg.n_chunks)/ (cfg.mlp_width * sentence_len_lower * 2))
+    max_lines = int((cfg.chunk_size_gb * 1e9  * cfg.n_chunks)/ (cfg.activation_dim * sentence_len_lower * 2))
     print(f"Setting max_lines to {max_lines} to minimize sentences processed")
 
     sentence_dataset = make_sentence_dataset(cfg.dataset_name, max_lines=max_lines, start_line=start_line)
@@ -949,16 +949,16 @@ def run_real_data_model(cfg: dotdict):
         n_lines = setup_data(cfg, tokenizer, model, use_baukit=use_baukit)
     else:
         print(f"Activations in {cfg.dataset_folder} already exist, loading them")
-        # get mlp_width from first file
+        # get activation_dim from first file
         with open(os.path.join(cfg.dataset_folder, "0.pkl"), "rb") as f:
             dataset = pickle.load(f)
-        cfg.mlp_width = dataset.tensors[0][0].shape[-1]
+        cfg.activation_dim = dataset.tensors[0][0].shape[-1]
         n_lines = cfg.max_lines
         del dataset
 
     l1_range = [cfg.l1_exp_base**exp for exp in range(cfg.l1_exp_low, cfg.l1_exp_high)]
     dict_ratios = [cfg.dict_ratio_exp_base**exp for exp in range(cfg.dict_ratio_exp_low, cfg.dict_ratio_exp_high)]
-    dict_sizes = [int(cfg.mlp_width * ratio) for ratio in dict_ratios]
+    dict_sizes = [int(cfg.activation_dim * ratio) for ratio in dict_ratios]
 
     print("Range of l1 values being used: ", l1_range)
     print("Range of dict_sizes being used:", dict_sizes)
@@ -968,14 +968,14 @@ def run_real_data_model(cfg: dotdict):
     feature_activations_matrix = [[None for _ in dict_sizes] for _ in l1_range]
 
     # 2D array of learned dictionaries, indexed by l1_alpha and learned_dict_ratio, start with Nones
-    auto_encoders = [[AutoEncoder(cfg.mlp_width, n_feats, l1_coef=l1_ndx).to(cfg.device) for n_feats in dict_sizes] for l1_ndx in l1_range]
+    auto_encoders = [[AutoEncoder(cfg.activation_dim, n_feats, l1_coef=l1_ndx).to(cfg.device) for n_feats in dict_sizes] for l1_ndx in l1_range]
     if cfg.load_autoencoders:
         # We check if the sizes match for any of the saved autoencoders, and if so, load them
         loaded_autoencoders = pickle.load(open(cfg.load_autoencoders, "rb"))
         for autoencoder_list in loaded_autoencoders:
             for ae in autoencoder_list:
-                if ae.activation_size != cfg.mlp_width:
-                    print(f"Mismatch of activation size, expected {cfg.mlp_width} but got {ae.activation_size}")
+                if ae.activation_size != cfg.activation_dim:
+                    print(f"Mismatch of activation size, expected {cfg.activation_dim} but got {ae.activation_size}")
                     continue
                 if ae.l1_coef in l1_range and ae.decoder.weight.shape[1] in dict_sizes:
                     print("Loading autoencoder with l1_coef", ae.l1_coef, "and dict_size", ae.decoder.weight.shape[1])

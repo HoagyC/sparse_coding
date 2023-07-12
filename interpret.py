@@ -77,7 +77,7 @@ def load_neuron(
         )
     return neuron_record
 
-def make_activation_dataset(cfg, model):
+def make_activation_dataset(cfg, model, total_activation_size=1024 * 1024 * 1024):
     if cfg.model_name in ["gpt2", "nanoGPT"]:
         tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
     elif cfg.model_name == "EleutherAI/pythia-70m-deduped":
@@ -89,13 +89,11 @@ def make_activation_dataset(cfg, model):
     1] + "-" + cfg.model_name.split("/")[-1] + "-" + str(cfg.layer)
     cfg.dataset_folder = os.path.join(cfg.datasets_folder, dataset_name)
     if not os.path.exists(cfg.dataset_folder) or len(os.listdir(cfg.dataset_folder)) == 0:
-        setup_data(cfg, tokenizer, model, use_baukit=True, chunk_size_gb=10)
+        setup_data(cfg, tokenizer, model, use_baukit=True)
     chunk_loc = os.path.join(cfg.dataset_folder, f"0.pkl")
 
-    total_activation_size = 1024 * 1024 * 1024
     elem_size = 4
-    activation_width = cfg.mlp_width
-    n_activations = total_activation_size // (elem_size * activation_width)
+    n_activations = total_activation_size // (elem_size * cfg.activation_dim)
 
     dataset = DataLoader(pickle.load(open(chunk_loc, "rb")), batch_size=n_activations, shuffle=True)
     return dataset, n_activations
