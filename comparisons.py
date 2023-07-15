@@ -49,13 +49,13 @@ def run_pca_on_activation_dataset(cfg: dotdict, outputs_folder):
 
     with open(os.path.join(cfg.dataset_folder, "0.pkl"), "rb") as f:
         dataset = pickle.load(f)
-    cfg.mlp_width = dataset.tensors[0][0].shape[-1]
+    cfg.activation_dim = dataset.tensors[0][0].shape[-1]
     n_lines = cfg.max_lines
     del dataset
 
     # actual pca
 
-    pca_model = BatchedPCA(cfg.mlp_width, cfg.device)
+    pca_model = BatchedPCA(cfg.activation_dim, cfg.device)
 
     n_chunks_in_folder = len(os.listdir(cfg.dataset_folder))
 
@@ -123,10 +123,10 @@ def main():
         n_lines = setup_data(cfg, tokenizer, model, use_baukit=use_baukit, split=data_split)
     else:
         print(f"Activations in {cfg.dataset_folder} already exist, loading them")
-        # get mlp_width from first file
+        # get activation_dim from first file
         with open(os.path.join(cfg.dataset_folder, "0.pkl"), "rb") as f:
             dataset = pickle.load(f)
-        cfg.mlp_width = dataset.tensors[0][0].shape[-1]
+        cfg.activation_dim = dataset.tensors[0][0].shape[-1]
         n_lines = cfg.max_lines
         del dataset
     
