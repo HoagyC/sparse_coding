@@ -31,7 +31,7 @@ def sync():
 
 def autointerp_sync():
     """Sync the local directory with the remote host's auto interp results, excluding hdf files."""
-    command = f'rsync -r --exclude "*.hdf" -e "ssh {DEST_ADDR}:{SSH_DIRECTORY}/auto_interp_results .'
+    command = f'rsync -r --exclude "*.hdf" --exclude "*.pkl" -e ssh {DEST_ADDR}:{SSH_DIRECTORY}/auto_interp_results . '
     print(command)
     subprocess.call(command, shell=True)
 
@@ -199,3 +199,5 @@ if __name__ == "__main__":
         copy_secrets()
     elif sys.argv[1] == "interp_sync":
         autointerp_sync()
+    else:
+        raise NotImplementedError(f"Command {sys.argv[1]} not recognised")
