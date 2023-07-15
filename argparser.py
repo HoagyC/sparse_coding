@@ -57,6 +57,9 @@ def parse_args() -> dotdict:
     parser.add_argument("--n_feats_explain", type=int, default=10) # number of features to explain
     parser.add_argument("--activation_transform", type=str, default="ica") # way of transforming neuron activations into features
     parser.add_argument("--load_interpret_autoencoder", type=str, default="") # path to autoencoder to load
+    parser.add_argument("--tied_ae", type=bool, default=False) # whether to load pickle as a tied autoencoder
+    parser.add_argument("--interp_name", type=str, default="") # name of run, otherwise will be feature_transform
+
     args = parser.parse_args()
     cfg = dotdict(vars(args))  # convert to dotdict via dict
     cfg.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

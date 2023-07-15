@@ -28,7 +28,7 @@ from argparser import parse_args
 from comparisons import NoCredentialsError
 from utils import dotdict, make_tensor_name, upload_to_aws
 from nanoGPT_model import GPT
-from run import AutoEncoder, setup_data
+from run import setup_data
 
 
 # set OPENAI_API_KEY environment variable from secrets.json['openai_key']
@@ -77,7 +77,7 @@ def load_neuron(
         )
     return neuron_record
 
-def make_activation_dataset(cfg, model, total_activation_size=1024 * 1024 * 1024):
+def make_activation_dataset(cfg, model, activation_dim: int,  total_activation_size: int = 512 * 1024 * 1024):
     if cfg.model_name in ["gpt2", "nanoGPT"]:
         tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
     elif cfg.model_name == "EleutherAI/pythia-70m-deduped":
@@ -89,6 +89,8 @@ def make_activation_dataset(cfg, model, total_activation_size=1024 * 1024 * 1024
     1] + "-" + cfg.model_name.split("/")[-1] + "-" + str(cfg.layer)
     cfg.dataset_folder = os.path.join(cfg.datasets_folder, dataset_name)
     if not os.path.exists(cfg.dataset_folder) or len(os.listdir(cfg.dataset_folder)) == 0:
+        cfg.n_chunks = 1
+        cfg.activation_dim = activation_dim
         setup_data(cfg, tokenizer, model, use_baukit=True)
     chunk_loc = os.path.join(cfg.dataset_folder, f"0.pkl")
 
@@ -132,29 +134,36 @@ def activation_NMF(dataset, n_activations):
 def flex_activation_function(input, activation_str, **kwargs):
     if activation_str == "ica":
         assert "ica" in kwargs
-        return torch.tensor(kwargs["ica"].transform(input))
+        return torch.tensor(kwargs["ica"].transform(input.cpu()))
     elif activation_str == "pca":
         assert "pca" in kwargs
-        return torch.tensor(kwargs["pca"].transform(input))
+        return torch.tensor(kwargs["pca"].transform(input.cpu()))
     elif activation_str == "nmf":
         assert "nmf" in kwargs
-        return torch.tensor(kwargs["nmf"].transform(input))
+        return torch.tensor(kwargs["nmf"].transform(input.cpu()))
     elif activation_str == "random":
         assert "random_matrix" in kwargs
         return input @ kwargs["random_matrix"].to(kwargs["device"])
     elif activation_str == "random_bias":
-        assert "random_matrix" in kwargs
-        assert "bias" in kwargs
+        assert all([k in kwargs for k in ["random_matrix", "bias", "weight"]]), f"Missing keys {set(['random_matrix', 'bias', 'weight']) - set(kwargs.keys())}"
         assert len(kwargs["bias"]) <= input.shape[1]
-        return torch.relu(input @ kwargs["random_matrix"].to(kwargs["device"]) + kwargs["bias"])
+        # going to divide the biases by the norm of the weight vector
+        norms = torch.norm(kwargs["weight"], dim=1)
+        assert len(norms) == len(kwargs["bias"])
+        adjusted_bias = kwargs["bias"] / norms
+        return torch.relu(input @ kwargs["random_matrix"].to(kwargs["device"]) + adjusted_bias[:input.shape[1]])
     elif activation_str == "neuron_basis":
         return input
+    elif activation_str == "neuron_relu":
+        return torch.relu(input)
     elif activation_str == "neuron_basis_bias":
         # here we take the neuron basis, add a (probably negative) bias term, and then apply a relu
-        assert "bias" in kwargs
+        assert all([k in kwargs for k in ["bias", "weight"]]), f"Missing keys {set(['bias', 'weight']) - set(kwargs.keys())}"
         assert len(kwargs["bias"]) <= input.shape[1]
-        breakpoint()
-        return torch.relu(input + kwargs["bias"][:input.shape[1]])
+        norms = torch.norm(kwargs["weight"], dim=1)
+        assert len(norms) == len(kwargs["bias"])
+        adjusted_bias = kwargs["bias"] / norms
+        return torch.relu(input + adjusted_bias[:input.shape[1]])
     elif activation_str == "feature_dict":
         assert "autoencoder" in kwargs
         reconstruction, dict_activations = kwargs["autoencoder"](input)
@@ -271,12 +280,12 @@ def make_feature_activation_dataset(
                     mlp_activation_data = nn.functional.gelu(mlp_activation_data)
             else:
                 _, cache = model.run_with_cache(tokens)
-                mlp_activation_data = cache[tensor_name].to(device)  # NOTE: could do all layers at once, but currently just doing 1 layer
+                mlp_activation_data = cache[tensor_name].to(device)
 
             for i in range(batch_size):
                 fragment_tokens = tokens[i:i+1, :]
                 activation_data = mlp_activation_data[i:i+1, :].squeeze(0)
-                token_ids =  fragment_tokens[0].tolist()
+                token_ids = fragment_tokens[0].tolist()
                     
                 feature_activation_data = flex_activation_function(activation_data, activation_fn_name, **activation_fn_kwargs)
                 feature_activation_means = torch.mean(feature_activation_data, dim=0)
@@ -315,9 +324,9 @@ async def main(cfg: dotdict) -> None:
         model = HookedTransformer.from_pretrained(cfg.model_name, device=cfg.device)
         use_baukit = False
         if cfg.model_name == "gpt2":
-            activation_width = 3072
+            resid_width = 768
         elif cfg.model_name == "EleutherAI/pythia-70m-deduped":
-            activation_width = 2048
+            resid_width = 512
     elif cfg.model_name == "nanoGPT":
         model_dict = torch.load(open(cfg.model_path, "rb"), map_location="cpu")["model"]
         model_dict = {k.replace("_orig_mod.", ""): v for k, v in model_dict.items()}
@@ -327,25 +336,45 @@ async def main(cfg: dotdict) -> None:
         model = GPT(model_cfg).to(cfg.device)
         model.load_state_dict(model_dict)
         use_baukit = True
-        activation_width = 128
+        resid_width = 32
     else:
         raise ValueError("Model name not recognised")
+    if cfg.use_residual:
+        activation_width = resid_width
+    else:
+        activation_width = resid_width * 4
     
     # Load feature dict
     if cfg.activation_transform in ["feature_dict", "neuron_basis_bias", "random_bias"]:
         assert cfg.load_interpret_autoencoder is not None
+        if cfg.tied_ae:
+            AutoEncoder: Any
+            from autoencoders.tied_ae import AutoEncoder
         autoencoder = pickle.load(open(cfg.load_interpret_autoencoder, "rb")).to(cfg.device)
+        else:
+            from run import AutoEncoder
+            autoencoder = pickle.load(open(cfg.load_interpret_autoencoder, "rb")).to(cfg.device)
+    
+    if cfg.activation_transform == "feature_dict":
+        feature_size = autoencoder.decoder.weight.shape[1]
+    else:
+        feature_size = activation_width
     
     if cfg.activation_transform in ["ica", "pca", "nmf"]:
-        activation_dataset, n_activations = make_activation_dataset(cfg, model)
+        activation_dataset, n_activations = make_activation_dataset(cfg, model, activation_dim=feature_size)
 
-    activations_name = f"{cfg.model_name.split('/')[-1]}_layer{cfg.layer}_postnonlin"
+
+    point_name = "resid" if cfg.use_residual else "postnonlin"
+    activations_name = f"{cfg.model_name.split('/')[-1]}_layer{cfg.layer}_{point_name}"
     activation_fn_kwargs = {"device": cfg.device}
     if cfg.activation_transform == "neuron_basis":
         print("Using neuron basis activation transform")
+    elif cfg.activation_transform == "neuron_relu":
+        print("Using neuron relu activation transform")
     elif cfg.activation_transform == "neuron_basis_bias":
         print("Using neuron basis bias activation transform")
         activation_fn_kwargs.update({"bias": autoencoder.encoder[0].bias})
+        activation_fn_kwargs.update({"weight": autoencoder.encoder[0].weight})
     elif cfg.activation_transform == "ica":
         print("Using ICA activation transform")
         ica_path = os.path.join("auto_interp_results", activations_name, "ica_1gb.pkl")
@@ -421,6 +450,9 @@ async def main(cfg: dotdict) -> None:
     else:
         transform_name = cfg.activation_transform
 
+    if cfg.interp_name:
+        transform_folder = os.path.join("auto_interp_results", activations_name, cfg.interp_name)
+    else:
     transform_folder = os.path.join("auto_interp_results", activations_name, transform_name)
     df_loc = os.path.join(transform_folder, f"activation_df.hdf")
 
@@ -432,7 +464,7 @@ async def main(cfg: dotdict) -> None:
             use_residual=cfg.use_residual,
             activation_fn_name=cfg.activation_transform,
             activation_fn_kwargs=activation_fn_kwargs,
-            activation_dim=activation_width,
+            activation_dim=feature_size,
             device=cfg.device,
             use_baukit=use_baukit,
         )
@@ -455,10 +487,6 @@ async def main(cfg: dotdict) -> None:
         if os.path.exists(os.path.join(transform_folder, f"feature_{feat_n}")):
             print(f"Feature {feat_n} already exists, skipping")
             continue
-
-        # logan_id_list = [1910, 1597, 1991, 1672,  781,  239, 1375, 1048,  232, 1943,  885]
-        # if feat_n not in logan_id_list:
-        #     continue
 
         activation_col_names = [f"feature_{feat_n}_activation_{i}" for i in range(OPENAI_FRAGMENT_LEN)]
         read_fields = ["fragment_token_strs", f"feature_{feat_n}_mean", *activation_col_names]
@@ -495,7 +523,6 @@ async def main(cfg: dotdict) -> None:
         neuron_id = NeuronId(layer_index=2, neuron_index=feat_n)
 
         neuron_record = NeuronRecord(neuron_id=neuron_id, random_sample=random_activation_records, most_positive_activation_records=top_activation_records)
-
         slice_params = ActivationRecordSliceParams(n_examples_per_split=OPENAI_EXAMPLES_PER_SPLIT)
         train_activation_records = neuron_record.train_activation_records(slice_params)
         valid_activation_records = neuron_record.valid_activation_records(slice_params)
@@ -508,7 +535,7 @@ async def main(cfg: dotdict) -> None:
         explanations = await explainer.generate_explanations(
         all_activation_records=train_activation_records,
         max_activation=calculate_max_activation(train_activation_records),
-        num_samples=1,
+            num_samples=1
     )
         assert len(explanations) == 1
         explanation = explanations[0]
@@ -583,7 +610,7 @@ async def run_openai_example():
     print(f"score={scored_simulation.get_preferred_score():.2f}")
 
 def read_results(cfg):
-    activations_name = f"{cfg.model_name.split('/')[-1]}_layer{cfg.layer}_postnonlin"
+    point_name = "resid" if cfg.use_residual else "postnonlin"
     results_folder = os.path.join("auto_interp_results", activations_name)
     transforms = os.listdir(results_folder)
     transforms = [transform for transform in transforms if os.path.isdir(os.path.join(results_folder, transform))]
@@ -611,7 +638,7 @@ def read_results(cfg):
 
     
     # plot the scores as a histogram
-    colors = ["red", "blue", "green", "orange", "purple", "pink"]
+    colors = ["red", "blue", "green", "orange", "purple", "pink", "black", "yellow", "brown", "cyan", "magenta", "grey"]
     for i, transform in enumerate(transforms):
         plt.hist(scores[transform], bins=20, alpha=0.5, label=transform, color=colors[i])
         plt.axvline(x=np.mean(scores[transform]), linestyle="-", color=colors[i])
@@ -647,6 +674,7 @@ if __name__ == "__main__":
         argparser = argparse.ArgumentParser()
         argparser.add_argument("--layer", type=int, required=True)
         argparser.add_argument("--model_name", type=str, required=True)
+        argparser.add_argument("--use_residual", action="store_true")
         cfg = argparser.parse_args(sys.argv[2:])
         read_results(cfg)
     else:

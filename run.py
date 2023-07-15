@@ -902,7 +902,7 @@ def get_size_of_momentum(cfg: dotdict, optimizer: torch.optim.Optimizer):
 
 def setup_data(cfg, tokenizer, model, use_baukit=False, start_line=0):
     sentence_len_lower = 1000
-    max_lines = int((cfg.chunk_size_gb * 1e9  * cfg.n_chunks)/ (cfg.activation_dim * sentence_len_lower * 2))
+    max_lines = int((cfg.chunk_size_gb * 1e9  * cfg.n_chunks) / (cfg.activation_dim * sentence_len_lower * 2))
     print(f"Setting max_lines to {max_lines} to minimize sentences processed")
 
     sentence_dataset = make_sentence_dataset(cfg.dataset_name, max_lines=max_lines, start_line=start_line)
