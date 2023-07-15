@@ -44,7 +44,7 @@ from neuron_explainer.activations.activations import ActivationRecordSliceParams
 from neuron_explainer.explanations.calibrated_simulator import UncalibratedNeuronSimulator
 from neuron_explainer.explanations.explainer import TokenActivationPairExplainer
 from neuron_explainer.explanations.prompt_builder import PromptFormat
-from neuron_explainer.explanations.scoring import simulate_and_score
+from neuron_explainer.explanations.scoring import simulate_and_score, aggregate_scored_sequence_simulations
 from neuron_explainer.explanations.simulator import ExplanationNeuronSimulator
 from neuron_explainer.fast_dataclasses import loads
 
@@ -350,7 +350,7 @@ async def main(cfg: dotdict) -> None:
         if cfg.tied_ae:
             AutoEncoder: Any
             from autoencoders.tied_ae import AutoEncoder
-        autoencoder = pickle.load(open(cfg.load_interpret_autoencoder, "rb")).to(cfg.device)
+            autoencoder = pickle.load(open(cfg.load_interpret_autoencoder, "rb")).to(cfg.device)
         else:
             from run import AutoEncoder
             autoencoder = pickle.load(open(cfg.load_interpret_autoencoder, "rb")).to(cfg.device)
@@ -453,7 +453,7 @@ async def main(cfg: dotdict) -> None:
     if cfg.interp_name:
         transform_folder = os.path.join("auto_interp_results", activations_name, cfg.interp_name)
     else:
-    transform_folder = os.path.join("auto_interp_results", activations_name, transform_name)
+        transform_folder = os.path.join("auto_interp_results", activations_name, transform_name)
     df_loc = os.path.join(transform_folder, f"activation_df.hdf")
 
     if not (cfg.load_activation_dataset and os.path.exists(df_loc)) or cfg.refresh_data:
@@ -487,6 +487,23 @@ async def main(cfg: dotdict) -> None:
         if os.path.exists(os.path.join(transform_folder, f"feature_{feat_n}")):
             print(f"Feature {feat_n} already exists, skipping")
             continue
+
+        # logan_ae_top_mcs = [1910, 1597, 1991, 1672,  781,  239, 1375, 1048,  232, 1943,  885]
+        # if feat_n not in logan_ae_top_mcs:
+        #     continue
+
+        # pyth2resid_top_mcs_list = [232, 1891, 1178, 1958,  389, 1461, 1248, 1582,  961, 1014,  465,
+        #     1899,  406,  814,  744, 1644,  215, 1831,  965, 1722,  778, 1054,
+        #     677, 1185, 1519,   17,  986,  113, 1087, 1237,  989,  831, 1477,
+        #     1979,  647,  191, 1026, 2021, 1532, 1687, 1309,  435,  618,  442,
+        #     1858, 1205, 1048, 1169,   25,  476, 1600,  720,  586, 1602,   69,
+        #     1141, 1854,  261, 1622, 1101,  658,  836, 1774, 1679,  888,  534,
+        #     1937, 1353,  622, 1863,  573, 1423, 1573,  200,  667,  104, 1252,
+        #     1954, 1614, 1244,  826, 1724, 2006,  318,  552, 1574, 1253, 1415,
+        #     979,  558, 1148, 1405,  768,  555, 1804, 1276, 1430, 2031, 1770,
+        #     1758]
+        # if feat_n not in pyth2resid_top_mcs_list:
+        #     continue
 
         activation_col_names = [f"feature_{feat_n}_activation_{i}" for i in range(OPENAI_FRAGMENT_LEN)]
         read_fields = ["fragment_token_strs", f"feature_{feat_n}_mean", *activation_col_names]
@@ -533,10 +550,10 @@ async def main(cfg: dotdict) -> None:
             max_concurrent=1,
         )
         explanations = await explainer.generate_explanations(
-        all_activation_records=train_activation_records,
-        max_activation=calculate_max_activation(train_activation_records),
+            all_activation_records=train_activation_records,
+            max_activation=calculate_max_activation(train_activation_records),
             num_samples=1
-    )
+        )
         assert len(explanations) == 1
         explanation = explanations[0]
         print(f"Feature {feat_n}, {explanation=}")
@@ -552,8 +569,13 @@ async def main(cfg: dotdict) -> None:
             )
         )
         scored_simulation = await simulate_and_score(simulator, valid_activation_records)
+
         score = scored_simulation.get_preferred_score()
-        print(f"Feature {feat_n}, score={score:.2f}")
+        breakpoint()
+        assert len(scored_simulation.scored_sequence_simulations) == 10
+        top_only_score = aggregate_scored_sequence_simulations(scored_simulation.scored_sequence_simulations[:5]).get_preferred_score()
+        random_only_score = aggregate_scored_sequence_simulations(scored_simulation.scored_sequence_simulations[5:]).get_preferred_score()
+        print(f"Feature {feat_n}, score={score:.2f}, top_only_score={top_only_score:.2f}, random_only_score={random_only_score:.2f}")
 
         feature_name = f"feature_{feat_n}"
         feature_folder = os.path.join(transform_folder, feature_name)
@@ -563,6 +585,8 @@ async def main(cfg: dotdict) -> None:
         # write a file with the explanation and the score
         with open(os.path.join(feature_folder, "explanation.txt"), "w") as f:
             f.write(f"{explanation}\nScore: {score:.2f}\nExplainer model: {EXPLAINER_MODEL_NAME}\nSimulator model: {SIMULATOR_MODEL_NAME}\n")
+            f.write(f"Top only score: {top_only_score:.2f}\n")
+            f.write(f"Random only score: {random_only_score:.2f}\n")
         
     
     if cfg.upload_to_aws:
@@ -609,19 +633,32 @@ async def run_openai_example():
     scored_simulation = await simulate_and_score(simulator, valid_activation_records)
     print(f"score={scored_simulation.get_preferred_score():.2f}")
 
+
+def get_score(lines: List[str], mode: str):
+    if mode == "top":
+        return float(lines[-3].split(" ")[-1])
+    elif mode == "random":
+        return float(lines[-2].split(" ")[-1])
+    elif mode == "both":
+        score_line = [line for line in lines if "Score: " in line][0]
+        return float(score_line.split(" ")[1])
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
+
 def read_results(cfg):
     point_name = "resid" if cfg.use_residual else "postnonlin"
+    activations_name = f"{cfg.model_name.split('/')[-1]}_layer{cfg.layer}_{point_name}"
     results_folder = os.path.join("auto_interp_results", activations_name)
     transforms = os.listdir(results_folder)
     transforms = [transform for transform in transforms if os.path.isdir(os.path.join(results_folder, transform))]
     scores = {}
     for transform in transforms:
         scores[transform] = []
-        feature_ndx = 0
         # list all the features by looking for folders
         feat_folders = [x for x in os.listdir(os.path.join(results_folder, transform)) if x.startswith("feature_")]
         print(f"{transform=}, {len(feat_folders)=}")
         for feature_folder in feat_folders:
+            feature_ndx = int(feature_folder.split("_")[1])
             folder = os.path.join(results_folder, transform, feature_folder)
             if not os.path.exists(folder):
                 continue
@@ -629,13 +666,11 @@ def read_results(cfg):
             # score should be on the second line but if explanation had newlines could be on the third or below
             # score = float(explanation_text.split("\n")[1].split(" ")[1])
             lines = explanation_text.split("\n")
-            # find the line containing "Score: "
-            score_line = [line for line in lines if "Score: " in line][0]
-            score = float(score_line.split(" ")[1])
+            score = get_score(lines, cfg.score_mode)
+
             print(f"{feature_ndx=}, {transform=}, {score=}")
             scores[transform].append(score)
-            feature_ndx += 1
-
+                
     
     # plot the scores as a histogram
     colors = ["red", "blue", "green", "orange", "purple", "pink", "black", "yellow", "brown", "cyan", "magenta", "grey"]
@@ -654,13 +689,13 @@ def read_results(cfg):
     # plot means on that graph 
 
     # add title and axis labels
-    plt.title(f"{cfg.model_name}. Layer {cfg.layer}. Postnonlin auto-interp scores")
-    plt.xlabel("Score")
-    plt.ylabel("Count")
+    plt.title(f"{cfg.model_name}. Layer {cfg.layer}. {point_name} auto-interp scores")
+    plt.xlabel("GPT-4-based interpretability score")
+    plt.ylabel("Feature Count")
 
 
     # save
-    save_path = os.path.join(results_folder, "scores.png")
+    save_path = os.path.join(results_folder, f"{cfg.score_mode}_scores.png")
     print(f"Saving to {save_path}")
     plt.savefig(save_path)
 
@@ -675,6 +710,7 @@ if __name__ == "__main__":
         argparser.add_argument("--layer", type=int, required=True)
         argparser.add_argument("--model_name", type=str, required=True)
         argparser.add_argument("--use_residual", action="store_true")
+        argparser.add_argument("--score_mode", type=str, default="top_random") # can be "top", "random", "top_random"
         cfg = argparser.parse_args(sys.argv[2:])
         read_results(cfg)
     else:
