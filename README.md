@@ -3,22 +3,24 @@
 
 ## Sparse Coding
 
-`python replicate_toy_models.py` runs code which allows for the replication of the first half of the post [Taking features out of superposition with sparse autoencoders](https://www.lesswrong.com/posts/z6QQJbtpkEAX3Aojj/interim-research-report-taking-features-out-of-superposition).
+`run.py` contains a more set of functions for generating datasets using Pile10k and then running sparse autoencoders activations on the data to try and learn the features that the model is using for its computation. It is set up by default to run hyperparameter sweeps using across dictionary size and l1 coefficient.
 
-`run.py` contains a more flexible set of functions for generating datasets using Pile10k and then running sparse coding activations on real models, incluidng gpt-2-small and custom models.
+`python replicate_toy_models.py` runs code which allows for the replication of the first half of the post [Taking features out of superposition with sparse autoencoders](https://www.lesswrong.com/posts/z6QQJbtpkEAX3Aojj/interim-research-report-taking-features-out-of-superposition).
 
 The repo also contains utils for running code on vast.ai computers which can speed up these sweeps.
 
-## Automatic Interpretation
+## Automatic Interpretation
 
-Currently using OpenAI's automoatic-interpretability repo but can't get it to install so the repo currently works by installing the automatic-interpretability/neuron-explainer/neuron-explainer cloned and saved in the top level of the repo, under the name `neuron_explainer`. 
+`interpret.py` contains tools to interpret learned dictionaries using OpenAI's automatic interpretation protocol. Set `--load_interpret_autoencoder` to the location of the autoencoder you want to test, and `--model_name`, `--layer` and `--use_residual` to specify the activations that should be used. `--activation_tranform` should be set to `feature_dict` for interpreting a learned dictionary but there are many baselines that can also be run, including `pca`, `ica`, `nmf`, `neuron_basis`, and `random`.
+
+If you run `interpret.py read_results --kwargs..` and select the `--model_name`, `--layer` and `--use_residual`, this will produce a series of plots comparing 
 
 ## Training a custom small transformer
 
-The next part of the sparse coding work uses a very small transformer to do some early tests using sparse autoencoders to find features.
+One part of replicating Conjecture's sparse coding work was to use a very small transformer for some early tests using sparse autoencoders to find features.
 There doesn't appear to be an open-source model of this kind, and the original model is proprietary, so below are the instructions I followed to create a similar small transformer.
 
-Make sure you have >200GB space.
+Make sure you have >200GB disk space.
 Tested using a [vast.ai](vast.ai) RTX3090 and pytorch:latest docker image.
 
 ```
