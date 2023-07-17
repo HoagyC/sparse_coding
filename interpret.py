@@ -164,6 +164,11 @@ def flex_activation_function(input, activation_str, **kwargs):
         assert len(norms) == len(kwargs["bias"])
         adjusted_bias = kwargs["bias"] / norms
         return torch.relu(input + adjusted_bias[:input.shape[1]])
+
+    elif activation_str == "feature_no_bias":
+        assert "feature_matrix" in kwargs
+        return input @ kwargs["feature_matrix"].to(kwargs["device"])
+
     elif activation_str == "feature_dict":
         assert "autoencoder" in kwargs
         reconstruction, dict_activations = kwargs["autoencoder"](input)
@@ -345,7 +350,7 @@ async def main(cfg: dotdict) -> None:
         activation_width = resid_width * 4
     
     # Load feature dict
-    if cfg.activation_transform in ["feature_dict", "neuron_basis_bias", "random_bias"]:
+    if cfg.activation_transform in ["feature_dict", "feature_no_bias", "neuron_basis_bias", "random_bias"]:
         assert cfg.load_interpret_autoencoder is not None
         if cfg.tied_ae:
             AutoEncoder: Any
@@ -355,7 +360,7 @@ async def main(cfg: dotdict) -> None:
             from run import AutoEncoder
             autoencoder = pickle.load(open(cfg.load_interpret_autoencoder, "rb")).to(cfg.device)
     
-    if cfg.activation_transform == "feature_dict":
+    if cfg.activation_transform in ["feature_dict", "feature_no_bias"]:
         feature_size = autoencoder.decoder.weight.shape[1]
     else:
         feature_size = activation_width
@@ -373,8 +378,12 @@ async def main(cfg: dotdict) -> None:
         print("Using neuron relu activation transform")
     elif cfg.activation_transform == "neuron_basis_bias":
         print("Using neuron basis bias activation transform")
-        activation_fn_kwargs.update({"bias": autoencoder.encoder[0].bias})
-        activation_fn_kwargs.update({"weight": autoencoder.encoder[0].weight})
+        if cfg.tied_ae:
+            activation_fn_kwargs.update({"bias": autoencoder.decoder.bias})
+            activation_fn_kwargs.update({"weight": autoencoder.decoder.weight})
+        else:
+            activation_fn_kwargs.update({"bias": autoencoder.encoder[0].bias})
+            activation_fn_kwargs.update({"weight": autoencoder.encoder[0].weight.t()})
     elif cfg.activation_transform == "ica":
         print("Using ICA activation transform")
         ica_path = os.path.join("auto_interp_results", activations_name, "ica_1gb.pkl")
@@ -416,6 +425,13 @@ async def main(cfg: dotdict) -> None:
         print("Using feature dict activation transform")
         activation_fn_kwargs.update({"autoencoder": autoencoder})
 
+    elif cfg.activation_transform == "feature_no_bias":
+        print("Using feature dict without bias")
+        if cfg.tied_ae:
+            activation_fn_kwargs.update({"feature_matrix": autoencoder.decoder.weight})
+        else:
+            activation_fn_kwargs.update({"feature_matrix": autoencoder.encoder[0].weight.t()})
+        
     elif cfg.activation_transform == "random":
         print("Using random activation transform")
         random_path = os.path.join("auto_interp_results", activations_name, "random_dirs.pkl")
@@ -424,6 +440,7 @@ async def main(cfg: dotdict) -> None:
             random_direction_matrix = pickle.load(open(random_path, "rb"))
         else:
             random_direction_matrix = torch.randn(activation_width, activation_width)
+            random_direction_matrix = random_direction_matrix / torch.norm(random_direction_matrix, dim=1, keepdim=True)
             os.makedirs(os.path.dirname(random_path), exist_ok=True)
             pickle.dump(random_direction_matrix, open(random_path, "wb"))
         
@@ -440,7 +457,13 @@ async def main(cfg: dotdict) -> None:
             pickle.dump(random_direction_matrix, open(random_path, "wb"))
         
         activation_fn_kwargs.update({"random_matrix": random_direction_matrix})
-        activation_fn_kwargs.update({"bias": autoencoder.encoder[0].bias})
+
+        if cfg.tied_ae:
+            activation_fn_kwargs.update({"bias": autoencoder.decoder.bias})
+            activation_fn_kwargs.update({"weight": autoencoder.decoder.weight})
+        else:
+            activation_fn_kwargs.update({"bias": autoencoder.encoder[0].bias})
+            activation_fn_kwargs.update({"weight": autoencoder.encoder[0].weight.t()})
 
     else:
         raise ValueError(f"Activation transform {cfg.activation_transform} not recognised")
@@ -487,23 +510,6 @@ async def main(cfg: dotdict) -> None:
         if os.path.exists(os.path.join(transform_folder, f"feature_{feat_n}")):
             print(f"Feature {feat_n} already exists, skipping")
             continue
-
-        # logan_ae_top_mcs = [1910, 1597, 1991, 1672,  781,  239, 1375, 1048,  232, 1943,  885]
-        # if feat_n not in logan_ae_top_mcs:
-        #     continue
-
-        # pyth2resid_top_mcs_list = [232, 1891, 1178, 1958,  389, 1461, 1248, 1582,  961, 1014,  465,
-        #     1899,  406,  814,  744, 1644,  215, 1831,  965, 1722,  778, 1054,
-        #     677, 1185, 1519,   17,  986,  113, 1087, 1237,  989,  831, 1477,
-        #     1979,  647,  191, 1026, 2021, 1532, 1687, 1309,  435,  618,  442,
-        #     1858, 1205, 1048, 1169,   25,  476, 1600,  720,  586, 1602,   69,
-        #     1141, 1854,  261, 1622, 1101,  658,  836, 1774, 1679,  888,  534,
-        #     1937, 1353,  622, 1863,  573, 1423, 1573,  200,  667,  104, 1252,
-        #     1954, 1614, 1244,  826, 1724, 2006,  318,  552, 1574, 1253, 1415,
-        #     979,  558, 1148, 1405,  768,  555, 1804, 1276, 1430, 2031, 1770,
-        #     1758]
-        # if feat_n not in pyth2resid_top_mcs_list:
-        #     continue
 
         activation_col_names = [f"feature_{feat_n}_activation_{i}" for i in range(OPENAI_FRAGMENT_LEN)]
         read_fields = ["fragment_token_strs", f"feature_{feat_n}_mean", *activation_col_names]
@@ -571,7 +577,6 @@ async def main(cfg: dotdict) -> None:
         scored_simulation = await simulate_and_score(simulator, valid_activation_records)
 
         score = scored_simulation.get_preferred_score()
-        breakpoint()
         assert len(scored_simulation.scored_sequence_simulations) == 10
         top_only_score = aggregate_scored_sequence_simulations(scored_simulation.scored_sequence_simulations[:5]).get_preferred_score()
         random_only_score = aggregate_scored_sequence_simulations(scored_simulation.scored_sequence_simulations[5:]).get_preferred_score()
@@ -639,7 +644,7 @@ def get_score(lines: List[str], mode: str):
         return float(lines[-3].split(" ")[-1])
     elif mode == "random":
         return float(lines[-2].split(" ")[-1])
-    elif mode == "both":
+    elif mode == "top_random":
         score_line = [line for line in lines if "Score: " in line][0]
         return float(score_line.split(" ")[1])
     else:
@@ -652,6 +657,10 @@ def read_results(cfg):
     transforms = os.listdir(results_folder)
     transforms = [transform for transform in transforms if os.path.isdir(os.path.join(results_folder, transform))]
     scores = {}
+    if "sparse_coding" in transforms:
+        transforms.remove("sparse_coding")
+        transforms = ["sparse_coding"] + transforms
+        
     for transform in transforms:
         scores[transform] = []
         # list all the features by looking for folders
@@ -673,7 +682,7 @@ def read_results(cfg):
                 
     
     # plot the scores as a histogram
-    colors = ["red", "blue", "green", "orange", "purple", "pink", "black", "yellow", "brown", "cyan", "magenta", "grey"]
+    colors = ["red", "blue", "green", "orange", "purple", "pink", "black", "brown", "cyan", "magenta", "grey"]
     for i, transform in enumerate(transforms):
         plt.hist(scores[transform], bins=20, alpha=0.5, label=transform, color=colors[i])
         plt.axvline(x=np.mean(scores[transform]), linestyle="-", color=colors[i])
@@ -689,7 +698,7 @@ def read_results(cfg):
     # plot means on that graph 
 
     # add title and axis labels
-    plt.title(f"{cfg.model_name}. Layer {cfg.layer}. {point_name} auto-interp scores")
+    plt.title(f"{cfg.model_name}. Layer {cfg.layer}. {point_name} {cfg.score_mode}")
     plt.xlabel("GPT-4-based interpretability score")
     plt.ylabel("Feature Count")
 
@@ -698,6 +707,66 @@ def read_results(cfg):
     save_path = os.path.join(results_folder, f"{cfg.score_mode}_scores.png")
     print(f"Saving to {save_path}")
     plt.savefig(save_path)
+
+    # now we plot a more empty graph using only the means and confidence intervals
+    # where the x axis is the transform and the y axis is the mean score
+    plt.clf()
+    means = [np.mean(scores[transform]) for transform in transforms]
+    cis = [1.96 * np.std(scores[transform]) / np.sqrt(len(scores[transform])) for transform in transforms]
+    # draw them as points with error bars and each as a different color
+    # with x labels turned 90 degrees
+    for i, transform in enumerate(transforms):
+        plt.errorbar(transform, means[i], yerr=cis[i], fmt="o", color=colors[i], elinewidth=2, capsize=5)
+    
+
+    plt.title(f"{cfg.model_name}. Layer {cfg.layer}. {point_name} {cfg.score_mode}")
+    plt.xlabel("Transform")
+    plt.ylabel("Mean GPT-4-based interpretability score")
+    plt.xticks(rotation=90)
+
+    # add space around the graph so that edges aren't cut off at the sides or bottom
+    plt.tight_layout()
+    save_path = os.path.join(results_folder, f"{cfg.score_mode}_means.png")
+    print(f"Saving means graph to {save_path}")
+    plt.savefig(save_path)
+
+    # now we take the same graph but with violin plot of the scores
+    plt.clf()
+    # fix yrange from -0.2 to 0.6
+    plt.ylim(-0.2, 0.6)
+    # add horizontal grid lines every 0.1
+    plt.yticks(np.arange(-0.2, 0.6, 0.1))
+    plt.grid(axis="y", color="grey", linestyle="-", linewidth=0.5, alpha=0.3)
+    # first we need to get the scores into a list of lists
+    scores_list = [scores[transform] for transform in transforms]
+    violin_parts = plt.violinplot(scores_list, showmeans=False, showextrema=False)
+    for i, pc in enumerate(violin_parts['bodies']):
+        pc.set_facecolor(colors[i])
+        pc.set_edgecolor(colors[i])
+        pc.set_alpha(0.3)
+
+    # add x labels
+    plt.xticks(np.arange(1, len(transforms) + 1), transforms, rotation=90)
+
+    # add standard errors around the means but don't plot the means
+    for i, transform in enumerate(transforms):
+        plt.errorbar(i+1, np.mean(scores[transform]), yerr=cis[i], fmt="o", color=colors[i], elinewidth=2, capsize=20)
+
+    plt.title(f"{cfg.model_name}. Layer {cfg.layer}. {point_name} {cfg.score_mode}")
+    plt.xlabel("Transform")
+    plt.ylabel("GPT-4-based interpretability score")
+    plt.xticks(rotation=90)
+
+
+
+    # and a thicker line at 0
+    plt.axhline(y=0, linestyle="-", color="black", linewidth=1)
+
+    plt.tight_layout()
+    save_path = os.path.join(results_folder, f"{cfg.score_mode}_means_and_violin.png")
+    print(f"Saving means and violin graph to {save_path}")
+    plt.savefig(save_path)  
+
 
 
 
@@ -709,7 +778,7 @@ if __name__ == "__main__":
         argparser = argparse.ArgumentParser()
         argparser.add_argument("--layer", type=int, required=True)
         argparser.add_argument("--model_name", type=str, required=True)
-        argparser.add_argument("--use_residual", action="store_true")
+        argparser.add_argument("--use_residual", type=bool, default=False)
         argparser.add_argument("--score_mode", type=str, default="top_random") # can be "top", "random", "top_random"
         cfg = argparser.parse_args(sys.argv[2:])
         read_results(cfg)
