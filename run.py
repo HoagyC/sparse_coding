@@ -1,4 +1,5 @@
 import argparse
+from collections import deque
 from collections.abc import Generator
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -710,20 +711,14 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
     optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.learning_rate)
     running_recon_loss = 0.0
     running_l1_loss = 0.0
-    import collections
     feature_activations = np.zeros((cfg.n_components_dictionary))
     running_window = 100
-    running_sparsity = collections.deque(maxlen=running_window)
-    running_dead_features =collections.deque(maxlen=running_window)
+    running_sparsity: deque = deque(maxlen=running_window)
+    running_dead_features: deque = deque(maxlen=running_window)
     time_horizon = 1000
     # torch.autograd.set_detect_anomaly(True)
     n_chunks_in_folder = len(os.listdir(cfg.dataset_folder))
-<<<<<<< HEAD
-    # wb_tag = f"l1={cfg.l1_alpha:.2E}_ds={cfg.n_components_dictionary}"
-    wb_tag = ""
-=======
     wb_tag = f"l1={cfg.l1_alpha:.2E}_ds={cfg.n_components_dictionary}_mr={mini_run}"
->>>>>>> 7e3713fb71c01566732179e475f8e64827ce72ed
     old_dict = auto_encoder.decoder.weight.detach().cpu().data.t().clone()
     n_batches = 0
     breakout = False
@@ -881,10 +876,6 @@ def run_mmcs_with_larger(learned_dicts, threshold=0.9, device: Union[str, torch.
         threshold = 0.9
         feats_above_threshold[l1_ndx, dict_size_ndx] = (max_cosine_similarities > threshold).sum().item() / smaller_dict_features * 100
         full_max_cosine_sim_for_histograms[l1_ndx][dict_size_ndx] = max_cosine_similarities
-<<<<<<< HEAD
-=======
-
->>>>>>> 7e3713fb71c01566732179e475f8e64827ce72ed
     return av_mmcs_with_larger_dicts, feats_above_threshold, full_max_cosine_sim_for_histograms
 
 
@@ -1021,15 +1012,11 @@ def run_real_data_model(cfg: dotdict):
 
     step_n = 0
     for mini_run in tqdm(range(cfg.mini_runs)):
-<<<<<<< HEAD
-        for l1_ndx, dict_size_ndx in tqdm(list(itertools.product(range(len(l1_range)), range(len(dict_sizes))))):
-=======
         if cfg.save_after_mini:
             outputs_folder = os.path.join(outputs_folder_, str(mini_run))
             os.makedirs(outputs_folder, exist_ok=True)
 
         for l1_ndx, dict_size_ndx in list(itertools.product(range(len(l1_range)), range(len(dict_sizes)))):
->>>>>>> 7e3713fb71c01566732179e475f8e64827ce72ed
             l1_loss = l1_range[l1_ndx]
             dict_size = dict_sizes[dict_size_ndx]
             if cfg.use_wandb:
@@ -1062,17 +1049,10 @@ def run_real_data_model(cfg: dotdict):
             l1_coef = l1_range[l1_ndx]
             dict_size = dict_sizes[dict_size_ndx]
             if(cfg.use_wandb):
-<<<<<<< HEAD
-                # wb_tag = f"l1={l1_coef:.2E}_ds={dict_size}"
-                wandb.log({f".n_dead_features": dead_features_matrix[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
-                wandb.log({f".mmcs_with_larger": mmcs_with_larger[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
-                wandb.log({f".feats_above_threshold": feats_above_threshold[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
-=======
                 wb_tag = f"l1={l1_coef:.2E}_ds={dict_size}_mr={mini_run}"
                 wandb.log({f"{wb_tag}.n_dead_features": dead_features_matrix[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
                 wandb.log({f"{wb_tag}.mmcs_with_larger": mmcs_with_larger[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
                 wandb.log({f"{wb_tag}.feats_above_threshold": feats_above_threshold[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
->>>>>>> 7e3713fb71c01566732179e475f8e64827ce72ed
                 #TODO decide what to do for full_histogram.
         # dead_features_matrix = np.clip(dead_features_matrix, 0, 100)
         
@@ -1101,17 +1081,11 @@ def run_real_data_model(cfg: dotdict):
             plot_mat(mmcs_with_larger, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="Average mmcs with larger dicts", save_name="av_mmcs_with_larger_dicts.png", col_range=(0.0, 1.0))
             plot_mat(feats_above_threshold, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title=f"MN features abouve {cfg.threshold}", save_name="percentage_above_threshold_mmcs_with_larger_dicts.png")
             plot_hist(mcs, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title=f"Max Cosine Similarities", save_name="histogram_max_cosine_sim.png")
-<<<<<<< HEAD
-            wandb.log({"mmcs_with_larger": wandb.Image(os.path.join(outputs_folder, "av_mmcs_with_larger_dicts.png"))}, commit=True)
-            wandb.log({"feats_above_threshold": wandb.Image(os.path.join(outputs_folder, "percentage_above_threshold_mmcs_with_larger_dicts.png"))}, commit=True)
-            wandb.log({"mcs_histogram": wandb.Image(os.path.join(outputs_folder, "histogram_max_cosine_sim.png"))}, commit=True)
-=======
             if cfg.use_wandb:
                 wandb_tag = f"mr={mini_run}"
                 wandb.log({f"{wandb_tag}.mmcs_with_larger": wandb.Image(os.path.join(outputs_folder, "av_mmcs_with_larger_dicts.png"))}, commit=True)
                 wandb.log({f"{wandb_tag}.feats_above_threshold": wandb.Image(os.path.join(outputs_folder, "percentage_above_threshold_mmcs_with_larger_dicts.png"))}, commit=True)
                 wandb.log({f"{wandb_tag}.mcs_histogram": wandb.Image(os.path.join(outputs_folder, "histogram_max_cosine_sim.png"))}, commit=True)
->>>>>>> 7e3713fb71c01566732179e475f8e64827ce72ed
 
         if cfg.save_after_mini:
             cpu_autoencoders = [[deepcopy(auto_e).to(torch.device("cpu")) for auto_e in l1] for l1 in auto_encoders]
