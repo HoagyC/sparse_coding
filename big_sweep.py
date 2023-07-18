@@ -6,10 +6,10 @@ import torch.utils.data as data
 
 import torchopt
 
-from cluster_runs import dispatch_on_chunk
+from cluster_runs import dispatch_on_chunk, dispatch_job_on_chunk
 
 from autoencoders.ensemble import FunctionalEnsemble
-from autoencoders.sae_ensemble import FunctionalSAE
+from autoencoders.sae_ensemble import FunctionalSAE, FunctionalTiedSAE
 
 from activation_dataset import setup_data
 from utils import dotdict, make_tensor_name
@@ -20,8 +20,10 @@ from itertools import product, chain
 
 from transformer_lens import HookedTransformer
 
+import wandb
+import datetime
 import pickle
-
+import json
 import os
 
 def get_model(cfg):
@@ -38,9 +40,130 @@ def get_model(cfg):
     
     return model, tokenizer
 
-def init_ensembles(cfg):
+def init_ensembles_inc_tied(cfg):
+    l1_values = list(np.logspace(-2.5, -1, 4))
+    #l1_values = [0.001, 0.01, 0.1]
+    bias_decays = [0.0, 0.05, 0.1]
+    dict_ratios = [2, 4, 8]
+
+    ensembles = []
+    ensemble_args = []
+    ensemble_tags = []
+    devices = [f"cuda:{i}" for i in range(8)]
+
+    for i in range(2):
+        cfgs = product(l1_values[i*2:(i+1)*2], bias_decays)
+        models = [
+            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 8, l1_alpha, bias_decay=bias_decay)
+            for l1_alpha, bias_decay in cfgs
+        ]
+        device = devices.pop()
+        ensemble = FunctionalEnsemble(
+            models, FunctionalSAE.loss,
+            torchopt.adam, {
+                "lr": cfg.lr
+            },
+            device=device
+        )
+        ensembles.append(ensemble)
+        ensemble_args.append({"batch_size": cfg.batch_size, "device": device})
+        ensemble_tags.append(f"dict_ratio_8_group_{i}")
+    
+    for i in range(2):
+        cfgs = product(l1_values[i*2:(i+1)*2], bias_decays)
+        models = [
+            FunctionalTiedSAE.init(cfg.mlp_width, cfg.mlp_width * 8, l1_alpha, bias_decay=bias_decay)
+            for l1_alpha, bias_decay in cfgs
+        ]
+        device = devices.pop()
+        ensemble = FunctionalEnsemble(
+            models, FunctionalTiedSAE.loss,
+            torchopt.adam, {
+                "lr": cfg.lr
+            },
+            device=device
+        )
+        ensembles.append(ensemble)
+        ensemble_args.append({"batch_size": cfg.batch_size, "device": device})
+        ensemble_tags.append(f"dict_ratio_8_group_{i}_tied")
+    
+    for _ in range(1):
+        cfgs = product(l1_values, bias_decays)
+        models = [
+            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 4, l1_alpha, bias_decay=bias_decay)
+            for l1_alpha, bias_decay in cfgs
+        ]
+        device = devices.pop()
+        ensemble = FunctionalEnsemble(
+            models, FunctionalSAE.loss,
+            torchopt.adam, {
+                "lr": cfg.lr
+            },
+            device=device
+        )
+        ensembles.append(ensemble)
+        ensemble_args.append({"batch_size": cfg.batch_size, "device": device})
+        ensemble_tags.append(f"dict_ratio_4")
+    
+    for _ in range(1):
+        cfgs = product(l1_values, bias_decays)
+        models = [
+            FunctionalTiedSAE.init(cfg.mlp_width, cfg.mlp_width * 4, l1_alpha, bias_decay=bias_decay)
+            for l1_alpha, bias_decay in cfgs
+        ]
+        device = devices.pop()
+        ensemble = FunctionalEnsemble(
+            models, FunctionalTiedSAE.loss,
+            torchopt.adam, {
+                "lr": cfg.lr
+            },
+            device=device
+        )
+        ensembles.append(ensemble)
+        ensemble_args.append({"batch_size": cfg.batch_size, "device": device})
+        ensemble_tags.append(f"dict_ratio_4_tied")
+    
+    for _ in range(1):
+        cfgs = product(l1_values, bias_decays)
+        models = [
+            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 2, l1_alpha, bias_decay=bias_decay)
+            for l1_alpha, bias_decay in cfgs
+        ]
+        device = devices.pop()
+        ensemble = FunctionalEnsemble(
+            models, FunctionalSAE.loss,
+            torchopt.adam, {
+                "lr": cfg.lr
+            },
+            device=device
+        )
+        ensembles.append(ensemble)
+        ensemble_args.append({"batch_size": cfg.batch_size, "device": device})
+        ensemble_tags.append(f"dict_ratio_2")
+    
+    for _ in range(1):
+        cfgs = product(l1_values, bias_decays)
+        models = [
+            FunctionalTiedSAE.init(cfg.mlp_width, cfg.mlp_width * 2, l1_alpha, bias_decay=bias_decay)
+            for l1_alpha, bias_decay in cfgs
+        ]
+        device = devices.pop()
+        ensemble = FunctionalEnsemble(
+            models, FunctionalTiedSAE.loss,
+            torchopt.adam, {
+                "lr": cfg.lr
+            },
+            device=device
+        )
+        ensembles.append(ensemble)
+        ensemble_args.append({"batch_size": cfg.batch_size, "device": device})
+        ensemble_tags.append(f"dict_ratio_2_tied")
+    
+    return ensembles, ensemble_args, ensemble_tags
+
+def init_ensembles_grid(cfg):
     l1_values = list(np.logspace(-4.5, -1, 8))
-    bias_decays = [0.0, 0.01, 0.1]
+    bias_decays = [0.0]
     dict_ratios = [2, 4, 8, 16]
 
     # total 8x3x4 = 96 runs
@@ -139,6 +262,25 @@ def dead_features_logger(ensemble, n_batch, logger_data, losses, aux_buffer):
         mean_nonzero[np.isnan(mean_nonzero)] = 0
     return {"mean": mean, "mean_nonzero": mean_nonzero, "count_nonzero": count_nonzero}
 
+def ensemble_train_loop(ensemble, cfg, args, name, sampler, dataset, progress_counter):
+    if cfg.use_wandb:
+        run = cfg.wandb_instance
+
+    for i, batch_idxs in enumerate(sampler):
+        batch = dataset[batch_idxs].to(args["device"])
+        losses, aux_buffer = ensemble.step_batch(batch)
+
+        if cfg.use_wandb:
+            log = dict(chain(*[[
+                (f"{name}_{m}_loss", losses["loss"][m].item()),
+                (f"{name}_{m}_l_l1", losses["l_l1"][m].item()),
+                (f"{name}_{m}_l_reconstruction", losses["l_reconstruction"][m].item()),
+            ] for m in range(ensemble.n_models)]))
+            
+            run.log(log, commit=True)
+
+        progress_counter.value = i
+
 def main():
     torch.set_grad_enabled(False)
     mp.set_start_method("spawn", force=True)
@@ -151,8 +293,18 @@ def main():
     cfg.dataset_folder = "activation_data"
     cfg.output_folder = "output"
 
-    cfg.batch_size = 1024
-    cfg.lr = 1e-3
+    cfg.batch_size = 1536
+    cfg.lr = 3e-4
+
+    cfg.use_wandb = True
+
+    start_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+
+    if cfg.use_wandb:
+        secrets = json.load(open("secrets.json"))
+        wandb.login(key=secrets["wandb_key"])
+        wandb_run_name = f"ensemble_{cfg.model_name}_{start_time[4:]}"  # trim year
+        cfg.wandb_instance = wandb.init(project="sparse coding", config=dict(cfg), name=wandb_run_name, entity="sparse_coding")
 
     os.makedirs(cfg.dataset_folder, exist_ok=True)
 
@@ -172,7 +324,7 @@ def main():
 
     print("Initialising ensembles...", end=" ")
 
-    ensembles, args, tags = init_ensembles(cfg)
+    ensembles, args, tags = init_ensembles_inc_tied(cfg)
 
     print("Ensembles initialised.")
 
@@ -182,36 +334,19 @@ def main():
     for i, chunk_idx in enumerate(chunk_order):
         print(f"Chunk {i+1}/{n_chunks}")
 
+        cfg.iter_folder = os.path.join(cfg.output_folder, f"_{i}")
+        os.makedirs(cfg.iter_folder, exist_ok=True)
+
         chunk_loc = os.path.join(cfg.dataset_folder, f"{chunk_idx}.pt")
         chunk = torch.load(chunk_loc).to(dtype=torch.float32)
 
-        print(chunk.shape[0] // cfg.batch_size)
-
-        outputs = dispatch_on_chunk(ensembles, args, tags, chunk, logger=dead_features_logger, interval=9)
-
-        losses = [output[0] for output in outputs]
-        logger_data = [output[1] for output in outputs]
-
-        sum_losses = [[0 for _ in range(ensemble.n_models)] for ensemble in ensembles]
-        for j in range(len(losses)):
-            for k in range(len(losses[j])):
-                for l in range(ensembles[j].n_models):
-                    sum_losses[j][l] += losses[j][k]["loss"][l]
-
-        mean_losses = [[sum_loss / len(outputs) for sum_loss in sum_losses[j]] for j in range(len(ensembles))]
-        mean_mean_loss = sum([mean_loss for mean_loss in chain(*mean_losses)]) / len(ensembles)
-
-        print("Mean mean loss on chunk:", mean_mean_loss)
-        print(f"Chunk {i+1}/{n_chunks} done, saving")
-
-        iter_folder = os.path.join(cfg.output_folder, f"_{i}")
-        os.makedirs(iter_folder, exist_ok=True)
+        #outputs = dispatch_on_chunk(ensembles, args, tags, chunk, logger=dead_features_logger, interval=9)
+        dispatch_job_on_chunk(
+            ensembles, cfg, args, tags, chunk, ensemble_train_loop
+        )
         
         for i in range(len(ensembles)):
-            torch.save(ensembles[i].state_dict()["params"], os.path.join(iter_folder, f"ensemble_{tags[i]}.pt"))
-        
-        torch.save(logger_data, os.path.join(iter_folder, "logger_data.pt"))
-        torch.save(losses, os.path.join(iter_folder, "losses.pt"))
+            torch.save(ensembles[i].state_dict(), os.path.join(cfg.iter_folder, f"ensemble_{tags[i]}.pt"))
 
 if __name__ == "__main__":
     main()

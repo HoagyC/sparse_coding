@@ -130,7 +130,15 @@ class FunctionalEnsemble():
                 if torch.isnan(loss[k]).any():
                     raise ValueError("NaN loss encountered for key {}".format(k))
 
-            updates, self.optim_states = torch.vmap(self.optimizer.update)(grads, self.optim_states)
+            updates, new_optim_states = torch.vmap(self.optimizer.update)(grads, self.optim_states)
+
+            # write new optim states into self.optim_states tensors
+            new_leaves, _ = optree.tree_flatten(new_optim_states)
+            leaves, _ = optree.tree_flatten(self.optim_states)
+            for new_leaf, leaf in zip(new_leaves, leaves):
+                leaf = leaf.clone()
+                leaf.copy_(new_leaf)
+
             torchopt.apply_updates(self.params, updates)
 
             for k in loss.keys():
