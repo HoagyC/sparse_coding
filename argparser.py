@@ -59,6 +59,7 @@ def parse_args() -> dotdict:
     parser.add_argument("--load_interpret_autoencoder", type=str, default="") # path to autoencoder to load
     parser.add_argument("--tied_ae", type=bool, default=False) # whether to load pickle as a tied autoencoder
     parser.add_argument("--interp_name", type=str, default="") # name of run, otherwise will be feature_transform
+    parser.add_argument("--sort_mode", type=str, default="max") # how to sort fragments, either max, mean
 
     args = parser.parse_args()
     cfg = dotdict(vars(args))  # convert to dotdict via dict
