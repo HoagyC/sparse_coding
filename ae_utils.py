@@ -11,6 +11,9 @@ import json
 from baukit import Trace
 from datasets import load_dataset
 import numpy as np
+from sklearn.cluster import KMeans
+from sklearn.neighbors import NearestNeighbors
+from sklearn.manifold import TSNE
 from transformer_lens import HookedTransformer
 import torch
 import torch.nn as nn
@@ -135,7 +138,43 @@ def get_top_and_random(folder: str):
                 f.write(f"Top only score: {top_only_score:.2f}\n")
                 f.write(f"Random only score: {random_only_score:.2f}\n")
 
-            
+def cluster_vectors(autoencoder):
+    # take the direction vectors and cluster them
+    # get the direction vectors
+    direction_vectors = autoencoder.decoder.weight.detach().cpu().numpy().T
+
+    # first apply t-SNE to reduce dimensionality
+    tsne = TSNE(n_components=2, random_state=0)
+    assert direction_vectors.shape[0] >= direction_vectors.shape[1] # make sure that we've got indices the right way round
+    direction_vectors_tsne = tsne.fit_transform(direction_vectors)
+
+    # now we're going to cluster the direction vectors
+    # first, we'll try k-means
+    print("Clustering vectors using kmeans")
+    kmeans = KMeans(n_clusters=1000, random_state=0).fit(direction_vectors_tsne)
+    # now get the clusters which have the most points in them and get the ids of the points in those clusters
+    cluster_ids, cluster_counts = np.unique(kmeans.labels_, return_counts=True)
+    cluster_ids = cluster_ids[np.argsort(cluster_counts)[::-1]]
+    cluster_counts = cluster_counts[np.argsort(cluster_counts)[::-1]]   
+    # now get the ids of the points in the top 10 clusters
+    top_cluster_ids = cluster_ids[:10]
+    top_cluster_points = []
+    for cluster_id in top_cluster_ids:
+        top_cluster_points.append(np.where(kmeans.labels_ == cluster_id)[0])
+
+    # save clusters as separate lines on a text file
+    with open("outputs/top_clusters.txt", "w") as f:
+        for cluster in top_cluster_points:
+            f.write(f"{list(cluster)}\n")
+
+    # now want to take a selection of points, and find the nearest neighbours to them
+    # first, take a random selection of points
+    # n_points = 10
+    # random_points = np.random.choice(direction_vectors_tsne.shape[0], n_points, replace=False)
+    # # now find the nearest neighbours to these points
+    # nbrs = NearestNeighbors(n_neighbors=5, algorithm='ball_tree').fit(direction_vectors_tsne)
+
+
         
 
 
@@ -171,3 +210,8 @@ if __name__ == "__main__":
         parser.add_argument('--folder', type=str, help='Path to folder')
         args = parser.parse_args(sys.argv[2:])
         get_top_and_random(args.folder)
+    
+    elif sys.argv[1] == "cluster":
+        from autoencoders.tied_ae import AutoEncoder
+        ae = pickle.load(open("saved_autoencoders/resid2pyth-2048.pkl", "rb"))
+        cluster_vectors(ae)
