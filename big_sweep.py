@@ -6,7 +6,7 @@ import torch.utils.data as data
 
 import torchopt
 
-from cluster_runs import dispatch_on_chunk, dispatch_job_on_chunk
+from cluster_runs import dispatch_job_on_chunk
 
 from autoencoders.ensemble import FunctionalEnsemble
 from autoencoders.sae_ensemble import FunctionalSAE, FunctionalTiedSAE
@@ -111,7 +111,6 @@ def init_ensembles_inc_tied(cfg):
 
     print(f"Using l1 values: {l1_values}")
 
-    #l1_values = [0.001, 0.01, 0.1]
     bias_decays = [0.0, 0.05, 0.1]
     dict_ratios = [2, 4, 8]
 
@@ -230,107 +229,6 @@ def init_ensembles_inc_tied(cfg):
     
     return ensembles, ensemble_args, ensemble_tags
 
-def init_ensembles_grid(cfg):
-    l1_values = list(np.logspace(-5.5, -2, 8))
-    bias_decays = [0.0]
-    dict_ratios = [2, 4, 8, 16]
-
-    # total 8x3x4 = 96 runs
-    # split across 8 GPUs as follows:
-    # 16 split over 4 GPUs
-    # 8 split over 2 GPUs
-    # 2 and 4 split over 1 GPU each
-
-    ensembles = []
-    ensemble_args = []
-    ensemble_tags = []
-    devices = [f"cuda:{i}" for i in range(8)]
-
-    for i in range(4):
-        cfgs = product(l1_values[i*2:(i+1)*2], bias_decays)
-        models = [
-            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 16, l1_alpha, bias_decay=bias_decay)
-            for l1_alpha, bias_decay in cfgs
-        ]
-        device = devices.pop()
-        ensemble = FunctionalEnsemble(
-            models, FunctionalSAE.loss,
-            torchopt.adam, {
-                "lr": cfg.lr
-            },
-            device=device
-        )
-        ensembles.append(ensemble)
-        ensemble_args.append({"batch_size": cfg.batch_size, "device": device})
-        ensemble_tags.append(f"16_{i}")
-    
-    for i in range(2):
-        cfgs = product(l1_values[i*4:(i+1)*4], bias_decays)
-        models = [
-            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 8, l1_alpha, bias_decay=bias_decay)
-            for l1_alpha, bias_decay in cfgs
-        ]
-        device = devices.pop()
-        ensemble = FunctionalEnsemble(
-            models, FunctionalSAE.loss,
-            torchopt.adam, {
-                "lr": cfg.lr
-            },
-            device=device
-        )
-        ensembles.append(ensemble)
-        ensemble_args.append({"batch_size": cfg.batch_size, "device": device})
-        ensemble_tags.append(f"8_{i}")
-
-    cfgs = product(l1_values, bias_decays)
-    models = [
-        FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 4, l1_alpha, bias_decay=bias_decay)
-        for l1_alpha, bias_decay in cfgs
-    ]
-    device = devices.pop()
-    ensemble = FunctionalEnsemble(
-        models, FunctionalSAE.loss,
-        torchopt.adam, {
-            "lr": cfg.lr
-        },
-        device=device
-    )
-    ensembles.append(ensemble)
-    ensemble_args.append({"batch_size": cfg.batch_size, "device": device})
-    ensemble_tags.append("4")
-
-    cfgs = product(l1_values, bias_decays)
-    models = [
-        FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 2, l1_alpha, bias_decay=bias_decay)
-        for l1_alpha, bias_decay in cfgs
-    ]
-    device = devices.pop()
-    ensemble = FunctionalEnsemble(
-        models, FunctionalSAE.loss,
-        torchopt.adam, {
-            "lr": cfg.lr
-        },
-        device=device
-    )
-    ensembles.append(ensemble)
-    ensemble_args.append({"batch_size": cfg.batch_size, "device": device})
-    ensemble_tags.append("2")
-
-    return ensembles, ensemble_args, ensemble_tags
-
-def dead_features_logger(ensemble, n_batch, logger_data, losses, aux_buffer):
-    # c: np.array(n_models, n_logs, batch_size, n_features)
-    c = np.stack([aux["c"] for aux in aux_buffer], axis=1)
-    # count_nonzero: np.array(n_models, n_features)
-    count_nonzero = (c != 0).sum(axis=(1, 2))
-    # mean: np.array(n_models, n_features)
-    mean = c.mean(axis=(1, 2))
-    # mean_nonzero: np.array(n_models, n_features)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        mean_nonzero = c.sum(axis=(1, 2)) / count_nonzero
-        mean_nonzero[np.isnan(mean_nonzero)] = 0
-    return {"mean": mean, "mean_nonzero": mean_nonzero, "count_nonzero": count_nonzero}
-
 def ensemble_train_loop(ensemble, cfg, args, name, sampler, dataset, progress_counter):
     torch.set_grad_enabled(False)
     torch.manual_seed(0)
@@ -399,7 +297,6 @@ def main():
         print(f"Activations in {cfg.dataset_folder} already exist, loading them")
 
     dataset = torch.load(os.path.join(cfg.dataset_folder, "0.pt"))
-    #print(dataset.dtype) # torch.float16
     cfg.mlp_width = dataset.shape[-1]
     n_lines = cfg.max_lines
     del dataset
@@ -420,9 +317,8 @@ def main():
         os.makedirs(cfg.iter_folder, exist_ok=True)
 
         chunk_loc = os.path.join(cfg.dataset_folder, f"{chunk_idx}.pt")
-        chunk = torch.load(chunk_loc).to(device="cpu", dtype=torch.float32) #.to(dtype=torch.float32)
+        chunk = torch.load(chunk_loc).to(device="cpu", dtype=torch.float32)
 
-        #outputs = dispatch_on_chunk(ensembles, args, tags, chunk, logger=dead_features_logger, interval=9)
         dispatch_job_on_chunk(
             ensembles, cfg, args, tags, chunk, ensemble_train_loop
         )
