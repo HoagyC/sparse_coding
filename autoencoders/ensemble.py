@@ -23,25 +23,43 @@ def optim_str_to_func(optim_str):
 
 # https://github.com/pytorch/pytorch/blob/main/torch/_functorch/functional_call.py#L236
 def construct_stacked_leaf(
-    tensors: Union[Tuple[Tensor, ...], List[Tensor]], name: str, device: Optional[Union[torch.device, str]] = None
+    tensors: Union[Tuple[Tensor, ...], List[Tensor]], device: Optional[Union[torch.device, str]] = None
 ) -> Tensor:
     all_requires_grad = all(t.requires_grad for t in tensors)
     none_requires_grad = all(not t.requires_grad for t in tensors)
     if not all_requires_grad and not none_requires_grad:
         raise RuntimeError(
-            f"Expected {name} from each model to have the same .requires_grad"
+            f"Expected tensors from each model to have the same .requires_grad"
         )
     result = torch.stack(tensors).to(device=device)
     if all_requires_grad:
         result = result.detach().requires_grad_()
     return result
-
+"""
 def stack_dict(all_params: List[dict], device=None):
     params = {
         k: construct_stacked_leaf(tuple(params[k] for params in all_params), k, device=device)
         for k in all_params[0]
     }
     return params
+"""
+
+# now recurses! (cool)
+def stack_dict(models: list, device=None):
+    tensors, treespecs = zip(*[optree.tree_flatten(model) for model in models])
+    tensors = list(zip(*tensors))
+    tensors_ = []
+    for ts in tensors:
+        tensors_.append(construct_stacked_leaf(ts, device=device))
+    return optree.tree_unflatten(treespecs[0], tensors_)
+
+def unstack_dict(params, n_models, device=None):
+    tensors, treespec = optree.tree_flatten(params)
+    tensors_ = [[] for _ in range(n_models)]
+    for t in tensors:
+        for i in range(n_models):
+            tensors_[i].append(t[i].to(device=device))
+    return [optree.tree_unflatten(treespec, ts) for ts in tensors_]
 
 class FunctionalEnsemble():
     def __init__(self, models, loss_func, optimizer_func, optimizer_kwargs, device=None):
@@ -62,7 +80,16 @@ class FunctionalEnsemble():
 
         self.optimizer = optimizer_func(**optimizer_kwargs)
         self.optim_states = torch.vmap(self.optimizer.init)(self.params)
+
+        self.init_functions()
     
+    def init_functions(self):
+        def calc_grads(params, buffers, batch):
+            return torch.func.grad(self.loss_func, has_aux=True)(params, buffers, batch)
+
+        self.calc_grads = torch.vmap(calc_grads)
+        self.update = torch.vmap(self.optimizer.update)
+
     @staticmethod
     def from_state(state_dict):
         self = FunctionalEnsemble.__new__(FunctionalEnsemble)
@@ -78,8 +105,15 @@ class FunctionalEnsemble():
 
         self.optimizer = self.optimizer_func(**self.optimizer_kwargs)
 
+        self.init_functions()
+
         return self
     
+    def unstack(self, device=None):
+        params = unstack_dict(self.params, self.n_models, device=device)
+        buffers = unstack_dict(self.buffers, self.n_models, device=device)
+        return list(zip(params, buffers))
+
     def state_dict(self):
         return {
             "device": self.device,
@@ -94,43 +128,35 @@ class FunctionalEnsemble():
     
     def to_device(self, device):
         self.device = device
-        for _, param in self.params.items():
-            param.to(device)
-        for _, buffer in self.buffers.items():
-            buffer.to(device)
-        leaves, _ = optree.tree_flatten(self.optim_states)
-        for leaf in leaves:
+        leaves_p, _ = optree.tree_flatten(self.params)
+        for leaf in leaves_p:
+            leaf.to(device)
+        leaves_b, _ = optree.tree_flatten(self.buffers)
+        for leaf in leaves_b:
+            leaf.to(device)
+        leaves_o, _ = optree.tree_flatten(self.optim_states)
+        for leaf in leaves_o:
             leaf.to(device)
     
     def to_shared_memory(self):
-        for _, param in self.params.items():
-            param.share_memory_()
-        for _, buffer in self.buffers.items():
-            buffer.share_memory_()
-        leaves, _ = optree.tree_flatten(self.optim_states)
-        for leaf in leaves:
+        leaves_p, _ = optree.tree_flatten(self.params)
+        for leaf in leaves_p:
+            leaf.share_memory_()
+        leaves_b, _ = optree.tree_flatten(self.buffers)
+        for leaf in leaves_b:
+            leaf.share_memory_()
+        leaves_o, _ = optree.tree_flatten(self.optim_states)
+        for leaf in leaves_o:
             leaf.share_memory_()
     
     def step_batch(self, minibatches, expand_dims=True):
         with torch.no_grad():
             if expand_dims:
                 minibatches = minibatches.expand(self.n_models, *minibatches.shape)
-            
-            def calc_grads(params, buffers, batch):
-                return torch.func.grad(self.loss_func, has_aux=True)(params, buffers, batch)
-            
-            for k in self.params.keys():
-                if torch.isnan(self.params[k]).any():
-                    raise ValueError("NaN parameter encountered for key {}".format(k))
 
-            # check for nan
-            grads, (loss, aux) = torch.vmap(calc_grads)(self.params, self.buffers, minibatches)
+            grads, (loss, aux) = self.calc_grads(self.params, self.buffers, minibatches)
 
-            for k in loss.keys():
-                if torch.isnan(loss[k]).any():
-                    raise ValueError("NaN loss encountered for key {}".format(k))
-
-            updates, new_optim_states = torch.vmap(self.optimizer.update)(grads, self.optim_states)
+            updates, new_optim_states = self.update(grads, self.optim_states)
 
             # write new optim states into self.optim_states tensors
             new_leaves, _ = optree.tree_flatten(new_optim_states)
@@ -140,11 +166,6 @@ class FunctionalEnsemble():
                 leaf.copy_(new_leaf)
 
             torchopt.apply_updates(self.params, updates)
-
-            for k in loss.keys():
-                loss[k] = loss[k].detach().cpu().numpy()
-            for k in aux.keys():
-                aux[k] = aux[k].detach().cpu().numpy()
 
             return loss, aux
 

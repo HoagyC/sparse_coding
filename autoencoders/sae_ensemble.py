@@ -40,21 +40,21 @@ class SAE(nn.Module):
 
 class FunctionalSAE:
     @staticmethod
-    def init(activation_size, n_dict_components, l1_alpha, bias_decay=0.0, device=None):
+    def init(activation_size, n_dict_components, l1_alpha, bias_decay=0.0, device=None, dtype=None):
         params = {}
         buffers = {}
 
-        params["encoder"] = torch.empty((n_dict_components, activation_size), device=device)
+        params["encoder"] = torch.empty((n_dict_components, activation_size), device=device, dtype=dtype)
         nn.init.xavier_uniform_(params["encoder"])
 
-        params["encoder_bias"] = torch.empty((n_dict_components,), device=device)
+        params["encoder_bias"] = torch.empty((n_dict_components,), device=device, dtype=dtype)
         nn.init.zeros_(params["encoder_bias"])
 
-        params["decoder"] = torch.empty((n_dict_components, activation_size), device=device)
+        params["decoder"] = torch.empty((n_dict_components, activation_size), device=device, dtype=dtype)
         nn.init.xavier_uniform_(params["decoder"])
 
-        buffers["l1_alpha"] = torch.tensor(l1_alpha, device=device)
-        buffers["bias_decay"] = torch.tensor(bias_decay, device=device)
+        buffers["l1_alpha"] = torch.tensor(l1_alpha, device=device, dtype=dtype)
+        buffers["bias_decay"] = torch.tensor(bias_decay, device=device, dtype=dtype)
 
         return params, buffers
     
@@ -70,13 +70,14 @@ class FunctionalSAE:
         x_hat = torch.einsum("nd,bn->bd", normed_weights, c)
 
         l_reconstruction = (x_hat - batch).pow(2).mean()
-        l_l1 = (buffers["l1_alpha"] / c.shape[0]) * torch.norm(c, 1, dim=-1).mean()
+        l_l1 = buffers["l1_alpha"] * torch.norm(c, 1, dim=-1).mean()
         l_bias_decay = buffers["bias_decay"] * torch.norm(params["encoder_bias"], 2)
         
         loss_data = {
             "loss": l_reconstruction + l_l1 + l_bias_decay,
             "l_reconstruction": l_reconstruction,
             "l_l1": l_l1,
+            "l_bias_decay": l_bias_decay,
         }
 
         aux_data = {
@@ -87,18 +88,63 @@ class FunctionalSAE:
 
 class FunctionalTiedSAE:
     @staticmethod
-    def init(activation_size, n_dict_components, l1_alpha, bias_decay=0.0, device=None):
+    def init(activation_size, n_dict_components, l1_alpha, bias_decay=0.0, device=None, dtype=None):
         params = {}
         buffers = {}
 
-        params["encoder"] = torch.empty((n_dict_components, activation_size), device=device)
+        params["encoder"] = torch.empty((n_dict_components, activation_size), device=device, dtype=dtype)
         nn.init.xavier_uniform_(params["encoder"])
 
-        params["encoder_bias"] = torch.empty((n_dict_components,), device=device)
+        params["encoder_bias"] = torch.empty((n_dict_components,), device=device, dtype=dtype)
         nn.init.zeros_(params["encoder_bias"])
 
-        buffers["l1_alpha"] = torch.tensor(l1_alpha, device=device)
-        buffers["bias_decay"] = torch.tensor(bias_decay, device=device)
+        buffers["l1_alpha"] = torch.tensor(l1_alpha, device=device, dtype=dtype)
+        buffers["bias_decay"] = torch.tensor(bias_decay, device=device, dtype=dtype)
+
+        return params, buffers
+    
+    @staticmethod
+    def loss(params, buffers, batch):
+        decoder_norms = torch.norm(params["encoder"], 2, dim=-1)
+        normed_weights = params["encoder"] / torch.clamp(decoder_norms, 1e-5)[:, None]
+
+        c = torch.einsum("nd,bd->bn", normed_weights, batch)
+        c = c + params["encoder_bias"]
+        c = torch.clamp(c, min=0.0)
+
+        x_hat = torch.einsum("nd,bn->bd", normed_weights, c)
+
+        l_reconstruction = (x_hat - batch).pow(2).mean()
+        l_l1 = buffers["l1_alpha"] * torch.norm(c, 1, dim=-1).mean()
+        l_bias_decay = buffers["bias_decay"] * torch.norm(params["encoder_bias"], 2)
+        
+        loss_data = {
+            "loss": l_reconstruction + l_l1 + l_bias_decay,
+            "l_reconstruction": l_reconstruction,
+            "l_l1": l_l1,
+            "l_bias_decay": l_bias_decay,
+        }
+
+        aux_data = {
+            "c": c,
+        }
+
+        return l_reconstruction + l_l1 + l_bias_decay, (loss_data, aux_data)
+
+class FunctionalScaledTiedSAE:
+    @staticmethod
+    def init(activation_size, n_dict_components, l1_alpha, bias_decay=0.0, device=None, dtype=None):
+        params = {}
+        buffers = {}
+
+        params["encoder"] = torch.empty((n_dict_components, activation_size), device=device, dtype=dtype)
+        nn.init.xavier_uniform_(params["encoder"])
+
+        params["encoder_bias"] = torch.empty((n_dict_components,), device=device, dtype=dtype)
+        nn.init.zeros_(params["encoder_bias"])
+
+        buffers["l1_alpha"] = torch.tensor(l1_alpha, device=device, dtype=dtype)
+        buffers["bias_decay"] = torch.tensor(bias_decay, device=device, dtype=dtype)
 
         return params, buffers
     
@@ -114,13 +160,14 @@ class FunctionalTiedSAE:
         x_hat = torch.einsum("nd,bn->bd", normed_weights, c)
 
         l_reconstruction = (x_hat - batch).pow(2).mean()
-        l_l1 = (buffers["l1_alpha"] / c.shape[0]) * torch.norm(c, 1, dim=-1).mean()
+        l_l1 = buffers["l1_alpha"] * torch.norm(c, 1, dim=-1).mean()
         l_bias_decay = buffers["bias_decay"] * torch.norm(params["encoder_bias"], 2)
         
         loss_data = {
             "loss": l_reconstruction + l_l1 + l_bias_decay,
             "l_reconstruction": l_reconstruction,
             "l_l1": l_l1,
+            "l_bias_decay": l_bias_decay,
         }
 
         aux_data = {

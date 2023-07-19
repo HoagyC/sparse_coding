@@ -10,6 +10,7 @@ from cluster_runs import dispatch_on_chunk, dispatch_job_on_chunk
 
 from autoencoders.ensemble import FunctionalEnsemble
 from autoencoders.sae_ensemble import FunctionalSAE, FunctionalTiedSAE
+from autoencoders.semilinear_autoencoder import SemiLinearSAE
 
 from activation_dataset import setup_data
 from utils import dotdict, make_tensor_name
@@ -40,8 +41,76 @@ def get_model(cfg):
     
     return model, tokenizer
 
+def init_semilinear_grid(cfg):
+    l1_values = list(np.logspace(-7, 0, 16))
+    dict_ratios = [2, 4, 8]
+
+    ensembles = []
+    ensemble_args = []
+    ensemble_tags = []
+    devices = [f"cuda:{i}" for i in range(8)]
+
+    for i in range(4):
+        cfgs = l1_values[i*4:(i+1)*4]
+        models = [
+            SemiLinearSAE.init(cfg.mlp_width, cfg.mlp_width * 8, l1_alpha, dtype=cfg.dtype)
+            for l1_alpha in cfgs
+        ]
+        device = devices.pop()
+        ensemble = FunctionalEnsemble(
+            models, SemiLinearSAE.loss,
+            torchopt.adam, {
+                "lr": cfg.lr
+            },
+            device=device
+        )
+        ensembles.append(ensemble)
+        ensemble_args.append({"batch_size": cfg.batch_size, "device": device})
+        ensemble_tags.append(f"dict_ratio_8_group_{i}")
+    
+    for i in range(2):
+        cfgs = l1_values[i*8:(i+1)*8]
+        models = [
+            SemiLinearSAE.init(cfg.mlp_width, cfg.mlp_width * 4, l1_alpha, dtype=cfg.dtype)
+            for l1_alpha in cfgs
+        ]
+        device = devices.pop()
+        ensemble = FunctionalEnsemble(
+            models, SemiLinearSAE.loss,
+            torchopt.adam, {
+                "lr": cfg.lr
+            },
+            device=device
+        )
+        ensembles.append(ensemble)
+        ensemble_args.append({"batch_size": cfg.batch_size, "device": device})
+        ensemble_tags.append(f"dict_ratio_4_group_{i}")
+    
+    for i in range(1):
+        cfgs = l1_values
+        models = [
+            SemiLinearSAE.init(cfg.mlp_width, cfg.mlp_width * 2, l1_alpha, dtype=cfg.dtype)
+            for l1_alpha in cfgs
+        ]
+        device = devices.pop()
+        ensemble = FunctionalEnsemble(
+            models, SemiLinearSAE.loss,
+            torchopt.adam, {
+                "lr": cfg.lr
+            },
+            device=device
+        )
+        ensembles.append(ensemble)
+        ensemble_args.append({"batch_size": cfg.batch_size, "device": device})
+        ensemble_tags.append(f"dict_ratio_2_group_{i}")
+    
+    return ensembles, ensemble_args, ensemble_tags
+
 def init_ensembles_inc_tied(cfg):
-    l1_values = list(np.logspace(-2.5, -1, 4))
+    l1_values = list(np.logspace(-3.5, -2, 4))
+
+    print(f"Using l1 values: {l1_values}")
+
     #l1_values = [0.001, 0.01, 0.1]
     bias_decays = [0.0, 0.05, 0.1]
     dict_ratios = [2, 4, 8]
@@ -54,7 +123,7 @@ def init_ensembles_inc_tied(cfg):
     for i in range(2):
         cfgs = product(l1_values[i*2:(i+1)*2], bias_decays)
         models = [
-            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 8, l1_alpha, bias_decay=bias_decay)
+            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 8, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
             for l1_alpha, bias_decay in cfgs
         ]
         device = devices.pop()
@@ -72,7 +141,7 @@ def init_ensembles_inc_tied(cfg):
     for i in range(2):
         cfgs = product(l1_values[i*2:(i+1)*2], bias_decays)
         models = [
-            FunctionalTiedSAE.init(cfg.mlp_width, cfg.mlp_width * 8, l1_alpha, bias_decay=bias_decay)
+            FunctionalTiedSAE.init(cfg.mlp_width, cfg.mlp_width * 8, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
             for l1_alpha, bias_decay in cfgs
         ]
         device = devices.pop()
@@ -90,7 +159,7 @@ def init_ensembles_inc_tied(cfg):
     for _ in range(1):
         cfgs = product(l1_values, bias_decays)
         models = [
-            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 4, l1_alpha, bias_decay=bias_decay)
+            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 4, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
             for l1_alpha, bias_decay in cfgs
         ]
         device = devices.pop()
@@ -108,7 +177,7 @@ def init_ensembles_inc_tied(cfg):
     for _ in range(1):
         cfgs = product(l1_values, bias_decays)
         models = [
-            FunctionalTiedSAE.init(cfg.mlp_width, cfg.mlp_width * 4, l1_alpha, bias_decay=bias_decay)
+            FunctionalTiedSAE.init(cfg.mlp_width, cfg.mlp_width * 4, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
             for l1_alpha, bias_decay in cfgs
         ]
         device = devices.pop()
@@ -126,7 +195,7 @@ def init_ensembles_inc_tied(cfg):
     for _ in range(1):
         cfgs = product(l1_values, bias_decays)
         models = [
-            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 2, l1_alpha, bias_decay=bias_decay)
+            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 2, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
             for l1_alpha, bias_decay in cfgs
         ]
         device = devices.pop()
@@ -144,7 +213,7 @@ def init_ensembles_inc_tied(cfg):
     for _ in range(1):
         cfgs = product(l1_values, bias_decays)
         models = [
-            FunctionalTiedSAE.init(cfg.mlp_width, cfg.mlp_width * 2, l1_alpha, bias_decay=bias_decay)
+            FunctionalTiedSAE.init(cfg.mlp_width, cfg.mlp_width * 2, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
             for l1_alpha, bias_decay in cfgs
         ]
         device = devices.pop()
@@ -162,7 +231,7 @@ def init_ensembles_inc_tied(cfg):
     return ensembles, ensemble_args, ensemble_tags
 
 def init_ensembles_grid(cfg):
-    l1_values = list(np.logspace(-4.5, -1, 8))
+    l1_values = list(np.logspace(-5.5, -2, 8))
     bias_decays = [0.0]
     dict_ratios = [2, 4, 8, 16]
 
@@ -212,7 +281,7 @@ def init_ensembles_grid(cfg):
         ensembles.append(ensemble)
         ensemble_args.append({"batch_size": cfg.batch_size, "device": device})
         ensemble_tags.append(f"8_{i}")
-    
+
     cfgs = product(l1_values, bias_decays)
     models = [
         FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 4, l1_alpha, bias_decay=bias_decay)
@@ -263,6 +332,10 @@ def dead_features_logger(ensemble, n_batch, logger_data, losses, aux_buffer):
     return {"mean": mean, "mean_nonzero": mean_nonzero, "count_nonzero": count_nonzero}
 
 def ensemble_train_loop(ensemble, cfg, args, name, sampler, dataset, progress_counter):
+    torch.set_grad_enabled(False)
+    torch.manual_seed(0)
+    np.random.seed(0)
+
     if cfg.use_wandb:
         run = cfg.wandb_instance
 
@@ -270,11 +343,15 @@ def ensemble_train_loop(ensemble, cfg, args, name, sampler, dataset, progress_co
         batch = dataset[batch_idxs].to(args["device"])
         losses, aux_buffer = ensemble.step_batch(batch)
 
+        num_nonzero = aux_buffer["c"].count_nonzero(dim=-1).float().mean(dim=-1)
+
         if cfg.use_wandb:
             log = dict(chain(*[[
                 (f"{name}_{m}_loss", losses["loss"][m].item()),
                 (f"{name}_{m}_l_l1", losses["l_l1"][m].item()),
                 (f"{name}_{m}_l_reconstruction", losses["l_reconstruction"][m].item()),
+                (f"{name}_{m}_l_bias_decay", losses["l_bias_decay"][m].item()),
+                (f"{name}_{m}_sparsity", num_nonzero[m].item()),
             ] for m in range(ensemble.n_models)]))
             
             run.log(log, commit=True)
@@ -293,10 +370,15 @@ def main():
     cfg.dataset_folder = "activation_data"
     cfg.output_folder = "output"
 
-    cfg.batch_size = 1536
+    cfg.batch_size = 1024
     cfg.lr = 3e-4
 
     cfg.use_wandb = True
+
+    cfg.dtype = torch.float32
+
+    cfg.layer = 2
+    cfg.use_residual = True
 
     start_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
@@ -338,15 +420,30 @@ def main():
         os.makedirs(cfg.iter_folder, exist_ok=True)
 
         chunk_loc = os.path.join(cfg.dataset_folder, f"{chunk_idx}.pt")
-        chunk = torch.load(chunk_loc).to(dtype=torch.float32)
+        chunk = torch.load(chunk_loc).to(device="cpu", dtype=torch.float32) #.to(dtype=torch.float32)
 
         #outputs = dispatch_on_chunk(ensembles, args, tags, chunk, logger=dead_features_logger, interval=9)
         dispatch_job_on_chunk(
             ensembles, cfg, args, tags, chunk, ensemble_train_loop
         )
+
+        del chunk
+
+        hyperparams = ["l1_alpha", "bias_decay"]
+        hyperparam_map = {}
+
+        for ensemble, tag in zip(ensembles, tags):
+            for idx, model in enumerate(ensemble.unstack(device="cpu")):
+                name = f"{tag}_{idx}.pt"
+                _, buffers = model
+                hyperparam_map[name] = {
+                    k: buffers[k].item() for k in hyperparams
+                }
+                print("Saving", name)
+                torch.save(model, os.path.join(cfg.iter_folder, name))
         
-        for i in range(len(ensembles)):
-            torch.save(ensembles[i].state_dict(), os.path.join(cfg.iter_folder, f"ensemble_{tags[i]}.pt"))
+        with open(os.path.join(cfg.iter_folder, "hyperparams.json"), "w") as f:
+            json.dump(hyperparam_map, f)
 
 if __name__ == "__main__":
     main()
