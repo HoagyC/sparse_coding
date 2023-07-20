@@ -33,7 +33,7 @@ def parse_args() -> dotdict:
     parser.add_argument("--dict_ratio_exp_base", type=int, default=2)
 
     parser.add_argument("--run_toy", type=bool, default=False)
-    parser.add_argument("--model_name", type=str, default="nanoGPT") # EleutherAI/pythia-70m-deduped
+    parser.add_argument("--model_name", type=str, default="EleutherAI/pythia-70m-deduped")
     parser.add_argument("--model_path", type=str, default="models/32d70k.pt")
     parser.add_argument("--dataset_name", type=str, default="NeelNanda/pile-10k")
     parser.add_argument("--seed", type=int, default=0)
