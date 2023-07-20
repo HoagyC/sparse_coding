@@ -28,7 +28,7 @@ from argparser import parse_args
 from comparisons import NoCredentialsError
 from utils import dotdict, make_tensor_name, upload_to_aws
 from nanoGPT_model import GPT
-from run import setup_data
+from activation_dataset import setup_data
 
 
 # set OPENAI_API_KEY environment variable from secrets.json['openai_key']

@@ -92,7 +92,8 @@ def main():
     outputs_folder = os.path.join(cfg.outputs_folder, start_time)
     os.makedirs(outputs_folder, exist_ok=True)
 
-    from run import setup_data, run_real_data_model, AutoEncoder
+    from run import run_real_data_model, AutoEncoder
+    from activation_dataset import setup_data
 
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.use_wandb = False
