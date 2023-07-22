@@ -447,7 +447,10 @@ async def main(cfg: dotdict) -> None:
         if cfg.tied_ae:
             activation_fn_kwargs.update({"feature_matrix": autoencoder.decoder.weight})
         else:
-            activation_fn_kwargs.update({"feature_matrix": autoencoder.encoder[0].weight.t()})
+            if cfg.use_decoder:
+                activation_fn_kwargs.update({"feature_matrix": autoencoder.decoder.weight})
+            else:
+                activation_fn_kwargs.update({"feature_matrix": autoencoder.encoder[0].weight.t()})
         
     elif cfg.activation_transform == "random":
         print("Using random activation transform")
@@ -673,21 +676,18 @@ def get_score(lines: List[str], mode: str):
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
-def read_results(activation_name, score_mode):
+def read_results(activation_name: str, score_mode: str, exclude_mean: bool = True) -> None:
     results_folder = os.path.join("auto_interp_results", activation_name)
     transforms = os.listdir(results_folder)
     transforms = [transform for transform in transforms if os.path.isdir(os.path.join(results_folder, transform))]
-    scores = {}
+    scores: Dict[str, List[float]] = {}
     plt.clf() # clear the plot
 
     if "sparse_coding" in transforms:
         transforms.remove("sparse_coding")
         transforms = ["sparse_coding"] + transforms
     
-    if cfg.exclude_mean:
-        transforms = [x for x in transforms if not "_mean" in x]
-
-        
+  
     for transform in transforms:
         scores[transform] = []
         # list all the features by looking for folders
@@ -706,6 +706,10 @@ def read_results(activation_name, score_mode):
 
             print(f"{feature_ndx=}, {transform=}, {score=}")
             scores[transform].append(score)
+        
+        # if no scores, add a 0 so it shows up and doesn't cause errors
+        if len(scores[transform]) == 0:
+            scores[transform].append(0)
                 
     
     # plot the scores as a violin plot
@@ -757,7 +761,7 @@ if __name__ == "__main__":
         argparser.add_argument("--layer", type=int, default=1)
         argparser.add_argument("--model_name", type=str, default="EleutherAI/pythia-70m-deduped")
         argparser.add_argument("--use_residual", type=bool, default=False)
-        argparser.add_argument("--score_mode", type=str, default="top_random") # can be "top", "random", "top_random"
+        argparser.add_argument("--score_mode", type=str, default="top_random") # can be "top", "random", "top_random", "all"
         argparser.add_argument("--run_all", type=bool, default=False)
         argparser.add_argument("--exclude_mean", type=bool, default=True)
         cfg = argparser.parse_args(sys.argv[2:])
@@ -771,11 +775,11 @@ if __name__ == "__main__":
             activation_names = [x for x in os.listdir("auto_interp_results") if os.path.isdir(os.path.join("auto_interp_results", x))]
         else:
             point_name = "resid" if cfg.use_residual else "postnonlin"
-            activations_names = [f"{cfg.model_name.split('/')[-1]}_layer{cfg.layer}_{point_name}"]
+            activation_names = [f"{cfg.model_name.split('/')[-1]}_layer{cfg.layer}_{point_name}"]
         
         for activation_name in activation_names:
             for score_mode in score_modes:
-                read_results(activation_name, score_mode)
+                read_results(activation_name, score_mode, cfg.exclude_mean)
 
 
     else:

@@ -1,7 +1,6 @@
-
-*Work done with Logan Riggs who wrote the original replication notebook. Thanks to Pierre Peigne for the data generating code and Lee Sharkey for answering questions.*
-
 ## Sparse Coding
+
+This repo contains code for applying sparse coding to activation vectors in language models. Work done with Logan Riggs and Aidan Ewart, advised by Lee Sharkey.
 
 `run.py` contains a more set of functions for generating datasets using Pile10k and then running sparse autoencoders activations on the data to try and learn the features that the model is using for its computation. It is set up by default to run hyperparameter sweeps using across dictionary size and l1 coefficient.
 

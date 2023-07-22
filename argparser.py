@@ -52,14 +52,14 @@ def parse_args() -> dotdict:
     parser.add_argument("--refresh_data", type=bool, default=False)  # Whether to remake the dataset after each mini run
     parser.add_argument("--max_lines", type=int, default=100000)  # How many lines to read from the dataset
     # interpret
-    parser.add_argument("--activation_sentences", type=int, default=8) # number of sentences to go through to get feature activation
     parser.add_argument("--load_activation_dataset", type=bool, default=True) # path to dataset to load
     parser.add_argument("--n_feats_explain", type=int, default=10) # number of features to explain
-    parser.add_argument("--activation_transform", type=str, default="ica") # way of transforming neuron activations into features
+    parser.add_argument("--activation_transform", type=str, default="feature_dict") # way of transforming neuron activations into features
     parser.add_argument("--load_interpret_autoencoder", type=str, default="") # path to autoencoder to load
     parser.add_argument("--tied_ae", type=bool, default=False) # whether to load pickle as a tied autoencoder
     parser.add_argument("--interp_name", type=str, default="") # name of run, otherwise will be feature_transform
     parser.add_argument("--sort_mode", type=str, default="max") # how to sort fragments, either max, mean
+    parser.add_argument("--use_decoder", type=bool, default=True) # whether to use the transposed decoder instead of encoder in a non-tied ae
 
     args = parser.parse_args()
     cfg = dotdict(vars(args))  # convert to dotdict via dict

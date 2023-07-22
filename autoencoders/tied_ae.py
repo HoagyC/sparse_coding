@@ -25,9 +25,9 @@ class AutoEncoder(nn.Module):
         self.n_dict_components = n_dict_components
 
     def forward(self, x):
-        c = self.encoder(x @ self.decoder.weight + self.encoder_bias)
         # Apply unit norm constraint to the decoder weights
         self.decoder.weight.data = nn.functional.normalize(self.decoder.weight.data, dim=0)
+        c = self.encoder(x @ self.decoder.weight + self.encoder_bias)
 
         # Decoding step as before
         x_hat = self.decoder(c)
