@@ -10,7 +10,7 @@ from botocore.exceptions import NoCredentialsError, ClientError
 
 VAST_NUM = 4
 # DEST_ADDR = f"root@ssh{VAST_NUM}.vast.ai"
-DEST_ADDR = "mchorse@198.176.97.26"
+DEST_ADDR = "mchorse@216.153.50.63"
 SSH_PYTHON = "/opt/conda/bin/python"
 
 PORT = 22
