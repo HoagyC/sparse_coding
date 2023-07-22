@@ -1,4 +1,5 @@
 import argparse
+from collections import deque
 from collections.abc import Generator
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -29,159 +30,12 @@ from transformer_lens import HookedTransformer
 from transformers import PreTrainedTokenizerBase, GPT2Tokenizer
 import wandb
 
-from utils import *
+from activation_dataset import setup_data
 from argparser import parse_args
 from nanoGPT_model import GPT
+from utils import *
 
 n_ground_truth_components, activation_dim, dataset_size = None, None, None
-T = TypeVar("T", bound=Union[Dataset, DatasetDict])
-
-def read_from_pile(address: str, max_lines: int = 100_000, start_line: int = 0):
-    """Reads a file from the Pile dataset. Returns a generator."""
-    
-    with open(address, "r") as f:
-        for i, line in enumerate(f):
-            if i < start_line:
-                continue
-            if i >= max_lines + start_line:
-                break
-            yield json.loads(line)
-
-
-def make_sentence_dataset(dataset_name: str, max_lines: int = 20_000, start_line: int = 0):
-    """Returns a dataset from the Huggingface Datasets library."""
-    if dataset_name == "EleutherAI/pile":
-        if not os.path.exists("pile0"):
-            print("Downloading shard 0 of the Pile dataset (requires 50GB of disk space).")
-            if not os.path.exists("pile0.zst"):
-                os.system("curl https://the-eye.eu/public/AI/pile/train/00.jsonl.zst > pile0.zst")
-                os.system("unzstd pile0.zst")
-        dataset = Dataset.from_list(list(read_from_pile("pile0", max_lines=max_lines, start_line=start_line)))
-    else:
-        dataset = load_dataset(dataset_name, split="train")
-    return dataset
-
-
-# Nora's Code from https://github.com/AlignmentResearch/tuned-lens/blob/main/tuned_lens/data.py
-def chunk_and_tokenize(
-    data: T,
-    tokenizer: PreTrainedTokenizerBase,
-    *,
-    format: str = "torch",
-    num_proc: int = min(mp.cpu_count() // 2, 8),
-    text_key: str = "text",
-    max_length: int = 2048,
-    return_final_batch: bool = False,
-    load_from_cache_file: bool = True,
-) -> tuple[T, float]:
-    """Perform GPT-style chunking and tokenization on a dataset.
-
-    The resulting dataset will consist entirely of chunks exactly `max_length` tokens
-    long. Long sequences will be split into multiple chunks, and short sequences will
-    be merged with their neighbors, using `eos_token` as a separator. The fist token
-    will also always be an `eos_token`.
-
-    Args:
-        data: The dataset to chunk and tokenize.
-        tokenizer: The tokenizer to use.
-        format: The format to return the dataset in, passed to `Dataset.with_format`.
-        num_proc: The number of processes to use for tokenization.
-        text_key: The key in the dataset to use as the text to tokenize.
-        max_length: The maximum length of a batch of input ids.
-        return_final_batch: Whether to return the final batch, which may be smaller
-            than the others.
-        load_from_cache_file: Whether to load from the cache file.
-
-    Returns:
-        * The chunked and tokenized dataset.
-        * The ratio of nats to bits per byte see https://arxiv.org/pdf/2101.00027.pdf,
-            section 3.1.
-    """
-
-    def _tokenize_fn(x: dict[str, list]):
-        chunk_size = min(tokenizer.model_max_length, max_length)  # tokenizer max length is 1024 for gpt2
-        sep = tokenizer.eos_token or "<|endoftext|>"
-        joined_text = sep.join([""] + x[text_key])
-        output = tokenizer(
-            # Concatenate all the samples together, separated by the EOS token.
-            joined_text,  # start with an eos token
-            max_length=chunk_size,
-            return_attention_mask=False,
-            return_overflowing_tokens=True,
-            truncation=True,
-        )
-
-        if overflow := output.pop("overflowing_tokens", None):
-            # Slow Tokenizers return unnested lists of ints
-            assert isinstance(output["input_ids"][0], int)
-
-            # Chunk the overflow into batches of size `chunk_size`
-            chunks = [output["input_ids"]] + [overflow[i * chunk_size : (i + 1) * chunk_size] for i in range(math.ceil(len(overflow) / chunk_size))]
-            output = {"input_ids": chunks}
-
-        total_tokens = sum(len(ids) for ids in output["input_ids"])
-        total_bytes = len(joined_text.encode("utf-8"))
-
-        if not return_final_batch:
-            # We know that the last sample will almost always be less than the max
-            # number of tokens, and we don't want to pad, so we just drop it.
-            output = {k: v[:-1] for k, v in output.items()}
-
-        output_batch_size = len(output["input_ids"])
-
-        if output_batch_size == 0:
-            raise ValueError("Not enough data to create a single batch complete batch." " Either allow the final batch to be returned," " or supply more data.")
-
-        # We need to output this in order to compute the number of bits per byte
-        div, rem = divmod(total_tokens, output_batch_size)
-        output["length"] = [div] * output_batch_size
-        output["length"][-1] += rem
-
-        div, rem = divmod(total_bytes, output_batch_size)
-        output["bytes"] = [div] * output_batch_size
-        output["bytes"][-1] += rem
-
-        return output
-
-    data = data.map(
-        _tokenize_fn,
-        # Batching is important for ensuring that we don't waste tokens
-        # since we always throw away the last element of the batch we
-        # want to keep the batch size as large as possible
-        batched=True,
-        batch_size=2048,
-        num_proc=num_proc,
-        remove_columns=get_columns_all_equal(data),
-        load_from_cache_file=load_from_cache_file,
-    )
-    total_bytes: float = sum(data["bytes"])
-    total_tokens: float = sum(data["length"])
-    return data.with_format(format, columns=["input_ids"]), (total_tokens / total_bytes) / math.log(2)
-
-
-def get_columns_all_equal(dataset: Union[Dataset, DatasetDict]) -> list[str]:
-    """Get a single list of columns in a `Dataset` or `DatasetDict`.
-
-    We assert the columms are the same across splits if it's a `DatasetDict`.
-
-    Args:
-        dataset: The dataset to get the columns from.
-
-    Returns:
-        A list of columns.
-    """
-    if isinstance(dataset, DatasetDict):
-        cols_by_split = dataset.column_names.values()
-        columns = next(iter(cols_by_split))
-        if not all(cols == columns for cols in cols_by_split):
-            raise ValueError("All splits must have the same columns")
-
-        return columns
-
-    return dataset.column_names
-
-
-# End Nora's Code from https://github.com/AlignmentResearch/tuned-lens/blob/main/tuned_lens/data.py
 
 
 @dataclass
@@ -432,7 +286,7 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
 
     if not data_generator:
         data_generator = RandomDatasetGenerator(
-            activation_dim=cfg.mlp_width,
+            activation_dim=cfg.activation_dim,
             n_ground_truth_components=cfg.n_ground_truth_components,
             batch_size=cfg.batch_size,
             feature_num_nonzero=cfg.feature_num_nonzero,
@@ -442,7 +296,7 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
         )
 
     t_type = torch.float32
-    auto_encoder = AutoEncoder(cfg.mlp_width, cfg.n_components_dictionary, t_type, l1_coef=cfg.l1_alpha).to(device)
+    auto_encoder = AutoEncoder(cfg.activation_dim, cfg.n_components_dictionary, t_type, l1_coef=cfg.l1_alpha).to(device)
 
     ground_truth_features = data_generator.feats
     # Train the model
@@ -573,8 +427,8 @@ def plot_mat(mat, l1_alphas, learned_dict_ratios, show: bool = True, save_folder
 
 def compare_mmcs_with_larger_dicts(dict: npt.NDArray, larger_dicts: List[npt.NDArray]) -> float:
     """
-    :param dict: The dict to compare to others. Shape (mlp_width, n_dict_elements)
-    :param larger_dicts: A list of dicts to compare to. Shape (mlp_width, n_dict_elements(variable)]) * n_larger_dicts
+    :param dict: The dict to compare to others. Shape (activation_dim, n_dict_elements)
+    :param larger_dicts: A list of dicts to compare to. Shape (activation_dim, n_dict_elements(variable)]) * n_larger_dicts
     :return The mean max cosine similarity of the dict to the larger dicts
 
     Takes a dict, and for each element finds the most similar element in each of the larger dicts, takes the average
@@ -620,7 +474,7 @@ def recalculate_results(auto_encoder, data_generator):
 
 def run_toy_model(cfg):
     start_time = datetime.now().strftime("%Y%m%d-%H%M%S")
-    cfg.model_name = f"toy{cfg.mlp_width}{cfg.learned_dict_ratio}"
+    cfg.model_name = f"toy{cfg.activation_dim}{cfg.learned_dict_ratio}"
 
     if cfg.use_wandb:
         secrets = json.load(open("secrets.json"))
@@ -631,7 +485,7 @@ def run_toy_model(cfg):
     
     # Using a single data generator for all runs so that can compare learned dicts
     data_generator = RandomDatasetGenerator(
-        activation_dim=cfg.mlp_width,
+        activation_dim=cfg.activation_dim,
         n_ground_truth_components=cfg.n_ground_truth_components,
         batch_size=cfg.batch_size,
         feature_num_nonzero=cfg.feature_num_nonzero,
@@ -673,7 +527,7 @@ def run_toy_model(cfg):
     # Save the matrices and the data generator
     plot_mat(mmcs_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Mean Max Cosine Similarity w/ True", save_name="mmcs_matrix.png", col_range=(0.0, 1.0))
     # clamp dead_features to 0-100 for better visualisation
-    dead_features_matrix = np.clip(dead_features_matrix, 0, 100)
+    # dead_features_matrix = np.clip(dead_features_matrix, 0, 100)
     plot_mat(dead_features_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Dead Neurons", save_name="dead_features_matrix.png")
     plot_mat(recon_loss_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Reconstruction Loss", save_name="recon_loss_matrix.png")
     with open(os.path.join(outputs_folder, "auto_encoders.pkl"), "wb") as f:
@@ -692,7 +546,7 @@ def run_toy_model(cfg):
     if(len(learned_dict_ratios) > 1):
         # run MMCS-with-larger at the end of each mini run
         learned_dicts = [[auto_e.decoder.weight.detach().cpu().data.t() for auto_e in l1] for l1 in auto_encoders]
-        mmcs_with_larger, feats_above_threshold, full_max_cosine_sim_for_histograms = run_mmcs_with_larger(cfg, learned_dicts, threshold=cfg.threshold)
+        mmcs_with_larger, feats_above_threshold, full_max_cosine_sim_for_histograms = run_mmcs_with_larger(learned_dicts, threshold=cfg.threshold, device=cfg.device)
 
         with open(os.path.join(outputs_folder, "larger_dict_compare.pkl"), "wb") as f:
             pickle.dump(mmcs_with_larger, f)
@@ -711,14 +565,17 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
     running_recon_loss = 0.0
     running_l1_loss = 0.0
     feature_activations = np.zeros((cfg.n_components_dictionary))
+    running_window = 100
+    running_sparsity: deque = deque(maxlen=running_window)
+    running_dead_features: deque = deque(maxlen=running_window)
     time_horizon = 1000
     # torch.autograd.set_detect_anomaly(True)
     n_chunks_in_folder = len(os.listdir(cfg.dataset_folder))
     wb_tag = f"l1={cfg.l1_alpha:.2E}_ds={cfg.n_components_dictionary}_mr={mini_run}"
     old_dict = auto_encoder.decoder.weight.detach().cpu().data.t().clone()
-
     n_batches = 0
     breakout = False
+    auto_encoder = auto_encoder.to(cfg.device)
     for epoch in range(cfg.epochs):
         chunk_order = np.random.permutation(n_chunks_in_folder)
         for chunk_ndx, chunk_id in enumerate(chunk_order):
@@ -737,10 +594,17 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
                 loss.backward()
                 optimizer.step()
 
+                # Update running metrics
+                sparsity = (dict_levels.detach().count_nonzero(dim=1)).float().mean().item()
+                dead_features = (dict_levels.detach().mean(dim=0)==0).count_nonzero().item()
+                running_sparsity.append(sparsity)
+                running_dead_features.append(dead_features)
+
                 if n_batches == 1:
                     running_recon_loss = l_reconstruction.item()
                     running_l1_loss = l_l1.item()
                     feature_activations = dict_levels.detach().mean(dim=0).cpu().numpy()
+                    sparsity = dict_levels.detach().count_nonzero(dim=1).float().mean().item()
                 else:
                     running_recon_loss *= (time_horizon - 1) / time_horizon
                     running_recon_loss += l_reconstruction.item() / time_horizon
@@ -748,6 +612,8 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
                     running_l1_loss += l_l1.item() / time_horizon
                     feature_activations *= (time_horizon - 1) / time_horizon
                     feature_activations += dict_levels.detach().mean(dim=0).cpu().numpy() / time_horizon
+                    sparsity *= (time_horizon - 1) / time_horizon
+                    sparsity += dict_levels.detach().count_nonzero(dim=1).float().mean().item() / time_horizon
 
                 if (n_batches + completed_batches) % 1000 == 0:
                     new_dict = auto_encoder.decoder.weight.detach().cpu().data.t().clone()
@@ -756,8 +622,9 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
 
                     momentum_mag = get_size_of_momentum(cfg, optimizer)
 
+
                     print(
-                        f"L1 Coef: {cfg.l1_alpha:.2E} | Dict ratio: {cfg.n_components_dictionary / cfg.mlp_width} | "
+                        f"L1 Coef: {cfg.l1_alpha:.2E} | Dict ratio: {cfg.n_components_dictionary / cfg.activation_dim} | "
                         + f"Batch: {batch_idx+1}/{len(dataset)} | Chunk: {chunk_ndx+1}/{n_chunks_in_folder} | Minirun: {mini_run + 1}/{n_mini_runs} | "
                         + f"Epoch: {epoch+1}/{cfg.epochs} | Reconstruction loss: {running_recon_loss:.6f} | l1: {l_l1:.6f}"
                     )
@@ -768,8 +635,11 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
                                 f"{wb_tag}.l1_loss": l_l1,
                                 f"{wb_tag}.feature_angle_shift": feature_angle_shift,
                                 f"{wb_tag}.momentum_mag": momentum_mag,
+                                f"{wb_tag}.sparsity": sparsity,
+                                f"{wb_tag}.dead_features": np.count_nonzero(feature_activations==0),
                                 f"total_steps": completed_batches + n_batches,
                             },
+                            step=completed_batches + n_batches,
                             commit=True,  # seems to remove weirdness with step numbers
                         )
 
@@ -784,52 +654,7 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
     return auto_encoder, running_recon_loss, running_l1_loss, feature_activations, total_batches
 
 
-def make_activation_dataset(cfg, sentence_dataset: DataLoader, model: HookedTransformer, tensor_name: str, baukit: bool = False, chunk_size_gb: int = 2) -> pd.DataFrame:
-    print(f"Running model and saving activations to {cfg.dataset_folder}")
-    with torch.no_grad():
-        chunk_size = chunk_size_gb * (2**30)  # 2GB
-        activation_size = cfg.mlp_width * 2 * cfg.model_batch_size * cfg.max_length  # 3072 mlp activations, 2 bytes per half, 1024 context window
-        max_chunks = chunk_size // activation_size
-        dataset = []
-        n_saved_chunks = 0
-        for batch_idx, batch in tqdm(enumerate(sentence_dataset)):
-            batch = batch["input_ids"].to(cfg.device)
-            if baukit:
-                # Don't have nanoGPT models integrated with transformer_lens so using baukit for activations
-                with Trace(model, tensor_name) as ret:
-                    _ = model(batch)
-                    mlp_activation_data = ret.output
-                    mlp_activation_data = rearrange(mlp_activation_data, "b s n -> (b s) n").to(torch.float16).to(cfg.device)
-                    mlp_activation_data = nn.functional.gelu(mlp_activation_data)
-            else:
-                _, cache = model.run_with_cache(batch)
-                mlp_activation_data = cache[tensor_name].to(cfg.device).to(torch.float16)  # NOTE: could do all layers at once, but currently just doing 1 layer
-                mlp_activation_data = rearrange(mlp_activation_data, "b s n -> (b s) n")
-
-            dataset.append(mlp_activation_data)
-            if len(dataset) >= max_chunks:
-                # Need to save, restart the list
-                save_activation_chunk(dataset, n_saved_chunks, cfg)
-                n_saved_chunks += 1
-                print(f"Saved chunk {n_saved_chunks} of activations, total size:  {batch_idx * activation_size} ")
-                dataset = []
-                if n_saved_chunks == cfg.n_chunks:
-                    break
-    
-        if n_saved_chunks < cfg.n_chunks:
-            save_activation_chunk(dataset, n_saved_chunks, cfg)
-            print(f"Saved undersized chunk {n_saved_chunks} of activations, total size:  {batch_idx * activation_size} ")
-
-def save_activation_chunk(dataset, n_saved_chunks, cfg):
-    dataset_t = torch.cat(dataset, dim=0).to("cpu")
-    dataset_obj = torch.utils.data.TensorDataset(dataset_t)
-    os.makedirs(cfg.dataset_folder, exist_ok=True)
-    with open(cfg.dataset_folder + "/" + str(n_saved_chunks) + ".pkl", "wb") as f:
-        pickle.dump(dataset_obj, f)
-    
-
-
-def run_mmcs_with_larger(cfg, learned_dicts, threshold=0.9):
+def run_mmcs_with_larger(learned_dicts, threshold=0.9, device: Union[str, torch.device] = "cpu"):
     n_l1_coefs, n_dict_sizes = len(learned_dicts), len(learned_dicts[0])
     av_mmcs_with_larger_dicts = np.zeros((n_l1_coefs, n_dict_sizes))
     feats_above_threshold = np.zeros((n_l1_coefs, n_dict_sizes))
@@ -841,7 +666,7 @@ def run_mmcs_with_larger(cfg, learned_dicts, threshold=0.9):
             continue
         smaller_dict = learned_dicts[l1_ndx][dict_size_ndx]
         # Clone the larger dict, because we're going to zero it out to do replacements
-        larger_dict_clone = learned_dicts[l1_ndx][dict_size_ndx + 1].clone().to(cfg.device)
+        larger_dict_clone = learned_dicts[l1_ndx][dict_size_ndx + 1].clone().to(device)
         smaller_dict_features, _ = smaller_dict.shape
         larger_dict_features, _ = larger_dict_clone.shape
         # Hungary algorithm
@@ -849,7 +674,7 @@ def run_mmcs_with_larger(cfg, learned_dicts, threshold=0.9):
         # Calculate all cosine similarities and store in a 2D array
         cos_sims = np.zeros((smaller_dict_features, larger_dict_features))
         for idx, vector in enumerate(smaller_dict):
-            cos_sims[idx] = torch.nn.functional.cosine_similarity(vector.to(cfg.device), larger_dict_clone, dim=1).cpu().numpy()
+            cos_sims[idx] = torch.nn.functional.cosine_similarity(vector.to(device), larger_dict_clone, dim=1).cpu().numpy()
         # Convert to a minimization problem
         cos_sims = 1 - cos_sims
         # Use the Hungarian algorithm to solve the assignment problem
@@ -860,7 +685,6 @@ def run_mmcs_with_larger(cfg, learned_dicts, threshold=0.9):
         threshold = 0.9
         feats_above_threshold[l1_ndx, dict_size_ndx] = (max_cosine_similarities > threshold).sum().item() / smaller_dict_features * 100
         full_max_cosine_sim_for_histograms[l1_ndx][dict_size_ndx] = max_cosine_similarities
-
     return av_mmcs_with_larger_dicts, feats_above_threshold, full_max_cosine_sim_for_histograms
 
 
@@ -875,7 +699,7 @@ def check_feature_movement(dict: torch.Tensor, old_dict: torch.Tensor):
     for i in range(dict.shape[0]):
         cos_sims[i] = torch.nn.functional.cosine_similarity(dict[i], old_dict[i], dim=0)
 
-    total_movement = (1 - cos_sims).sum().item()
+    total_movement = (1 - cos_sims).mean().item()
     return total_movement
 
 def save_torch_models(models: List[List[AutoEncoder]], path: str) -> None:
@@ -897,22 +721,9 @@ def get_size_of_momentum(cfg: dotdict, optimizer: torch.optim.Optimizer):
     Returns the size of the momentum vector for a given optimizer, for the decoder.
     """
     adam_momentum_tensor = optimizer.state_dict()["state"][0]["exp_avg"]
-    decoder_shape = cfg.mlp_width, cfg.n_components_dictionary  # decoder is Linear(n_components, mlp_width) so tensor is stored as (mlp_width, n_components)
+    decoder_shape = cfg.activation_dim, cfg.n_components_dictionary  # decoder is Linear(n_components, activation_dim) so tensor is stored as (activation_dim, n_components)
     assert adam_momentum_tensor.shape == decoder_shape
     return adam_momentum_tensor.detach().abs().sum().item()  # sum of absolute values of all elements
-
-def setup_data(cfg, tokenizer, model, use_baukit=False, start_line=0, chunk_size_gb=2):
-    sentence_len_lower = 1000
-    max_lines = int((chunk_size_gb * 1e9  * cfg.n_chunks)/ (cfg.mlp_width * sentence_len_lower * 2))
-    print(f"Setting max_lines to {max_lines} to minimize sentences processed")
-
-    sentence_dataset = make_sentence_dataset(cfg.dataset_name, max_lines=max_lines, start_line=start_line)
-    tensor_name = make_tensor_name(cfg)
-    tokenized_sentence_dataset, bits_per_byte = chunk_and_tokenize(sentence_dataset, tokenizer, max_length=cfg.max_length)
-    token_loader = DataLoader(tokenized_sentence_dataset, batch_size=cfg.model_batch_size, shuffle=True)
-    make_activation_dataset(cfg, token_loader, model, tensor_name, use_baukit, chunk_size_gb=chunk_size_gb)
-    n_lines = len(sentence_dataset)
-    return n_lines
 
 
 def run_real_data_model(cfg: dotdict):
@@ -949,16 +760,16 @@ def run_real_data_model(cfg: dotdict):
         n_lines = setup_data(cfg, tokenizer, model, use_baukit=use_baukit)
     else:
         print(f"Activations in {cfg.dataset_folder} already exist, loading them")
-        # get mlp_width from first file
+        # get activation_dim from first file
         with open(os.path.join(cfg.dataset_folder, "0.pkl"), "rb") as f:
             dataset = pickle.load(f)
-        cfg.mlp_width = dataset.tensors[0][0].shape[-1]
+        cfg.activation_dim = dataset.tensors[0][0].shape[-1]
         n_lines = cfg.max_lines
         del dataset
 
     l1_range = [cfg.l1_exp_base**exp for exp in range(cfg.l1_exp_low, cfg.l1_exp_high)]
     dict_ratios = [cfg.dict_ratio_exp_base**exp for exp in range(cfg.dict_ratio_exp_low, cfg.dict_ratio_exp_high)]
-    dict_sizes = [int(cfg.mlp_width * ratio) for ratio in dict_ratios]
+    dict_sizes = [int(cfg.activation_dim * ratio) for ratio in dict_ratios]
 
     print("Range of l1 values being used: ", l1_range)
     print("Range of dict_sizes being used:", dict_sizes)
@@ -968,14 +779,14 @@ def run_real_data_model(cfg: dotdict):
     feature_activations_matrix = [[None for _ in dict_sizes] for _ in l1_range]
 
     # 2D array of learned dictionaries, indexed by l1_alpha and learned_dict_ratio, start with Nones
-    auto_encoders = [[AutoEncoder(cfg.mlp_width, n_feats, l1_coef=l1_ndx).to(cfg.device) for n_feats in dict_sizes] for l1_ndx in l1_range]
+    auto_encoders = [[AutoEncoder(cfg.activation_dim, n_feats, l1_coef=l1_ndx).to(cfg.device) for n_feats in dict_sizes] for l1_ndx in l1_range]
     if cfg.load_autoencoders:
         # We check if the sizes match for any of the saved autoencoders, and if so, load them
         loaded_autoencoders = pickle.load(open(cfg.load_autoencoders, "rb"))
         for autoencoder_list in loaded_autoencoders:
             for ae in autoencoder_list:
-                if ae.activation_size != cfg.mlp_width:
-                    print(f"Mismatch of activation size, expected {cfg.mlp_width} but got {ae.activation_size}")
+                if ae.activation_size != cfg.activation_dim:
+                    print(f"Mismatch of activation size, expected {cfg.activation_dim} but got {ae.activation_size}")
                     continue
                 if ae.l1_coef in l1_range and ae.decoder.weight.shape[1] in dict_sizes:
                     print("Loading autoencoder with l1_coef", ae.l1_coef, "and dict_size", ae.decoder.weight.shape[1])
@@ -989,12 +800,10 @@ def run_real_data_model(cfg: dotdict):
     outputs_folder_ = os.path.join(cfg.outputs_folder, start_time)
     outputs_folder = outputs_folder_
     os.makedirs(outputs_folder, exist_ok=True)
-
     if cfg.use_wandb:
         secrets = json.load(open("secrets.json"))
         wandb.login(key=secrets["wandb_key"])
-        wandb_run_name = f"{cfg.model_name}_{start_time[4:]}"  # trim year
-        wandb.init(project="sparse coding", config=dict(cfg), name=wandb_run_name, entity="sparse_coding")
+        wandb_run_name = f"{cfg.model_name}_{cfg.layer}_{start_time[4:]}"  # trim year
 
     step_n = 0
     for mini_run in tqdm(range(cfg.mini_runs)):
@@ -1005,6 +814,8 @@ def run_real_data_model(cfg: dotdict):
         for l1_ndx, dict_size_ndx in list(itertools.product(range(len(l1_range)), range(len(dict_sizes)))):
             l1_loss = l1_range[l1_ndx]
             dict_size = dict_sizes[dict_size_ndx]
+            if cfg.use_wandb:
+                wandb.init(project="sparse coding", config=dict(cfg), group=wandb_run_name, name=f"l1={l1_loss:.0E}_dict={dict_size}" ,entity="sparse_coding")
 
             cfg.l1_alpha = l1_loss
             cfg.n_components_dictionary = dict_size
@@ -1018,10 +829,15 @@ def run_real_data_model(cfg: dotdict):
             dead_features_matrix[l1_ndx, dict_size_ndx] = feature_activations.shape[0] - np.count_nonzero(feature_activations)
             recon_loss_matrix[l1_ndx, dict_size_ndx] = reconstruction_loss
             l1_loss_matrix[l1_ndx, dict_size_ndx] = l1_loss
+            
+            if cfg.use_wandb:
+                wandb.finish()
+        if cfg.use_wandb:
+            wandb.init(project="sparse coding", config=dict(cfg), group=wandb_run_name+"_graphs", name=f"mini_run:{mini_run}", entity="sparse_coding")
 
         # run MMCS-with-larger at the end of each mini run
         learned_dicts = [[auto_e.decoder.weight.detach().cpu().data.t() for auto_e in l1] for l1 in auto_encoders]
-        mmcs_with_larger, feats_above_threshold, mcs = run_mmcs_with_larger(cfg, learned_dicts, threshold=cfg.threshold)
+        mmcs_with_larger, feats_above_threshold, mcs = run_mmcs_with_larger(learned_dicts, threshold=cfg.threshold, device=cfg.device)
 
         # also just report them as variables
         for l1_ndx, dict_size_ndx in list(itertools.product(range(len(l1_range)), range(len(dict_sizes)))):
@@ -1033,7 +849,7 @@ def run_real_data_model(cfg: dotdict):
                 wandb.log({f"{wb_tag}.mmcs_with_larger": mmcs_with_larger[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
                 wandb.log({f"{wb_tag}.feats_above_threshold": feats_above_threshold[l1_ndx, dict_size_ndx]}, step=step_n, commit=True)
                 #TODO decide what to do for full_histogram.
-        dead_features_matrix = np.clip(dead_features_matrix, 0, 100)
+        # dead_features_matrix = np.clip(dead_features_matrix, 0, 100)
         
         plot_mat(
             dead_features_matrix,
@@ -1080,6 +896,9 @@ def run_real_data_model(cfg: dotdict):
                 upload_to_aws(encoders_loc)
                 upload_to_aws(activations_loc)
 
+        if cfg.use_wandb:
+            wandb.finish()
+
         if cfg.refresh_data:
             print("Remaking dataset")
             os.system(f"rm -rf {cfg.dataset_folder}/*") # delete the old dataset
@@ -1087,15 +906,12 @@ def run_real_data_model(cfg: dotdict):
             n_lines += n_new_lines
 
 
-    if cfg.use_wandb:
-        wandb.finish()
-
     # clamp dead_features to 0-100 for better visualisation
-    dead_features_matrix = np.clip(dead_features_matrix, 0, 100)
+    # dead_features_matrix = np.clip(dead_features_matrix, 0, 100)
     plot_mat(dead_features_matrix, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="Dead Neurons", save_name="dead_features_matrix.png")
     plot_mat(recon_loss_matrix, l1_range, dict_sizes, show=False, save_folder=outputs_folder, title="Reconstruction Loss", save_name="recon_loss_matrix.png")
     cpu_autoencoders = [[auto_e.to(torch.device("cpu")) for auto_e in l1] for l1 in auto_encoders]
-    with open(os.path.join(outputs_folder, "auto_encoders.pkl"), "wb") as f:
+    with open(os.path.join(outputs_folder, f"auto_encoders_{cfg.layer}.pkl"), "wb") as f:
         pickle.dump(cpu_autoencoders, f)
     with open(os.path.join(outputs_folder, "config.pkl"), "wb") as f:
         pickle.dump(cfg, f)
@@ -1106,7 +922,7 @@ def run_real_data_model(cfg: dotdict):
 
     # Compare each learned dictionary to the larger ones
     learned_dicts = [[auto_e.decoder.weight.detach().cpu().data.t() for auto_e in l1] for l1 in auto_encoders]
-    mmcs_with_larger, feats_above_threshold, mcs = run_mmcs_with_larger(cfg, learned_dicts, threshold=cfg.threshold)
+    mmcs_with_larger, feats_above_threshold, mcs = run_mmcs_with_larger(learned_dicts, threshold=cfg.threshold, device=cfg.device)
 
     with open(os.path.join(outputs_folder, "larger_dict_compare.pkl"), "wb") as f:
         pickle.dump(mmcs_with_larger, f)

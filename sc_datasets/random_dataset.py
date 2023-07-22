@@ -7,6 +7,8 @@ import os
 
 from dataclasses import dataclass, field
 
+n_ground_truth_components_, activation_dim_, dataset_size_ = None, None, None # for tensortype vars
+
 @dataclass
 class RandomDatasetGenerator(Generator):
     activation_dim: int
@@ -40,7 +42,7 @@ class RandomDatasetGenerator(Generator):
         )
         self.t_type = torch.float32
 
-    def send(self, ignored_arg: Any) -> TensorType["dataset_size", "activation_dim"]:
+    def send(self, ignored_arg: Any) -> TensorType["dataset_size_", "activation_dim_"]:
         if self.correlated:
             _, _, data = generate_correlated_dataset(
                 self.n_ground_truth_components,
@@ -68,10 +70,10 @@ class RandomDatasetGenerator(Generator):
 def generate_rand_dataset(
     n_ground_truth_components: int,  #
     dataset_size: int,
-    feature_probs: TensorType["n_ground_truth_components"],
-    feats: TensorType["n_ground_truth_components", "activation_dim"],
+    feature_probs: TensorType["n_ground_truth_components_"],
+    feats: TensorType["n_ground_truth_components_", "activation_dim_"],
     device: Union[torch.device, str],
-) -> Tuple[TensorType["n_ground_truth_components", "activation_dim"], TensorType["dataset_size", "n_ground_truth_components"], TensorType["dataset_size", "activation_dim"]]:
+) -> Tuple[TensorType["n_ground_truth_components_", "activation_dim_"], TensorType["dataset_size_", "n_ground_truth_components_"], TensorType["dataset_size_", "activation_dim_"]]:
     dataset_thresh = torch.rand(dataset_size, n_ground_truth_components, device=device)
     dataset_values = torch.rand(dataset_size, n_ground_truth_components, device=device)
 
@@ -95,12 +97,12 @@ def generate_rand_dataset(
 def generate_correlated_dataset(
     n_ground_truth_components: int,
     dataset_size: int,
-    corr_matrix: TensorType["n_ground_truth_components", "n_ground_truth_components"],
-    feats: TensorType["n_ground_truth_components", "activation_dim"],
+    corr_matrix: TensorType["n_ground_truth_components_", "n_ground_truth_components_"],
+    feats: TensorType["n_ground_truth_components_", "activation_dim_"],
     frac_nonzero: float,
-    decay: TensorType["n_ground_truth_components"],
+    decay: TensorType["n_ground_truth_components_"],
     device: Union[torch.device, str],
-) -> Tuple[TensorType["n_ground_truth_components", "activation_dim"], TensorType["dataset_size", "n_ground_truth_components"], TensorType["dataset_size", "activation_dim"]]:
+) -> Tuple[TensorType["n_ground_truth_components_", "activation_dim_"], TensorType["dataset_size_", "n_ground_truth_components_"], TensorType["dataset_size_", "activation_dim_"]]:
     # Get a correlated gaussian sample
     mvn = torch.distributions.MultivariateNormal(loc=torch.zeros(n_ground_truth_components, device=device), covariance_matrix=corr_matrix)
     corr_thresh = mvn.sample()
@@ -144,7 +146,7 @@ def generate_rand_feats(
     feat_dim: int,
     num_feats: int,
     device: Union[torch.device, str],
-) -> TensorType["n_ground_truth_components", "activation_dim"]:
+) -> TensorType["n_ground_truth_components_", "activation_dim_"]:
     data_path = os.path.join(os.getcwd(), "data")
     data_filename = os.path.join(data_path, f"feats_{feat_dim}_{num_feats}.npy")
 
@@ -156,7 +158,7 @@ def generate_rand_feats(
     return feats_tensor
 
 
-def generate_corr_matrix(num_feats: int, device: Union[torch.device, str]) -> TensorType["n_ground_truth_components", "n_ground_truth_components"]:
+def generate_corr_matrix(num_feats: int, device: Union[torch.device, str]) -> TensorType["n_ground_truth_components_", "n_ground_truth_components_"]:
     corr_mat_path = os.path.join(os.getcwd(), "data")
     corr_mat_filename = os.path.join(corr_mat_path, f"corr_mat_{num_feats}.npy")
 

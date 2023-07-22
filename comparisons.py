@@ -49,13 +49,13 @@ def run_pca_on_activation_dataset(cfg: dotdict, outputs_folder):
 
     with open(os.path.join(cfg.dataset_folder, "0.pkl"), "rb") as f:
         dataset = pickle.load(f)
-    cfg.mlp_width = dataset.tensors[0][0].shape[-1]
+    cfg.activation_dim = dataset.tensors[0][0].shape[-1]
     n_lines = cfg.max_lines
     del dataset
 
     # actual pca
 
-    pca_model = BatchedPCA(cfg.mlp_width, cfg.device)
+    pca_model = BatchedPCA(cfg.activation_dim, cfg.device)
 
     n_chunks_in_folder = len(os.listdir(cfg.dataset_folder))
 
@@ -92,7 +92,8 @@ def main():
     outputs_folder = os.path.join(cfg.outputs_folder, start_time)
     os.makedirs(outputs_folder, exist_ok=True)
 
-    from run import setup_data, run_real_data_model, AutoEncoder
+    from run import run_real_data_model, AutoEncoder
+    from activation_dataset import setup_data
 
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.use_wandb = False
@@ -123,10 +124,10 @@ def main():
         n_lines = setup_data(cfg, tokenizer, model, use_baukit=use_baukit, split=data_split)
     else:
         print(f"Activations in {cfg.dataset_folder} already exist, loading them")
-        # get mlp_width from first file
+        # get activation_dim from first file
         with open(os.path.join(cfg.dataset_folder, "0.pkl"), "rb") as f:
             dataset = pickle.load(f)
-        cfg.mlp_width = dataset.tensors[0][0].shape[-1]
+        cfg.activation_dim = dataset.tensors[0][0].shape[-1]
         n_lines = cfg.max_lines
         del dataset
     

@@ -3,14 +3,15 @@ import torch
 
 from utils import dotdict
 
-def parse_args():
+def parse_args() -> dotdict:
     parser = argparse.ArgumentParser()
     parser.add_argument("--use_wandb", type=bool, default=True)
     parser.add_argument("--n_ground_truth_components", type=int, default=512)
     parser.add_argument("--learned_dict_ratio", type=float, default=1.0)
     parser.add_argument("--max_length", type=int, default=256)  # when tokenizing, truncate to this length, basically the context size
     parser.add_argument("--load_autoencoders", type=str, default="")
-    parser.add_argument("--mlp_width", type=int, default=256)
+    parser.add_argument("--activation_dim", type=int, default=256)
+    parser.add_argument("--chunk_size_gb", type=float, default=2)
 
     parser.add_argument("--model_batch_size", type=int, default=4)
     parser.add_argument("--batch_size", type=int, default=256)
@@ -56,6 +57,10 @@ def parse_args():
     parser.add_argument("--n_feats_explain", type=int, default=10) # number of features to explain
     parser.add_argument("--activation_transform", type=str, default="ica") # way of transforming neuron activations into features
     parser.add_argument("--load_interpret_autoencoder", type=str, default="") # path to autoencoder to load
+    parser.add_argument("--tied_ae", type=bool, default=False) # whether to load pickle as a tied autoencoder
+    parser.add_argument("--interp_name", type=str, default="") # name of run, otherwise will be feature_transform
+    parser.add_argument("--sort_mode", type=str, default="max") # how to sort fragments, either max, mean
+
     args = parser.parse_args()
     cfg = dotdict(vars(args))  # convert to dotdict via dict
     cfg.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

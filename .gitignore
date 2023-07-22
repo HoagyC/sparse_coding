@@ -1,6 +1,7 @@
 __pycache__/**
 .vscode/**
 .DS_Store
+**.pyc
 
 .env
 .config
@@ -14,6 +15,9 @@ secrets.json
 setup.sh
 plotting
 wandb/
+saved_autoencoders
+testing
+auto_interp_results
 
 # ideally would load autointerp as a module but can't get it working so just cloning and ignoring
 neuron_explainer
