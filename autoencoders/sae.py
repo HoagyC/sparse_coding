@@ -2,8 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from autoencoders.encoder import Encoder
-
 def act_name_to_module(act_str):
     if act_str == "relu":
         return nn.ReLU()
@@ -119,5 +117,3 @@ class TiedSAE(nn.Module):
 
     def configure_optimizers(self, **kwargs):
         return torch.optim.Adam(self.parameters(), **kwargs)
-
-Encoder.register(TiedSAE)

@@ -44,260 +44,8 @@ def get_model(cfg):
     
     return model, tokenizer
 
-def init_semilinear_grid(cfg):
-    l1_values = list(np.logspace(-7, 0, 16))
-    dict_ratios = [2, 4, 8]
-
-    ensembles = []
-    ensemble_args = []
-    ensemble_tags = []
-    devices = [f"cuda:{i}" for i in range(8)]
-
-    for i in range(4):
-        cfgs = l1_values[i*4:(i+1)*4]
-        models = [
-            SemiLinearSAE.init(cfg.mlp_width, cfg.mlp_width * 8, l1_alpha, dtype=cfg.dtype)
-            for l1_alpha in cfgs
-        ]
-        device = devices.pop()
-        ensemble = FunctionalEnsemble(
-            models, SemiLinearSAE.loss,
-            torchopt.adam, {
-                "lr": cfg.lr
-            },
-            device=device
-        )
-        ensembles.append(ensemble)
-        ensemble_args.append({"batch_size": cfg.batch_size, "device": device})
-        ensemble_tags.append(f"dict_ratio_8_group_{i}")
-    
-    for i in range(2):
-        cfgs = l1_values[i*8:(i+1)*8]
-        models = [
-            SemiLinearSAE.init(cfg.mlp_width, cfg.mlp_width * 4, l1_alpha, dtype=cfg.dtype)
-            for l1_alpha in cfgs
-        ]
-        device = devices.pop()
-        ensemble = FunctionalEnsemble(
-            models, SemiLinearSAE.loss,
-            torchopt.adam, {
-                "lr": cfg.lr
-            },
-            device=device
-        )
-        ensembles.append(ensemble)
-        ensemble_args.append({"batch_size": cfg.batch_size, "device": device})
-        ensemble_tags.append(f"dict_ratio_4_group_{i}")
-    
-    for i in range(1):
-        cfgs = l1_values
-        models = [
-            SemiLinearSAE.init(cfg.mlp_width, cfg.mlp_width * 2, l1_alpha, dtype=cfg.dtype)
-            for l1_alpha in cfgs
-        ]
-        device = devices.pop()
-        ensemble = FunctionalEnsemble(
-            models, SemiLinearSAE.loss,
-            torchopt.adam, {
-                "lr": cfg.lr
-            },
-            device=device
-        )
-        ensembles.append(ensemble)
-        ensemble_args.append({"batch_size": cfg.batch_size, "device": device})
-        ensemble_tags.append(f"dict_ratio_2_group_{i}")
-    
-    return ensembles, ensemble_args, ensemble_tags
-
-def init_ensembles_for_mcs_testing(cfg):
-    l1_value = 1e-2
-    bias_decay = 0.0
-
-    ensembles = []
-    ensemble_args = []
-    ensemble_tags = []
-    devices = [f"cuda:{i}" for i in range(8)]
-
-    for i in range(4):
-        models = [
-            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 8, l1_value, bias_decay=bias_decay, dtype=cfg.dtype)
-            for _ in range(4)
-        ]
-        device = devices.pop()
-        ensemble = FunctionalEnsemble(
-            models, FunctionalSAE.loss,
-            torchopt.adam, {
-                "lr": cfg.lr
-            },
-            device=device
-        )
-        ensembles.append(ensemble)
-        ensemble_args.append({"batch_size": cfg.batch_size, "device": device, "tied": False})
-        ensemble_tags.append(f"dict_ratio_8_group_{i}")
-
-    for i in range(2):
-        models = [
-            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 4, l1_value, bias_decay=bias_decay, dtype=cfg.dtype)
-            for _ in range(8)
-        ]
-        device = devices.pop()
-        ensemble = FunctionalEnsemble(
-            models, FunctionalSAE.loss,
-            torchopt.adam, {
-                "lr": cfg.lr
-            },
-            device=device
-        )
-        ensembles.append(ensemble)
-        ensemble_args.append({"batch_size": cfg.batch_size, "device": device, "tied": False})
-        ensemble_tags.append(f"dict_ratio_4_group_{i}")
-    
-    for i in range(2):
-        models = [
-            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 2, l1_value, bias_decay=bias_decay, dtype=cfg.dtype)
-            for _ in range(8)
-        ]
-        device = devices.pop()
-        ensemble = FunctionalEnsemble(
-            models, FunctionalSAE.loss,
-            torchopt.adam, {
-                "lr": cfg.lr
-            },
-            device=device
-        )
-        ensembles.append(ensemble)
-        ensemble_args.append({"batch_size": cfg.batch_size, "device": device, "tied": False})
-        ensemble_tags.append(f"dict_ratio_2_group_{i}")
-
-    return ensembles, ensemble_args, ensemble_tags
-
-def init_ensembles_inc_tied(cfg):
-    l1_values = list(np.logspace(-3.5, -2, 4))
-
-    print(f"Using l1 values: {l1_values}")
-
-    bias_decays = [0.0, 0.05, 0.1]
-    dict_ratios = [2, 4, 8]
-
-    dict_sizes = [cfg.mlp_width * ratio for ratio in dict_ratios]
-
-    ensembles = []
-    ensemble_args = []
-    ensemble_tags = []
-    devices = [f"cuda:{i}" for i in range(8)]
-
-    for i in range(2):
-        cfgs = product(l1_values[i*2:(i+1)*2], bias_decays)
-        models = [
-            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 8, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
-            for l1_alpha, bias_decay in cfgs
-        ]
-        device = devices.pop()
-        ensemble = FunctionalEnsemble(
-            models, FunctionalSAE.loss,
-            torchopt.adam, {
-                "lr": cfg.lr
-            },
-            device=device
-        )
-        ensembles.append(ensemble)
-        ensemble_args.append({"batch_size": cfg.batch_size, "device": device, "tied": False})
-        ensemble_tags.append(f"dict_ratio_8_group_{i}")
-    
-    for i in range(2):
-        cfgs = product(l1_values[i*2:(i+1)*2], bias_decays)
-        models = [
-            FunctionalTiedSAE.init(cfg.mlp_width, cfg.mlp_width * 8, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
-            for l1_alpha, bias_decay in cfgs
-        ]
-        device = devices.pop()
-        ensemble = FunctionalEnsemble(
-            models, FunctionalTiedSAE.loss,
-            torchopt.adam, {
-                "lr": cfg.lr
-            },
-            device=device
-        )
-        ensembles.append(ensemble)
-        ensemble_args.append({"batch_size": cfg.batch_size, "device": device, "tied": True})
-        ensemble_tags.append(f"dict_ratio_8_group_{i}_tied")
-    
-    for _ in range(1):
-        cfgs = product(l1_values, bias_decays)
-        models = [
-            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 4, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
-            for l1_alpha, bias_decay in cfgs
-        ]
-        device = devices.pop()
-        ensemble = FunctionalEnsemble(
-            models, FunctionalSAE.loss,
-            torchopt.adam, {
-                "lr": cfg.lr
-            },
-            device=device
-        )
-        ensembles.append(ensemble)
-        ensemble_args.append({"batch_size": cfg.batch_size, "device": device, "tied": False})
-        ensemble_tags.append(f"dict_ratio_4")
-    
-    for _ in range(1):
-        cfgs = product(l1_values, bias_decays)
-        models = [
-            FunctionalTiedSAE.init(cfg.mlp_width, cfg.mlp_width * 4, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
-            for l1_alpha, bias_decay in cfgs
-        ]
-        device = devices.pop()
-        ensemble = FunctionalEnsemble(
-            models, FunctionalTiedSAE.loss,
-            torchopt.adam, {
-                "lr": cfg.lr
-            },
-            device=device
-        )
-        ensembles.append(ensemble)
-        ensemble_args.append({"batch_size": cfg.batch_size, "device": device, "tied": True})
-        ensemble_tags.append(f"dict_ratio_4_tied")
-    
-    for _ in range(1):
-        cfgs = product(l1_values, bias_decays)
-        models = [
-            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 2, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
-            for l1_alpha, bias_decay in cfgs
-        ]
-        device = devices.pop()
-        ensemble = FunctionalEnsemble(
-            models, FunctionalSAE.loss,
-            torchopt.adam, {
-                "lr": cfg.lr
-            },
-            device=device
-        )
-        ensembles.append(ensemble)
-        ensemble_args.append({"batch_size": cfg.batch_size, "device": device, "tied": False})
-        ensemble_tags.append(f"dict_ratio_2")
-    
-    for _ in range(1):
-        cfgs = product(l1_values, bias_decays)
-        models = [
-            FunctionalTiedSAE.init(cfg.mlp_width, cfg.mlp_width * 2, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
-            for l1_alpha, bias_decay in cfgs
-        ]
-        device = devices.pop()
-        ensemble = FunctionalEnsemble(
-            models, FunctionalTiedSAE.loss,
-            torchopt.adam, {
-                "lr": cfg.lr
-            },
-            device=device
-        )
-        ensembles.append(ensemble)
-        ensemble_args.append({"batch_size": cfg.batch_size, "device": device, "tied": True})
-        ensemble_tags.append(f"dict_ratio_2_tied")
-    
-    return ensembles, ensemble_args, ensemble_tags, (l1_values, bias_decays, dict_sizes)
-
 def calc_expected_interference(dictionary, batch):
-    # dictionary: [n_dict_components, d_activation]
+    # dictionary: [n_features, d_activation]
     # batch: [batch_size, n_features]
     norms = torch.norm(dictionary, 2, dim=-1)
     normed_weights = dictionary / torch.clamp(norms, 1e-8)[:, None]
@@ -345,29 +93,38 @@ def format_hyperparam_val(val):
 def make_hyperparam_name(setting):
     return "_".join([f"{k}_{format_hyperparam_val(v)}" for k, v in setting.items()])
 
-def log_standard_metrics(learned_dicts, chunk, hyperparam_settings, l1_values, dict_sizes, cfg):
+def log_standard_metrics(learned_dicts, chunk, chunk_num, hyperparam_ranges, cfg):
     n_samples = 2000
     sample_indexes = np.random.choice(len(chunk), size=n_samples, replace=False)
     sample = chunk[sample_indexes]
+
+
+    grid_hyperparams = [k for k in hyperparam_ranges.keys() if k not in ["l1_alpha", "dict_size"]]
+    mmcs_plot_settings = []
+    for setting in product(*[hyperparam_ranges[hp] for hp in grid_hyperparams]):
+        mmcs_plot_settings.append({hp: val for hp, val in zip(grid_hyperparams, setting)})
+    
+    l1_values = hyperparam_ranges["l1_alpha"]
+    dict_sizes = hyperparam_ranges["dict_size"]
 
     small_dict_size = dict_sizes[0]
 
     mmcs_grid_plots = {}
 
-    for setting in hyperparam_settings:
+    for setting in mmcs_plot_settings:
         mmcs_scores = np.zeros((len(l1_values), len(dict_sizes)))
 
         for i, l1_value in enumerate(l1_values):
             small_dict_setting_ = setting.copy()
             small_dict_setting_["l1_alpha"] = l1_value
-            small_dict_setting_["n_dict_components"] = small_dict_size
+            small_dict_setting_["dict_size"] = small_dict_size
 
             small_dict = filter_learned_dicts(learned_dicts, small_dict_setting_)[0][0]
 
             for j, dict_size in enumerate(dict_sizes[1:]):
                 setting_ = setting.copy()
                 setting_["l1_alpha"] = l1_value
-                setting_["n_dict_components"] = dict_size
+                setting_["dict_size"] = dict_size
 
                 larger_dict = filter_learned_dicts(learned_dicts, setting_)[0][0]
                 mmcs_scores[i, j] = standard_metrics.mcs_duplicates(small_dict, larger_dict).mean().item()
@@ -390,10 +147,10 @@ def log_standard_metrics(learned_dicts, chunk, hyperparam_settings, l1_values, d
         )
     
     for k, plot in mmcs_grid_plots.items():
-        cfg.wandb_instance.log({f"mmcs_grid/{k}": wandb.Image(plot)}, commit=False)
+        cfg.wandb_instance.log({f"mmcs_grid_{chunk_num}/{k}": wandb.Image(plot)}, commit=False)
     
     for k, plot in sparsity_hists.items():
-        cfg.wandb_instance.log({f"sparsity_hist/{k}": wandb.Image(plot)})
+        cfg.wandb_instance.log({f"sparsity_hist_{chunk_num}/{k}": wandb.Image(plot)})
 
 def ensemble_train_loop(ensemble, cfg, args, name, sampler, dataset, progress_counter):
     torch.set_grad_enabled(False)
@@ -403,49 +160,42 @@ def ensemble_train_loop(ensemble, cfg, args, name, sampler, dataset, progress_co
     if cfg.use_wandb:
         run = cfg.wandb_instance
 
-    if args["tied"] == True:
-        dict_name = "encoder"
-    else:
-        dict_name = "decoder"
-
     for i, batch_idxs in enumerate(sampler):
         batch = dataset[batch_idxs].to(args["device"])
         losses, aux_buffer = ensemble.step_batch(batch)
-
-        expected_interferences = torch.vmap(calc_expected_interference)(ensemble.params[dict_name], aux_buffer["c"])
-        mean_expected_interference = expected_interferences.mean(dim=-1)
-
-        feature_skews = torch.vmap(calc_feature_skew)(aux_buffer["c"])
-        mean_feature_skew = feature_skews.mean(dim=-1)
-
-        feature_kurtosis = torch.vmap(calc_feature_kurtosis)(aux_buffer["c"])
-        mean_feature_kurtosis = feature_kurtosis.mean(dim=-1)
 
         num_nonzero = aux_buffer["c"].count_nonzero(dim=-1).float().mean(dim=-1)
 
         if cfg.use_wandb:
             log = {}
             for m in range(ensemble.n_models):
-                name = make_hyperparam_name({
-                    "tied": args["tied"],
-                    "l1_alpha": ensemble.buffers["l1_alpha"][m].item(),
-                    "bias_decay": ensemble.buffers["bias_decay"][m].item(),
-                    "dict_size": ensemble.params[dict_name][m].shape[0]
-                })
+                hyperparam_values = {}
+
+                for ep in cfg.ensemble_hyperparams:
+                    if ep in args:
+                        hyperparam_values[ep] = args[ep]
+                    else:
+                        raise ValueError(f"Hyperparameter {ep} not found in args")
+                    
+                for bp in cfg.buffer_hyperparams:
+                    if bp in ensemble.buffers:
+                        hyperparam_values[bp] = ensemble.buffers[bp][m].item()
+                    else:
+                        raise ValueError(f"Hyperparameter {bp} not found in buffers")
+
+                name = make_hyperparam_name(hyperparam_values)
+
                 log[f"{name}_loss"] = losses["loss"][m].item()
                 log[f"{name}_l_l1"] = losses["l_l1"][m].item()
                 log[f"{name}_l_reconstruction"] = losses["l_reconstruction"][m].item()
                 log[f"{name}_l_bias_decay"] = losses["l_bias_decay"][m].item()
                 log[f"{name}_sparsity"] = num_nonzero[m].item()
-                log[f"{name}_mean_expected_interference"] = mean_expected_interference[m].item()
-                #log[f"{name}_mean_feature_skew"] = mean_feature_skew[m].item()
-                log[f"{name}_mean_feature_kurtosis"] = mean_feature_kurtosis[m].item()
 
             run.log(log, commit=True)
 
         progress_counter.value = i
 
-def unstacked_to_learned_dicts(ensemble, args, hyperparams, tag_with_n_feats=True):
+def unstacked_to_learned_dicts(ensemble, args, ensemble_hyperparams, buffer_hyperparams):
     unstacked = ensemble.unstack(device="cpu")
     learned_dicts = []
     for model in unstacked:
@@ -453,46 +203,36 @@ def unstacked_to_learned_dicts(ensemble, args, hyperparams, tag_with_n_feats=Tru
 
         params, buffers = model
 
-        for hp in hyperparams:
-            if hp in args:
-                hyperparam_values[hp] = args[hp]
-            elif hp in buffers:
-                hyperparam_values[hp] = buffers[hp].item()
+        for ep in ensemble_hyperparams:
+            if ep in args:
+                hyperparam_values[ep] = args[ep]
             else:
-                raise ValueError(f"Hyperparameter {hp} not found in args or model buffers")
+                raise ValueError(f"Hyperparameter {ep} not found in args")
+            
+        for bp in buffer_hyperparams:
+            if bp in buffers:
+                hyperparam_values[bp] = buffers[bp].item()
+            else:
+                raise ValueError(f"Hyperparameter {bp} not found in buffers")
 
-        decoder_name = "decoder" if args["tied"] == False else "encoder"
-
-        if tag_with_n_feats:
-            hyperparam_values["n_dict_components"] = params[decoder_name].shape[0]
-
-        if args["tied"] == True:
-            learned_dict = TiedSAE(params["encoder"], params["encoder_bias"])
-        else:
-            learned_dict = UntiedSAE(params["encoder"], params["decoder"], params["encoder_bias"])
+        learned_dict = ensemble.sig.to_learned_dict(params, buffers)
         
         learned_dicts.append((learned_dict, hyperparam_values))
     return learned_dicts
 
-def main():
+def sweep(ensemble_init_func, cfg):
     torch.set_grad_enabled(False)
     mp.set_start_method("spawn", force=True)
     torch.manual_seed(0)
     np.random.seed(0)
 
-    cfg = parse_args()
-
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.dataset_folder = "activation_data"
     cfg.output_folder = "output"
-
     cfg.batch_size = 1024
     cfg.lr = 3e-4
-
     cfg.use_wandb = True
-
     cfg.dtype = torch.float32
-
     cfg.layer = 2
     cfg.use_residual = True
 
@@ -521,8 +261,17 @@ def main():
 
     print("Initialising ensembles...", end=" ")
 
-    ensembles, args, tags, hyperparam_ranges = init_ensembles_inc_tied(cfg)
-    l1_values, bias_decays, dict_sizes = hyperparam_ranges
+    # the ensemble initialization function returns
+    # a list of (ensemble, args, name) tuples
+    # and a dict of hyperparam ranges
+    ensembles, ensemble_hyperparams, buffer_hyperparams, hyperparam_ranges = ensemble_init_func(cfg)
+
+    # ensemble_hyperparams are constant across all models in a given ensemble
+    # they are stored in the ensemble's args
+    # buffer_hyperparams can vary between models in an ensemble
+    # they are stored in each model's buffer and have to be torch tensors
+    cfg.ensemble_hyperparams = ensemble_hyperparams
+    cfg.buffer_hyperparams = buffer_hyperparams
 
     print("Ensembles initialised.")
 
@@ -539,25 +288,15 @@ def main():
         chunk = torch.load(chunk_loc).to(device="cpu", dtype=torch.float32)
 
         dispatch_job_on_chunk(
-            ensembles, cfg, args, tags, chunk, ensemble_train_loop
+            ensembles, cfg, chunk, ensemble_train_loop
         )
 
-        hyperparams = ["l1_alpha", "bias_decay", "tied"]
-        
         learned_dicts = []
-        for ensemble, arg in zip(ensembles, args):
-            learned_dicts.extend(unstacked_to_learned_dicts(ensemble, arg, hyperparams, tag_with_n_feats=True))
-        
-        hyperparam_settings = []
-        for tied_val in [True, False]:
-            for bias_decay in bias_decays:
-                hyperparam_settings.append({"tied": tied_val, "bias_decay": bias_decay})
+        for ensemble, arg, _ in ensembles:
+            learned_dicts.extend(unstacked_to_learned_dicts(ensemble, arg, cfg.ensemble_hyperparams, cfg.buffer_hyperparams))
 
-        log_standard_metrics(learned_dicts, chunk, hyperparam_settings, l1_values, dict_sizes, cfg)
+        log_standard_metrics(learned_dicts, chunk, i, hyperparam_ranges, cfg)
 
         del chunk
 
         torch.save(learned_dicts, os.path.join(cfg.iter_folder, "learned_dicts.pt"))
-
-if __name__ == "__main__":
-    main()

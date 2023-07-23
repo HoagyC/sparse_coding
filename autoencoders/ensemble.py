@@ -4,14 +4,24 @@ import torch.nn.functional as F
 
 from torch import Tensor
 
-from torch.func import stack_module_state, functional_call
-
-from typing import Union, Tuple, List, Optional
+from typing import Union, Tuple, List, Optional, Type
 
 import torchopt
 import optree
 
 import copy
+
+# beg for forgiveness from the gods of OOP!
+# interfaces cower in fear of being arbitrarily
+# warped into forms they were never meant to take.
+class DictSignature:
+    @staticmethod
+    def to_learned_dict(params, buffers):
+        pass
+
+    @staticmethod
+    def loss(params, buffers, batch):
+        pass
 
 def optim_str_to_func(optim_str):
     if optim_str == "adam":
@@ -35,14 +45,6 @@ def construct_stacked_leaf(
     if all_requires_grad:
         result = result.detach().requires_grad_()
     return result
-"""
-def stack_dict(all_params: List[dict], device=None):
-    params = {
-        k: construct_stacked_leaf(tuple(params[k] for params in all_params), k, device=device)
-        for k in all_params[0]
-    }
-    return params
-"""
 
 # now recurses! (cool)
 def stack_dict(models: list, device=None):
@@ -62,7 +64,7 @@ def unstack_dict(params, n_models, device=None):
     return [optree.tree_unflatten(treespec, ts) for ts in tensors_]
 
 class FunctionalEnsemble():
-    def __init__(self, models, loss_func, optimizer_func, optimizer_kwargs, device=None):
+    def __init__(self, models, sig: Type[DictSignature], optimizer_func, optimizer_kwargs, device=None):
         if device is None:
             self.device = model_state_dicts[0]["device"]
         else:
@@ -73,7 +75,7 @@ class FunctionalEnsemble():
         self.params = stack_dict(params, device=self.device)
         self.buffers = stack_dict(buffers, device=self.device)
 
-        self.loss_func = loss_func
+        self.sig = sig
 
         self.optimizer_func = optimizer_func
         self.optimizer_kwargs = optimizer_kwargs
@@ -85,7 +87,7 @@ class FunctionalEnsemble():
     
     def init_functions(self):
         def calc_grads(params, buffers, batch):
-            return torch.func.grad(self.loss_func, has_aux=True)(params, buffers, batch)
+            return torch.func.grad(self.sig.loss, has_aux=True)(params, buffers, batch)
 
         self.calc_grads = torch.vmap(calc_grads)
         self.update = torch.vmap(self.optimizer.update)
@@ -98,7 +100,7 @@ class FunctionalEnsemble():
         self.n_models = state_dict["n_models"]
         self.params = state_dict["params"]
         self.buffers = state_dict["buffers"]
-        self.loss_func = state_dict["loss_func"]
+        self.sig = state_dict["sig"]
         self.optimizer_func = state_dict["optimizer_func"]
         self.optimizer_kwargs = state_dict["optimizer_kwargs"]
         self.optim_states = state_dict["optim_states"]
@@ -120,7 +122,7 @@ class FunctionalEnsemble():
             "n_models": self.n_models,
             "params": self.params,
             "buffers": self.buffers,
-            "loss_func": self.loss_func,
+            "sig": self.sig,
             "optimizer_func": self.optimizer_func,
             "optimizer_kwargs": self.optimizer_kwargs,
             "optim_states": self.optim_states
@@ -168,149 +170,3 @@ class FunctionalEnsemble():
             torchopt.apply_updates(self.params, updates)
 
             return loss, aux
-
-# leaks memory somewhere; DO NOT USE
-class VectorizedEnsemble():
-    def __init__(self, models, optimizer_func, optimizer_kwargs, model_func, model_kwargs, device=None):
-        if device is None:
-            self.device = models[0].device
-        else:
-            self.device = device
-
-        for model in models:
-            model.to(self.device)        
-
-        self.n_models = len(models)
-        self.params, self.buffers = stack_module_state(models)
-
-        self.optimizer_func = optimizer_func
-        self.optimizer_kwargs = optimizer_kwargs
-        self.optimizer = optimizer_func(**optimizer_kwargs)
-
-        self.optim_states = torch.vmap(self.optimizer.init)(self.params)
-
-        self.model_func = model_func
-        self.model_kwargs = model_kwargs
-        self.modeldesc = model_func(**model_kwargs, device="meta")
-
-    def to_device(self, device):
-        self.device = device
-        self.params = self.params.to(device)
-        self.buffers = self.buffers.to(device)
-        leaves, _ = optree.tree_flatten(self.optim_states)
-        for leaf in leaves:
-            leaf.to(device)
-
-    @staticmethod
-    def from_state(state_dict):
-        self = VectorizedEnsemble.__new__(VectorizedEnsemble)
-        self.n_models = state_dict["n_models"]
-        self.device = state_dict["device"]
-        self.params = state_dict["params"]
-        self.buffers = state_dict["buffers"]
-        self.optimizer_func = state_dict["optimizer_func"]
-        self.optimizer_kwargs = state_dict["optimizer_kwargs"]
-
-        self.optimizer = self.optimizer_func(**self.optimizer_kwargs)
-
-        optim_states_leaves = state_dict["optim_states_leaves"]
-        optim_states_treespec = state_dict["optim_states_treespec"]
-        self.optim_states = optree.tree_unflatten(optim_states_treespec, optim_states_leaves)
-
-        self.model_func = state_dict["model_func"]
-        self.model_kwargs = state_dict["model_kwargs"]
-        self.modeldesc = self.model_func(**self.model_kwargs, device="meta")
-
-        return self
-
-    def step_batch(self, minibatches, expand_dims=True):
-        def compute_loss(params, buffers, minibatch):
-            losses = functional_call(self.modeldesc, (params, buffers), minibatch)
-            return losses
-        
-        def compute_grads(params, buffers, minibatch):
-            return torch.func.grad(compute_loss, has_aux=False)(params, buffers, minibatch)
-        
-        if expand_dims:
-            # minibatches: [batch_size, ...]
-            minibatches = minibatches.expand(self.n_models, *minibatches.shape)
-
-        grads = torch.vmap(compute_grads)(self.params, self.buffers, minibatches)
-        updates, self.optim_states = torch.vmap(self.optimizer.update)(grads, self.optim_states)
-        def apply_updates(params, updates):
-            return torchopt.apply_updates(params, updates, inplace=False)
-
-        self.params = torch.vmap(apply_updates)(self.params, updates)
-    
-    def state_dict(self):
-        optim_states_leaves, optim_states_treespec = optree.tree_flatten(self.optim_states)
-        return {
-            "n_models": self.n_models,
-            "device": self.device,
-            "params": self.params,
-            "buffers": self.buffers,
-            "optimizer_func": self.optimizer_func,
-            "optimizer_kwargs": self.optimizer_kwargs,
-            "optim_states_leaves": optim_states_leaves,
-            "optim_states_treespec": optim_states_treespec,
-            "model_func": self.model_func,
-            "model_kwargs": self.model_kwargs
-        }
-
-    def to_shared_memory(self):
-        for _, p in self.params.items():
-            p.share_memory_()
-        for _, b in self.buffers.items():
-            b.share_memory_()
-        leaves, _ = optree.tree_flatten(self.optim_states)
-        for leaf in leaves:
-            leaf.share_memory_()
-
-
-import torchopt
-import optree
-
-class DummyEnsemble:
-    def __init__(self, device):
-        self.device = device
-        self.model = torch.empty(10, 128, device=device)
-        torch.nn.init.normal_(self.model)
-        self.optim_func = torchopt.adam
-        self.optim_args = {"lr": 0.01}
-        self.optimizer = self.optim_func(**self.optim_args)
-        self.optim_state = self.optimizer.init(self.model)
-
-    def step_batch(self, batch):
-        grads = torch.func.grad(lambda d, b: (d @ b).sum())(self.model, batch)
-        updates, self.optim_state = self.optimizer.update(grads, self.optim_state)
-        torchopt.apply_updates(self.model, updates, inplace=True)
-    
-    @staticmethod
-    def from_state(state_dict):
-        self = DummyEnsemble.__new__(DummyEnsemble)
-        self.model = state_dict["model"]
-        self.optim_func = state_dict["optim_func"]
-        self.optim_args = state_dict["optim_args"]
-        self.optim_state = state_dict["optim_state"]
-        self.optimizer = self.optim_func(**self.optim_args)
-        return self
-
-    def state_dict(self):
-        return {
-            "model": self.model,
-            "optim_func": self.optim_func,
-            "optim_args": self.optim_args,
-            "optim_state": self.optim_state
-        }
-    
-    def to_shared_memory(self):
-        self.model.share_memory_()
-        leaves, _ = optree.tree_flatten(self.optim_state)
-        for leaf in leaves:
-            leaf.share_memory_()
-    
-    def to(self, device):
-        self.model = self.model.to(device)
-        leaves, _ = optree.tree_flatten(self.optim_state)
-        for leaf in leaves:
-            leaf = leaf.to(device)

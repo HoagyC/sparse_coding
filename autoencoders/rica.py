@@ -2,8 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from autoencoders.encoder import Encoder
-
 # Reconstruction ICA
 # http://ai.stanford.edu/~quocle/LeKarpenkoNgiamNg.pdf
 
@@ -53,5 +51,3 @@ class RICA(nn.Module):
 
     def configure_optimizers(self, **kwargs):
         return torch.optim.Adam(self.parameters(), **kwargs)
-    
-Encoder.register(RICA)

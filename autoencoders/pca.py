@@ -16,8 +16,6 @@ from transformers import GPT2Tokenizer
 from transformer_lens import HookedTransformer
 import pickle
 
-from autoencoders.encoder import Encoder
-
 class BatchedPCA():
     def __init__(self, n_dims, device):
         super().__init__()
@@ -49,5 +47,3 @@ class BatchedPCA():
     
     def configure_optimizers(self, **kwargs):
         return None
-
-Encoder.register(BatchedPCA)

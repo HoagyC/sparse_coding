@@ -2,6 +2,8 @@ import torch
 from abc import ABC, abstractmethod
 from torchtyping import TensorType
 
+from autoencoders.ensemble import DictSignature
+
 class LearnedDict(ABC):
     @abstractmethod
     def get_learned_dict(self) -> TensorType["n_dict_components", "activation_size"]:
