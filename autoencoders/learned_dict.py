@@ -16,8 +16,8 @@ class LearnedDict(ABC):
     @abstractmethod
     def to_device(self, device):
         pass
-
-    def forward(self, batch: TensorType["batch_size", "activation_size"]) -> TensorType["batch_size", "activation_size"]:
+    
+    def predict(self, batch: TensorType["batch_size", "activation_size"]) -> TensorType["batch_size", "activation_size"]:
         c = self.encode(batch)
         learned_dict = self.get_learned_dict()
         x_hat = torch.einsum("nd,bn->bd", learned_dict, c)

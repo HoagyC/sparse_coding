@@ -128,8 +128,8 @@ def mean_nonzero_activations(model: LearnedDict, batch: TensorType["batch_size",
 
 def fraction_variance_unexplained(model: LearnedDict, batch: TensorType["batch_size", "activation_size"]):
     x_hat = model.predict(batch)
-    residuals = (batch - x_hat).pow(2).sum(dim=-1)
-    total = (batch - batch.mean(dim=0)).pow(2).sum(dim=-1)
+    residuals = (batch - x_hat).pow(2).mean()
+    total = (batch - batch.mean(dim=0)).pow(2).mean()
     return residuals / total
 
 def r_squared(model: LearnedDict, batch: TensorType["batch_size", "activation_size"]):
@@ -210,7 +210,7 @@ Quo laborum quis sit ratione dolores dignissimos tempore in. Quisquam occaecati 
     """
     tokens = transformer.to_tokens(text)
 
-    directions_to_ablate = list(range(512))
+    directions_to_ablate = list(range(model.get_learned_dict().shape[0]))
 
     cfg = parse_args()
 
@@ -232,4 +232,18 @@ Quo laborum quis sit ratione dolores dignissimos tempore in. Quisquam occaecati 
         torch.randint(0, 2, tokens.shape, device=device)
     )
 
-    print(erasure_score, true, ablated)
+    activations = None
+    def copy_to_activations(tensor, hook=None):
+        global activations
+        activations = tensor.clone()
+        return tensor
+
+    with torch.no_grad():
+        transformer.run_with_hooks(
+            tokens,
+            fwd_hooks = [(tensor_to_read, copy_to_activations)]
+        )
+
+    r_sq = fraction_variance_unexplained(model, activations.reshape(-1, activations.shape[-1])).item()
+
+    print(erasure_score, true, ablated, r_sq)
