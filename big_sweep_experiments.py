@@ -38,7 +38,7 @@ def tied_vs_not_experiment(cfg):
     bias_decays = [0.0, 0.05, 0.1]
     dict_ratios = [2, 4, 8]
 
-    dict_sizes = [cfg.mlp_width * ratio for ratio in dict_ratios]
+    dict_sizes = [cfg.activation_width * ratio for ratio in dict_ratios]
 
     ensembles = []
     devices = [f"cuda:{i}" for i in range(8)]
@@ -46,7 +46,7 @@ def tied_vs_not_experiment(cfg):
     for i in range(2):
         cfgs = product(l1_values[i*2:(i+1)*2], bias_decays)
         models = [
-            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 8, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
+            FunctionalSAE.init(cfg.activation_width, cfg.activation_width * 8, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
             for l1_alpha, bias_decay in cfgs
         ]
         device = devices.pop()
@@ -57,7 +57,7 @@ def tied_vs_not_experiment(cfg):
             },
             device=device
         )
-        args = {"batch_size": cfg.batch_size, "device": device, "tied": False, "dict_size": cfg.mlp_width * 8}
+        args = {"batch_size": cfg.batch_size, "device": device, "tied": False, "dict_size": cfg.activation_width * 8}
         name = f"dict_ratio_8_group_{i}"
         
         ensembles.append((ensemble, args, name))
@@ -65,7 +65,7 @@ def tied_vs_not_experiment(cfg):
     for i in range(2):
         cfgs = product(l1_values[i*2:(i+1)*2], bias_decays)
         models = [
-            FunctionalTiedSAE.init(cfg.mlp_width, cfg.mlp_width * 8, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
+            FunctionalTiedSAE.init(cfg.activation_width, cfg.activation_width * 8, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
             for l1_alpha, bias_decay in cfgs
         ]
         device = devices.pop()
@@ -76,7 +76,7 @@ def tied_vs_not_experiment(cfg):
             },
             device=device
         )
-        args = {"batch_size": cfg.batch_size, "device": device, "tied": True, "dict_size": cfg.mlp_width * 8}
+        args = {"batch_size": cfg.batch_size, "device": device, "tied": True, "dict_size": cfg.activation_width * 8}
         name = f"dict_ratio_8_group_{i}_tied"
 
         ensembles.append((ensemble, args, name))
@@ -84,7 +84,7 @@ def tied_vs_not_experiment(cfg):
     for _ in range(1):
         cfgs = product(l1_values, bias_decays)
         models = [
-            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 4, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
+            FunctionalSAE.init(cfg.activation_width, cfg.activation_width * 4, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
             for l1_alpha, bias_decay in cfgs
         ]
         device = devices.pop()
@@ -95,7 +95,7 @@ def tied_vs_not_experiment(cfg):
             },
             device=device
         )
-        args = {"batch_size": cfg.batch_size, "device": device, "tied": False, "dict_size": cfg.mlp_width * 4}
+        args = {"batch_size": cfg.batch_size, "device": device, "tied": False, "dict_size": cfg.activation_width * 4}
         name = f"dict_ratio_4"
 
         ensembles.append((ensemble, args, name))
@@ -103,7 +103,7 @@ def tied_vs_not_experiment(cfg):
     for _ in range(1):
         cfgs = product(l1_values, bias_decays)
         models = [
-            FunctionalTiedSAE.init(cfg.mlp_width, cfg.mlp_width * 4, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
+            FunctionalTiedSAE.init(cfg.activation_width, cfg.activation_width * 4, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
             for l1_alpha, bias_decay in cfgs
         ]
         device = devices.pop()
@@ -114,7 +114,7 @@ def tied_vs_not_experiment(cfg):
             },
             device=device
         )
-        args = {"batch_size": cfg.batch_size, "device": device, "tied": True, "dict_size": cfg.mlp_width * 4}
+        args = {"batch_size": cfg.batch_size, "device": device, "tied": True, "dict_size": cfg.activation_width * 4}
         name = f"dict_ratio_4_tied"
 
         ensembles.append((ensemble, args, name))
@@ -122,7 +122,7 @@ def tied_vs_not_experiment(cfg):
     for _ in range(1):
         cfgs = product(l1_values, bias_decays)
         models = [
-            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 2, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
+            FunctionalSAE.init(cfg.activation_width, cfg.activation_width * 2, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
             for l1_alpha, bias_decay in cfgs
         ]
         device = devices.pop()
@@ -133,7 +133,7 @@ def tied_vs_not_experiment(cfg):
             },
             device=device
         )
-        args = {"batch_size": cfg.batch_size, "device": device, "tied": False, "dict_size": cfg.mlp_width * 2}
+        args = {"batch_size": cfg.batch_size, "device": device, "tied": False, "dict_size": cfg.activation_width * 2}
         name = f"dict_ratio_2"
 
         ensembles.append((ensemble, args, name))
@@ -141,7 +141,7 @@ def tied_vs_not_experiment(cfg):
     for _ in range(1):
         cfgs = product(l1_values, bias_decays)
         models = [
-            FunctionalTiedSAE.init(cfg.mlp_width, cfg.mlp_width * 2, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
+            FunctionalTiedSAE.init(cfg.activation_width, cfg.activation_width * 2, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
             for l1_alpha, bias_decay in cfgs
         ]
         device = devices.pop()
@@ -152,7 +152,7 @@ def tied_vs_not_experiment(cfg):
             },
             device=device
         )
-        args = {"batch_size": cfg.batch_size, "device": device, "tied": True, "dict_size": cfg.mlp_width * 2}
+        args = {"batch_size": cfg.batch_size, "device": device, "tied": True, "dict_size": cfg.activation_width * 2}
         name = f"dict_ratio_2_tied"
 
         ensembles.append((ensemble, args, name))

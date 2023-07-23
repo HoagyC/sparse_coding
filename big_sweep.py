@@ -19,7 +19,7 @@ from argparser import parse_args
 import numpy as np
 from itertools import product, chain
 
-from transformer_lens import HookedTransformer, GPT2Tokenizer
+from transformer_lens import HookedTransformer
 
 import wandb
 import datetime
@@ -304,3 +304,5 @@ def sweep(ensemble_init_func, cfg):
         del chunk
 
         torch.save(learned_dicts, os.path.join(cfg.iter_folder, "learned_dicts.pt"))
+
+        print("\n")
