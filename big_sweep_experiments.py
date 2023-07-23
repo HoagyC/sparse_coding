@@ -56,6 +56,7 @@ def tied_vs_not_experiment(cfg):
         models = [
             # this function returns a tuple of (params, buffers)
             # where both are dicts of tensors
+            # in this format so they can be ensembled/stacked
             FunctionalSAE.init(cfg.activation_width, cfg.activation_width * 8, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
             for l1_alpha, bias_decay in cfgs
         ]
