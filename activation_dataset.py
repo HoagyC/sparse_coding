@@ -183,7 +183,7 @@ def make_activation_dataset(cfg, sentence_dataset: DataLoader, model: HookedTran
     print(f"Running model and saving activations to {cfg.dataset_folder}")
     with torch.no_grad():
         chunk_size = chunk_size_gb * (2**30)  # 2GB
-        activation_size = cfg.mlp_width * 2 * cfg.model_batch_size * cfg.max_length  # 3072 mlp activations, 2 bytes per half, 1024 context window
+        activation_size = cfg.activation_width * 2 * cfg.model_batch_size * cfg.max_length  # 3072 mlp activations, 2 bytes per half, 1024 context window
         max_chunks = chunk_size // activation_size
         dataset = []
         n_saved_chunks = 0
@@ -224,11 +224,11 @@ def save_activation_chunk(dataset, n_saved_chunks, cfg):
 
 def setup_data(cfg, tokenizer, model, use_baukit=False, start_line=0, chunk_size_gb=2):
     sentence_len_lower = 1000
-    max_lines = int((chunk_size_gb * 1e9  * cfg.n_chunks)/ (cfg.mlp_width * sentence_len_lower * 2))
+    max_lines = int((chunk_size_gb * 1e9  * cfg.n_chunks)/ (cfg.activation_width * sentence_len_lower * 2))
     print(f"Setting max_lines to {max_lines} to minimize sentences processed")
 
     sentence_dataset = make_sentence_dataset(cfg.dataset_name, max_lines=max_lines, start_line=start_line)
-    tensor_name = make_tensor_name(cfg)
+    tensor_name = make_tensor_name(cfg.layer, cfg.use_residual, cfg.model_name)
     tokenized_sentence_dataset, bits_per_byte = chunk_and_tokenize(sentence_dataset, tokenizer, max_length=cfg.max_length)
     token_loader = DataLoader(tokenized_sentence_dataset, batch_size=cfg.model_batch_size, shuffle=True)
     make_activation_dataset(cfg, token_loader, model, tensor_name, use_baukit, chunk_size_gb=chunk_size_gb)

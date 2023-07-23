@@ -19,7 +19,7 @@ from argparser import parse_args
 import numpy as np
 from itertools import product, chain
 
-from transformer_lens import HookedTransformer
+from transformer_lens import HookedTransformer, GPT2Tokenizer
 
 import wandb
 import datetime
@@ -56,7 +56,7 @@ def init_semilinear_grid(cfg):
     for i in range(4):
         cfgs = l1_values[i*4:(i+1)*4]
         models = [
-            SemiLinearSAE.init(cfg.mlp_width, cfg.mlp_width * 8, l1_alpha, dtype=cfg.dtype)
+            SemiLinearSAE.init(cfg.activation_width, cfg.activation_width * 8, l1_alpha, dtype=cfg.dtype)
             for l1_alpha in cfgs
         ]
         device = devices.pop()
@@ -74,7 +74,7 @@ def init_semilinear_grid(cfg):
     for i in range(2):
         cfgs = l1_values[i*8:(i+1)*8]
         models = [
-            SemiLinearSAE.init(cfg.mlp_width, cfg.mlp_width * 4, l1_alpha, dtype=cfg.dtype)
+            SemiLinearSAE.init(cfg.activation_width, cfg.activation_width * 4, l1_alpha, dtype=cfg.dtype)
             for l1_alpha in cfgs
         ]
         device = devices.pop()
@@ -92,7 +92,7 @@ def init_semilinear_grid(cfg):
     for i in range(1):
         cfgs = l1_values
         models = [
-            SemiLinearSAE.init(cfg.mlp_width, cfg.mlp_width * 2, l1_alpha, dtype=cfg.dtype)
+            SemiLinearSAE.init(cfg.activation_width, cfg.activation_width * 2, l1_alpha, dtype=cfg.dtype)
             for l1_alpha in cfgs
         ]
         device = devices.pop()
@@ -120,7 +120,7 @@ def init_ensembles_for_mcs_testing(cfg):
 
     for i in range(4):
         models = [
-            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 8, l1_value, bias_decay=bias_decay, dtype=cfg.dtype)
+            FunctionalSAE.init(cfg.activation_width, cfg.activation_width * 8, l1_value, bias_decay=bias_decay, dtype=cfg.dtype)
             for _ in range(4)
         ]
         device = devices.pop()
@@ -137,7 +137,7 @@ def init_ensembles_for_mcs_testing(cfg):
 
     for i in range(2):
         models = [
-            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 4, l1_value, bias_decay=bias_decay, dtype=cfg.dtype)
+            FunctionalSAE.init(cfg.activation_width, cfg.activation_width * 4, l1_value, bias_decay=bias_decay, dtype=cfg.dtype)
             for _ in range(8)
         ]
         device = devices.pop()
@@ -154,7 +154,7 @@ def init_ensembles_for_mcs_testing(cfg):
     
     for i in range(2):
         models = [
-            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 2, l1_value, bias_decay=bias_decay, dtype=cfg.dtype)
+            FunctionalSAE.init(cfg.activation_width, cfg.activation_width * 2, l1_value, bias_decay=bias_decay, dtype=cfg.dtype)
             for _ in range(8)
         ]
         device = devices.pop()
@@ -179,7 +179,7 @@ def init_ensembles_inc_tied(cfg):
     bias_decays = [0.0, 0.05, 0.1]
     dict_ratios = [2, 4, 8]
 
-    dict_sizes = [cfg.mlp_width * ratio for ratio in dict_ratios]
+    dict_sizes = [cfg.activation_width * ratio for ratio in dict_ratios]
 
     ensembles = []
     ensemble_args = []
@@ -189,7 +189,7 @@ def init_ensembles_inc_tied(cfg):
     for i in range(2):
         cfgs = product(l1_values[i*2:(i+1)*2], bias_decays)
         models = [
-            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 8, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
+            FunctionalSAE.init(cfg.activation_width, cfg.activation_width * 8, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
             for l1_alpha, bias_decay in cfgs
         ]
         device = devices.pop()
@@ -207,7 +207,7 @@ def init_ensembles_inc_tied(cfg):
     for i in range(2):
         cfgs = product(l1_values[i*2:(i+1)*2], bias_decays)
         models = [
-            FunctionalTiedSAE.init(cfg.mlp_width, cfg.mlp_width * 8, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
+            FunctionalTiedSAE.init(cfg.activation_width, cfg.activation_width * 8, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
             for l1_alpha, bias_decay in cfgs
         ]
         device = devices.pop()
@@ -225,7 +225,7 @@ def init_ensembles_inc_tied(cfg):
     for _ in range(1):
         cfgs = product(l1_values, bias_decays)
         models = [
-            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 4, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
+            FunctionalSAE.init(cfg.activation_width, cfg.activation_width * 4, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
             for l1_alpha, bias_decay in cfgs
         ]
         device = devices.pop()
@@ -243,7 +243,7 @@ def init_ensembles_inc_tied(cfg):
     for _ in range(1):
         cfgs = product(l1_values, bias_decays)
         models = [
-            FunctionalTiedSAE.init(cfg.mlp_width, cfg.mlp_width * 4, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
+            FunctionalTiedSAE.init(cfg.activation_width, cfg.activation_width * 4, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
             for l1_alpha, bias_decay in cfgs
         ]
         device = devices.pop()
@@ -261,7 +261,7 @@ def init_ensembles_inc_tied(cfg):
     for _ in range(1):
         cfgs = product(l1_values, bias_decays)
         models = [
-            FunctionalSAE.init(cfg.mlp_width, cfg.mlp_width * 2, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
+            FunctionalSAE.init(cfg.activation_width, cfg.activation_width * 2, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
             for l1_alpha, bias_decay in cfgs
         ]
         device = devices.pop()
@@ -279,7 +279,7 @@ def init_ensembles_inc_tied(cfg):
     for _ in range(1):
         cfgs = product(l1_values, bias_decays)
         models = [
-            FunctionalTiedSAE.init(cfg.mlp_width, cfg.mlp_width * 2, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
+            FunctionalTiedSAE.init(cfg.activation_width, cfg.activation_width * 2, l1_alpha, bias_decay=bias_decay, dtype=cfg.dtype)
             for l1_alpha, bias_decay in cfgs
         ]
         device = devices.pop()
@@ -496,6 +496,11 @@ def main():
     cfg.layer = 2
     cfg.use_residual = True
 
+    if cfg.use_residual:
+        cfg.activation_width = 512
+    else:
+        cfg.activation_width = 2048 # mlp_width is 4x the residual width
+
     start_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
     if cfg.use_wandb:
@@ -515,7 +520,6 @@ def main():
         print(f"Activations in {cfg.dataset_folder} already exist, loading them")
 
     dataset = torch.load(os.path.join(cfg.dataset_folder, "0.pt"))
-    cfg.mlp_width = dataset.shape[-1]
     n_lines = cfg.max_lines
     del dataset
 

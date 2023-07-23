@@ -22,7 +22,7 @@ def job_wrapper(job, ensemble_state_dict, cfg, args, tag, dataset, done_flag, pr
 
     batch_size = args["batch_size"]
     device = args["device"]
-    
+ 
     # can't use DataLoaders because they copy the dataset
     # instead, we use a custom sampler for indexes
     sampler = torch.utils.data.BatchSampler(
