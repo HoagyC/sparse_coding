@@ -363,11 +363,20 @@ async def main(cfg: dotdict) -> None:
         if cfg.tied_ae:
             AutoEncoder: Any
             from autoencoders.tied_ae import AutoEncoder
-            autoencoder = pickle.load(open(cfg.load_interpret_autoencoder, "rb")).to(cfg.device)
+            
+            with open(cfg.load_interpret_autoencoder, "rb") as f:
+                if ".pkl" in cfg.load_interpret_autoencoder:
+                    autoencoder = pickle.load(f).to(cfg.device)
+                elif ".pt" in cfg.load_interpret_autoencoder:
+                    autoencoder = torch.load(f).to(cfg.device)
         else:
             from run import AutoEncoder
-            autoencoder = pickle.load(open(cfg.load_interpret_autoencoder, "rb")).to(cfg.device)
-    
+            with open(cfg.load_interpret_autoencoder, "rb") as f:
+                if ".pkl" in cfg.load_interpret_autoencoder:
+                    autoencoder = pickle.load(f).to(cfg.device)
+                elif ".pt" in cfg.load_interpret_autoencoder:
+                    autoencoder = torch.load(f).to(cfg.device)
+   
     if cfg.activation_transform in ["feature_dict", "feature_no_bias"]:
         feature_size = autoencoder.decoder.weight.shape[1]
     else:
@@ -438,7 +447,10 @@ async def main(cfg: dotdict) -> None:
         if cfg.tied_ae:
             activation_fn_kwargs.update({"feature_matrix": autoencoder.decoder.weight})
         else:
-            activation_fn_kwargs.update({"feature_matrix": autoencoder.encoder[0].weight.t()})
+            if cfg.use_decoder:
+                activation_fn_kwargs.update({"feature_matrix": autoencoder.decoder.weight})
+            else:
+                activation_fn_kwargs.update({"feature_matrix": autoencoder.encoder[0].weight.t()})
         
     elif cfg.activation_transform == "random":
         print("Using random activation transform")
@@ -664,15 +676,18 @@ def get_score(lines: List[str], mode: str):
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
-def read_results(activation_name, score_mode):
+def read_results(activation_name: str, score_mode: str, exclude_mean: bool = True) -> None:
     results_folder = os.path.join("auto_interp_results", activation_name)
     transforms = os.listdir(results_folder)
     transforms = [transform for transform in transforms if os.path.isdir(os.path.join(results_folder, transform))]
-    scores = {}
+    scores: Dict[str, List[float]] = {}
+    plt.clf() # clear the plot
+
     if "sparse_coding" in transforms:
         transforms.remove("sparse_coding")
         transforms = ["sparse_coding"] + transforms
-        
+    
+  
     for transform in transforms:
         scores[transform] = []
         # list all the features by looking for folders
@@ -691,6 +706,10 @@ def read_results(activation_name, score_mode):
 
             print(f"{feature_ndx=}, {transform=}, {score=}")
             scores[transform].append(score)
+        
+        # if no scores, add a 0 so it shows up and doesn't cause errors
+        if len(scores[transform]) == 0:
+            scores[transform].append(0)
                 
     
     # plot the scores as a violin plot
@@ -705,8 +724,8 @@ def read_results(activation_name, score_mode):
     scores_list = [scores[transform] for transform in transforms]
     violin_parts = plt.violinplot(scores_list, showmeans=False, showextrema=False)
     for i, pc in enumerate(violin_parts['bodies']):
-        pc.set_facecolor(colors[i])
-        pc.set_edgecolor(colors[i])
+        pc.set_facecolor(colors[i % len(colors)])
+        pc.set_edgecolor(colors[i % len(colors)])
         pc.set_alpha(0.3)
 
     # add x labels
@@ -715,7 +734,7 @@ def read_results(activation_name, score_mode):
     # add standard errors around the means but don't plot the means
     cis = [1.96 * np.std(scores[transform]) / np.sqrt(len(scores[transform])) for transform in transforms]
     for i, transform in enumerate(transforms):
-        plt.errorbar(i+1, np.mean(scores[transform]), yerr=cis[i], fmt="o", color=colors[i], elinewidth=2, capsize=20)
+        plt.errorbar(i+1, np.mean(scores[transform]), yerr=cis[i], fmt="o", color=colors[i % len(colors)], elinewidth=2, capsize=20)
 
     plt.title(f"{activation_name} {score_mode}")
     plt.xlabel("Transform")
@@ -733,8 +752,6 @@ def read_results(activation_name, score_mode):
     plt.savefig(save_path)  
 
 
-
-
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "openai":
         asyncio.run(run_openai_example())
@@ -744,8 +761,9 @@ if __name__ == "__main__":
         argparser.add_argument("--layer", type=int, default=1)
         argparser.add_argument("--model_name", type=str, default="EleutherAI/pythia-70m-deduped")
         argparser.add_argument("--use_residual", type=bool, default=False)
-        argparser.add_argument("--score_mode", type=str, default="top_random") # can be "top", "random", "top_random"
+        argparser.add_argument("--score_mode", type=str, default="top_random") # can be "top", "random", "top_random", "all"
         argparser.add_argument("--run_all", type=bool, default=False)
+        argparser.add_argument("--exclude_mean", type=bool, default=True)
         cfg = argparser.parse_args(sys.argv[2:])
 
         if cfg.score_mode == "all":
@@ -757,14 +775,25 @@ if __name__ == "__main__":
             activation_names = [x for x in os.listdir("auto_interp_results") if os.path.isdir(os.path.join("auto_interp_results", x))]
         else:
             point_name = "resid" if cfg.use_residual else "postnonlin"
-            activations_names = [f"{cfg.model_name.split('/')[-1]}_layer{cfg.layer}_{point_name}"]
+            activation_names = [f"{cfg.model_name.split('/')[-1]}_layer{cfg.layer}_{point_name}"]
         
         for activation_name in activation_names:
             for score_mode in score_modes:
-                read_results(activation_name, score_mode)
+                read_results(activation_name, score_mode, cfg.exclude_mean)
 
 
     else:
         default_cfg = parse_args()
         default_cfg.chunk_size_gb = 10
-        asyncio.run(main(default_cfg))
+        if os.path.isdir(default_cfg.load_interpret_autoencoder):
+            base_folder = default_cfg.load_interpret_autoencoder
+            all_encoders = os.listdir(default_cfg.load_interpret_autoencoder)
+            all_encoders = [x for x in all_encoders if (x.endswith(".pt") or x.endswith(".pkl"))]
+            print(f"Found {len(all_encoders)} encoders in {default_cfg.load_interpret_autoencoder}")
+            for i, encoder in enumerate(all_encoders):
+                print(f"Running encoder {i} of {len(all_encoders)}: {encoder}")
+                default_cfg.load_interpret_autoencoder = os.path.join(base_folder, encoder)
+                asyncio.run(main(default_cfg))
+
+        else:
+            asyncio.run(main(default_cfg))

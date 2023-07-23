@@ -19,7 +19,7 @@ from argparser import parse_args
 import numpy as np
 from itertools import product, chain
 
-from transformer_lens import HookedTransformer
+from transformer_lens import HookedTransformer, GPT2Tokenizer
 
 import wandb
 import datetime
@@ -236,6 +236,11 @@ def sweep(ensemble_init_func, cfg):
     cfg.layer = 2
     cfg.use_residual = True
 
+    if cfg.use_residual:
+        cfg.activation_width = 512
+    else:
+        cfg.activation_width = 2048 # mlp_width is 4x the residual width
+
     start_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
     if cfg.use_wandb:
@@ -255,7 +260,6 @@ def sweep(ensemble_init_func, cfg):
         print(f"Activations in {cfg.dataset_folder} already exist, loading them")
 
     dataset = torch.load(os.path.join(cfg.dataset_folder, "0.pt"))
-    cfg.mlp_width = dataset.shape[-1]
     n_lines = cfg.max_lines
     del dataset
 

@@ -71,6 +71,7 @@ Encoder.register(SAE)
 
 class TiedSAE(nn.Module):
     def __init__(self, activation_size, n_dict_components, l1_coef=0.0, activation="relu", bias_l2_coef=0.0):
+        super(TiedSAE, self).__init__()
         self.n_dict_components = n_dict_components
         self.activation_size = activation_size
 
