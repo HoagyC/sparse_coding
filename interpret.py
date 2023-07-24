@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 from datetime import datetime
+from functools import partial
 import importlib
 import json
 import multiprocessing as mp
@@ -112,6 +113,7 @@ def activation_ICA(dataset, n_activations):
     print(f"ICA fit in {datetime.now() - ica_start}")
     return ica
 
+
 def activation_PCA(dataset, n_activations):
     pca = PCA()
     print(f"Fitting PCA on {n_activations} activations")
@@ -119,6 +121,7 @@ def activation_PCA(dataset, n_activations):
     pca.fit(next(iter(dataset))[0].cpu().numpy()) # 1GB of activations takes about 40s
     print(f"PCA fit in {datetime.now() - pca_start}")
     return pca
+
 
 def activation_NMF(dataset, n_activations):
     nmf = NMF()
@@ -131,91 +134,13 @@ def activation_NMF(dataset, n_activations):
     print(f"NMF fit in {datetime.now() - nmf_start}")
     return nmf
 
-def flex_activation_function(input, activation_str, **kwargs):
-    if activation_str == "ica":
-        assert "ica" in kwargs
-        return torch.tensor(kwargs["ica"].transform(input.cpu()))
-    elif activation_str == "pca":
-        assert "pca" in kwargs
-        return torch.tensor(kwargs["pca"].transform(input.cpu()))
-    elif activation_str == "nmf":
-        assert "nmf" in kwargs
-        return torch.tensor(kwargs["nmf"].transform(input.cpu()))
-    elif activation_str == "random":
-        assert "random_matrix" in kwargs
-        return input @ kwargs["random_matrix"].to(kwargs["device"])
-    elif activation_str == "random_bias":
-        assert all([k in kwargs for k in ["random_matrix", "bias", "weight"]]), f"Missing keys {set(['random_matrix', 'bias', 'weight']) - set(kwargs.keys())}"
-        assert len(kwargs["bias"]) <= input.shape[1]
-        # going to divide the biases by the norm of the weight vector
-        norms = torch.norm(kwargs["weight"], dim=1)
-        assert len(norms) == len(kwargs["bias"])
-        adjusted_bias = kwargs["bias"] / norms
-        return torch.relu(input @ kwargs["random_matrix"].to(kwargs["device"]) + adjusted_bias[:input.shape[1]])
-    elif activation_str == "neuron_basis":
-        return input
-    elif activation_str == "neuron_relu":
-        return torch.relu(input)
-    elif activation_str == "neuron_basis_bias":
-        # here we take the neuron basis, add a (probably negative) bias term, and then apply a relu
-        assert all([k in kwargs for k in ["bias", "weight"]]), f"Missing keys {set(['bias', 'weight']) - set(kwargs.keys())}"
-        assert len(kwargs["bias"]) <= input.shape[1]
-        norms = torch.norm(kwargs["weight"], dim=1)
-        assert len(norms) == len(kwargs["bias"])
-        adjusted_bias = kwargs["bias"] / norms
-        return torch.relu(input + adjusted_bias[:input.shape[1]])
-
-    elif activation_str == "feature_no_bias":
-        assert "feature_matrix" in kwargs
-        return input @ kwargs["feature_matrix"].to(kwargs["device"])
-
-    elif activation_str == "feature_dict":
-        assert "autoencoder" in kwargs
-        reconstruction, dict_activations = kwargs["autoencoder"](input)
-        return dict_activations
-    else:
-        raise ValueError(f"Unknown activation function {activation_str}")
-
-
-def process_fragment(cfg, fragment_id, fragment_tokens, activation_data, tokenizer_model, activation_fn_kwargs: Dict):
-    # Project the activations into the feature space
-    # Need to define the activation function as a top-level function for mp to be able to pickle it
-    feature_activation_data = flex_activation_function(activation_data.detach(), cfg.activation_transform, **activation_fn_kwargs)
-    if not isinstance(feature_activation_data, torch.Tensor):
-        feature_activation_data = torch.tensor(feature_activation_data)
-    
-    # Get average activation for each feature
-    feature_activation_means = torch.mean(feature_activation_data, dim=0)
-
-    fragment_dict: Dict[str, Any] = {}
-    fragment_dict["fragment_id"] = fragment_id
-    fragment_dict["fragment_token_ids"] = fragment_tokens[0].tolist()
-    fragment_dict["fragment_token_strs"] = tokenizer_model.to_str_tokens(fragment_tokens[0])
-
-    # if there are any question marks in the fragment, throw it away (caused by byte pair encoding)
-
-    if REPLACEMENT_CHAR in fragment_dict["fragment_token_strs"]:
-        # throw away the fragment
-        return None
-    
-    # for j in range(feature_activation_means.shape[0]):
-    #     fragment_dict[f"feature_{j}_mean"] = feature_activation_means[j].item()
-    #     fragment_dict[f"feature_{j}_activations"] = feature_activation_data[:, j].tolist()
-    #     assert len(fragment_dict[f"feature_{j}_activations"]) == len(fragment_dict["fragment_token_strs"]), f"Feature {j} has {len(fragment_dict[f'feature_{j}_activations'])} activations but {len(fragment_dict['fragment_token_strs'])} tokens"
-
-    # rebuilding the above loop to be more efficient, using numpy
-    fragment_dict["feature_means"] = feature_activation_means.tolist()
-    fragment_dict["feature_activations"] = feature_activation_data.cpu().numpy()
-
-    return fragment_dict
 
 def make_feature_activation_dataset(
         model_name: str,
         model: HookedTransformer, 
         layer: int,
         use_residual: bool,
-        activation_fn_name: str,
-        activation_fn_kwargs: Dict, 
+        activation_fn: Callable,
         activation_dim: int,
         use_baukit: bool = False,
         device: str = "cpu",
@@ -293,7 +218,7 @@ def make_feature_activation_dataset(
                 activation_data = mlp_activation_data[i:i+1, :].squeeze(0)
                 token_ids = fragment_tokens[0].tolist()
                     
-                feature_activation_data = flex_activation_function(activation_data, activation_fn_name, **activation_fn_kwargs)
+                feature_activation_data = activation_fn(activation_data)
                 feature_activation_means = torch.mean(feature_activation_data, dim=0)
                 feature_activation_maxes = torch.max(feature_activation_data, dim=0)[0]
                 assert feature_activation_means.shape == (activation_dim,), feature_activation_means.shape
@@ -378,7 +303,7 @@ async def main(cfg: dotdict) -> None:
                     autoencoder = torch.load(f).to(cfg.device)
    
     if cfg.activation_transform in ["feature_dict", "feature_no_bias"]:
-        feature_size = autoencoder.decoder.weight.shape[1]
+        feature_size = autoencoder.n_feats
     else:
         feature_size = activation_width
     
@@ -388,21 +313,20 @@ async def main(cfg: dotdict) -> None:
 
     point_name = "resid" if cfg.use_residual else "postnonlin"
     activations_name = f"{cfg.model_name.split('/')[-1]}_layer{cfg.layer}_{point_name}"
-    activation_fn_kwargs = {"device": cfg.device}
+
+    print(f"Using activation transform {cfg.activation_transform}")
     if cfg.activation_transform == "neuron_basis":
-        print("Using neuron basis activation transform")
+        activation_fn = lambda x: x
     elif cfg.activation_transform == "neuron_relu":
-        print("Using neuron relu activation transform")
+        activation_fn = torch.relu
     elif cfg.activation_transform == "neuron_basis_bias":
-        print("Using neuron basis bias activation transform")
-        if cfg.tied_ae:
-            activation_fn_kwargs.update({"bias": autoencoder.decoder.bias})
-            activation_fn_kwargs.update({"weight": autoencoder.decoder.weight})
-        else:
-            activation_fn_kwargs.update({"bias": autoencoder.encoder[0].bias})
-            activation_fn_kwargs.update({"weight": autoencoder.encoder[0].weight.t()})
+        bias = autoencoder.encoder_bias
+        if not cfg.tied_ae:
+            norms = torch.norm(autoencoder.encoder, 2, dim=-1)
+            bias = bias / norms
+        activation_fn = lambda x: torch.relu(x + bias)
+
     elif cfg.activation_transform == "ica":
-        print("Using ICA activation transform")
         ica_path = os.path.join("auto_interp_results", activations_name, "ica_1gb.pkl")
         if os.path.exists(ica_path):
             print("Loading ICA")
@@ -412,10 +336,9 @@ async def main(cfg: dotdict) -> None:
             os.makedirs(os.path.dirname(ica_path), exist_ok=True)
             pickle.dump(ica, open(ica_path, "wb"))
         
-        activation_fn_kwargs.update({"ica": ica})
+        activation_fn = lambda x: torch.tensor(ica.transform(x.cpu()))
 
     elif cfg.activation_transform == "pca":
-        print("Using PCA activation transform")
         pca_path = os.path.join("auto_interp_results", activations_name, "pca_1gb.pkl")
         if os.path.exists(pca_path):
             print("Loading PCA")
@@ -424,10 +347,10 @@ async def main(cfg: dotdict) -> None:
             pca = activation_PCA(activation_dataset, n_activations)
             os.makedirs(os.path.dirname(pca_path), exist_ok=True)
             pickle.dump(pca, open(pca_path, "wb"))
-        activation_fn_kwargs.update({"pca": pca})
+        
+        activation_fn = lambda x: torch.tensor(pca.transform(x.cpu()))
 
     elif cfg.activation_transform == "nmf":
-        print("Using NMF activation transform")
         nmf_path = os.path.join("auto_interp_results", activations_name, "nmf_1gb.pkl")
         if os.path.exists(nmf_path):
             print("Loading NMF")
@@ -436,24 +359,16 @@ async def main(cfg: dotdict) -> None:
             nmf = activation_NMF(activation_dataset, n_activations)
             os.makedirs(os.path.dirname(nmf_path), exist_ok=True)
             pickle.dump(nmf, open(nmf_path, "wb"))
-        activation_fn_kwargs.update({"nmf": nmf})
+
+        activation_fn = lambda x: torch.tensor(nmf.transform(x.cpu()))
 
     elif cfg.activation_transform == "feature_dict":
-        print("Using feature dict activation transform")
-        activation_fn_kwargs.update({"autoencoder": autoencoder})
+        activation_fn = autoencoder.encode
 
     elif cfg.activation_transform == "feature_no_bias":
-        print("Using feature dict without bias")
-        if cfg.tied_ae:
-            activation_fn_kwargs.update({"feature_matrix": autoencoder.decoder.weight})
-        else:
-            if cfg.use_decoder:
-                activation_fn_kwargs.update({"feature_matrix": autoencoder.decoder.weight})
-            else:
-                activation_fn_kwargs.update({"feature_matrix": autoencoder.encoder[0].weight.t()})
+        activation_fn = partial(autoencoder.encode, bias=False)
         
     elif cfg.activation_transform == "random":
-        print("Using random activation transform")
         random_path = os.path.join("auto_interp_results", activations_name, "random_dirs.pkl")
         if os.path.exists(random_path):
             print("Loading random directions")
@@ -464,9 +379,9 @@ async def main(cfg: dotdict) -> None:
             os.makedirs(os.path.dirname(random_path), exist_ok=True)
             pickle.dump(random_direction_matrix, open(random_path, "wb"))
         
-        activation_fn_kwargs.update({"random_matrix": random_direction_matrix})
+        activation_fn = lambda x: torch.relu(x @ random_direction_matrix.to(cfg.device))
+
     elif cfg.activation_transform == "random_bias":
-        print("Using random activation transform")
         random_path = os.path.join("auto_interp_results", activations_name, "random_dirs.pkl")
         if os.path.exists(random_path):
             print("Loading random directions")
@@ -476,14 +391,12 @@ async def main(cfg: dotdict) -> None:
             os.makedirs(os.path.dirname(random_path), exist_ok=True)
             pickle.dump(random_direction_matrix, open(random_path, "wb"))
         
-        activation_fn_kwargs.update({"random_matrix": random_direction_matrix})
+        bias = autoencoder.encoder_bias
+        if not cfg.tied_ae:
+            norms = torch.norm(autoencoder.encoder, 2, dim=-1)
+            bias = bias / norms
 
-        if cfg.tied_ae:
-            activation_fn_kwargs.update({"bias": autoencoder.decoder.bias})
-            activation_fn_kwargs.update({"weight": autoencoder.decoder.weight})
-        else:
-            activation_fn_kwargs.update({"bias": autoencoder.encoder[0].bias})
-            activation_fn_kwargs.update({"weight": autoencoder.encoder[0].weight.t()})
+        activation_fn = lambda x: torch.relu(x @ random_direction_matrix.to(cfg.device) + bias)
 
     else:
         raise ValueError(f"Activation transform {cfg.activation_transform} not recognised")
@@ -508,8 +421,7 @@ async def main(cfg: dotdict) -> None:
             model,
             layer=cfg.layer,
             use_residual=cfg.use_residual,
-            activation_fn_name=cfg.activation_transform,
-            activation_fn_kwargs=activation_fn_kwargs,
+            activation_fn=activation_fn,
             activation_dim=feature_size,
             device=cfg.device,
             use_baukit=use_baukit,
