@@ -286,7 +286,8 @@ async def main(cfg: dotdict) -> None:
     # Load feature dict
     if cfg.activation_transform in ["feature_dict", "feature_no_bias", "neuron_basis_bias", "random_bias"]:
         assert cfg.load_interpret_autoencoder is not None
-        autoencoder: LearnedDict = torch.load(cfg.load_interpret_autoencoder).to_device(cfg.device)
+        autoencoder: LearnedDict = torch.load(cfg.load_interpret_autoencoder)
+        autoencoder.to_device(cfg.device)
 
     if cfg.activation_transform in ["feature_dict", "feature_no_bias"]:
         feature_size: int = autoencoder.n_feats
