@@ -1,14 +1,23 @@
 import torch
+from torch import nn
+
 from abc import ABC, abstractmethod
 from torchtyping import TensorType
 
+_n_dict_components, _activation_size, _batch_size = None, None, None
+
 class LearnedDict(ABC):
+    n_feats: int
+    n_dict_components: int
+    encoder: TensorType["_n_dict_components", "_activation_size"]
+    encoder_bias: TensorType["_n_dict_components"]
+
     @abstractmethod
-    def get_learned_dict(self) -> TensorType["n_dict_components", "activation_size"]:
+    def get_learned_dict(self) -> TensorType["_n_dict_components", "_activation_size"]:
         pass
 
     @abstractmethod
-    def encode(self, batch: TensorType["batch_size", "activation_size"]) -> TensorType["batch_size", "n_dict_components"]:
+    def encode(self, batch: TensorType["_batch_size", "_activation_size"]) -> TensorType["_batch_size", "_n_dict_components"]:
         pass
 
 class UntiedSAE(LearnedDict):
@@ -16,6 +25,7 @@ class UntiedSAE(LearnedDict):
         self.encoder = encoder
         self.decoder = decoder
         self.encoder_bias = encoder_bias
+        self.n_feats, self.n_dict_components = self.encoder.shape
 
     def get_learned_dict(self):
         norms = torch.norm(self.decoder, 2, dim=-1)

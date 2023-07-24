@@ -25,6 +25,7 @@ from tqdm import tqdm
 from transformer_lens import HookedTransformer
 from transformers import GPT2Tokenizer, AutoTokenizer
 
+from autoencoders.learned_dict import LearnedDict
 from argparser import parse_args
 from comparisons import NoCredentialsError
 from utils import dotdict, make_tensor_name, upload_to_aws
@@ -285,25 +286,10 @@ async def main(cfg: dotdict) -> None:
     # Load feature dict
     if cfg.activation_transform in ["feature_dict", "feature_no_bias", "neuron_basis_bias", "random_bias"]:
         assert cfg.load_interpret_autoencoder is not None
-        if cfg.tied_ae:
-            AutoEncoder: Any
-            from autoencoders.tied_ae import AutoEncoder
-            
-            with open(cfg.load_interpret_autoencoder, "rb") as f:
-                if ".pkl" in cfg.load_interpret_autoencoder:
-                    autoencoder = pickle.load(f).to(cfg.device)
-                elif ".pt" in cfg.load_interpret_autoencoder:
-                    autoencoder = torch.load(f).to(cfg.device)
-        else:
-            from run import AutoEncoder
-            with open(cfg.load_interpret_autoencoder, "rb") as f:
-                if ".pkl" in cfg.load_interpret_autoencoder:
-                    autoencoder = pickle.load(f).to(cfg.device)
-                elif ".pt" in cfg.load_interpret_autoencoder:
-                    autoencoder = torch.load(f).to(cfg.device)
-   
+        autoencoder: LearnedDict = torch.load(cfg.load_interpret_autoencoder).to_device(cfg.device)
+
     if cfg.activation_transform in ["feature_dict", "feature_no_bias"]:
-        feature_size = autoencoder.n_feats
+        feature_size: int = autoencoder.n_feats
     else:
         feature_size = activation_width
     
