@@ -95,10 +95,10 @@ class dotdict(dict):
 def make_tensor_name(layer: int, use_residual: bool, model_name: str) -> str:
     """Make the tensor name for a given layer and model."""
     if use_residual:
-        if model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]:
+        if model_name in ["gpt2", "EleutherAI/pythia-70m-deduped", "EleutherAI/pythia-160m-deduped"]:
             tensor_name = f"blocks.{layer}.hook_resid_post"
     else:
-        if model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]:
+        if model_name in ["gpt2", "EleutherAI/pythia-70m-deduped", "EleutherAI/pythia-160m-deduped"]:
             tensor_name = f"blocks.{layer}.mlp.hook_post"
         elif model_name == "nanoGPT":
             tensor_name = f"transformer.h.{layer}.mlp.c_fc"

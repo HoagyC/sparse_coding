@@ -31,7 +31,7 @@ import standard_metrics
 from autoencoders.learned_dict import LearnedDict, UntiedSAE, TiedSAE
 
 def get_model(cfg):
-    if cfg.model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]:
+    if cfg.model_name in ["gpt2", "EleutherAI/pythia-70m-deduped", "EleutherAI/pythia-160m-deduped"]:
         model = HookedTransformer.from_pretrained(cfg.model_name, device=cfg.device)
     else:
         raise ValueError("Model name not recognised")
@@ -107,34 +107,35 @@ def log_standard_metrics(learned_dicts, chunk, chunk_num, hyperparam_ranges, cfg
     l1_values = hyperparam_ranges["l1_alpha"]
     dict_sizes = hyperparam_ranges["dict_size"]
 
-    small_dict_size = dict_sizes[0]
+    if len(dict_sizes) > 1:
+        small_dict_size = dict_sizes[0]
 
-    mmcs_grid_plots = {}
+        mmcs_grid_plots = {}
 
-    for setting in mmcs_plot_settings:
-        mmcs_scores = np.zeros((len(l1_values), len(dict_sizes)))
+        for setting in mmcs_plot_settings:
+            mmcs_scores = np.zeros((len(l1_values), len(dict_sizes)))
 
-        for i, l1_value in enumerate(l1_values):
-            small_dict_setting_ = setting.copy()
-            small_dict_setting_["l1_alpha"] = l1_value
-            small_dict_setting_["dict_size"] = small_dict_size
+            for i, l1_value in enumerate(l1_values):
+                small_dict_setting_ = setting.copy()
+                small_dict_setting_["l1_alpha"] = l1_value
+                small_dict_setting_["dict_size"] = small_dict_size
 
-            small_dict = filter_learned_dicts(learned_dicts, small_dict_setting_)[0][0]
+                small_dict = filter_learned_dicts(learned_dicts, small_dict_setting_)[0][0]
 
-            for j, dict_size in enumerate(dict_sizes[1:]):
-                setting_ = setting.copy()
-                setting_["l1_alpha"] = l1_value
-                setting_["dict_size"] = dict_size
+                for j, dict_size in enumerate(dict_sizes[1:]):
+                    setting_ = setting.copy()
+                    setting_["l1_alpha"] = l1_value
+                    setting_["dict_size"] = dict_size
 
-                larger_dict = filter_learned_dicts(learned_dicts, setting_)[0][0]
-                mmcs_scores[i, j] = standard_metrics.mcs_duplicates(small_dict, larger_dict).mean().item()
-        
-        mmcs_grid_plots[make_hyperparam_name(setting)] = standard_metrics.plot_grid(
-            mmcs_scores,
-            l1_values, dict_sizes[1:],
-            "l1_alpha", "dict_size",
-            cmap="viridis"
-        )
+                    larger_dict = filter_learned_dicts(learned_dicts, setting_)[0][0]
+                    mmcs_scores[i, j] = standard_metrics.mcs_duplicates(small_dict, larger_dict).mean().item()
+            
+            mmcs_grid_plots[make_hyperparam_name(setting)] = standard_metrics.plot_grid(
+                mmcs_scores,
+                l1_values, dict_sizes[1:],
+                "l1_alpha", "dict_size",
+                cmap="viridis"
+            )
     
     sparsity_hists = {}
 
@@ -146,13 +147,14 @@ def log_standard_metrics(learned_dicts, chunk, chunk_num, hyperparam_ranges, cfg
             bins=20
         )
     
-    for k, plot in mmcs_grid_plots.items():
-        cfg.wandb_instance.log({f"mmcs_grid_{chunk_num}/{k}": wandb.Image(plot)}, commit=False)
+    if len(dict_sizes) > 1:
+        for k, plot in mmcs_grid_plots.items():
+            cfg.wandb_instance.log({f"mmcs_grid_{chunk_num}/{k}": wandb.Image(plot)}, commit=False)
     
     for k, plot in sparsity_hists.items():
         cfg.wandb_instance.log({f"sparsity_hist_{chunk_num}/{k}": wandb.Image(plot)})
 
-def ensemble_train_loop(ensemble, cfg, args, name, sampler, dataset, progress_counter):
+def ensemble_train_loop(ensemble, cfg, args, ensemble_name, sampler, dataset, progress_counter):
     torch.set_grad_enabled(False)
     torch.manual_seed(0)
     np.random.seed(0)
@@ -185,11 +187,11 @@ def ensemble_train_loop(ensemble, cfg, args, name, sampler, dataset, progress_co
 
                 name = make_hyperparam_name(hyperparam_values)
 
-                log[f"{name}_loss"] = losses["loss"][m].item()
-                log[f"{name}_l_l1"] = losses["l_l1"][m].item()
-                log[f"{name}_l_reconstruction"] = losses["l_reconstruction"][m].item()
-                log[f"{name}_l_bias_decay"] = losses["l_bias_decay"][m].item()
-                log[f"{name}_sparsity"] = num_nonzero[m].item()
+                log[f"{ensemble_name}_{name}_loss"] = losses["loss"][m].item()
+                log[f"{ensemble_name}_{name}_l_l1"] = losses["l_l1"][m].item()
+                log[f"{ensemble_name}_{name}_l_reconstruction"] = losses["l_reconstruction"][m].item()
+                log[f"{ensemble_name}_{name}_l_bias_decay"] = losses["l_bias_decay"][m].item()
+                log[f"{ensemble_name}_{name}_sparsity"] = num_nonzero[m].item()
 
             run.log(log, commit=True)
 
@@ -226,18 +228,11 @@ def sweep(ensemble_init_func, cfg):
     torch.manual_seed(0)
     np.random.seed(0)
 
-    cfg.model_name = "EleutherAI/pythia-70m-deduped"
-    cfg.dataset_folder = "activation_data"
-    cfg.output_folder = "output"
-    cfg.batch_size = 1024
-    cfg.lr = 3e-4
-    cfg.use_wandb = True
-    cfg.dtype = torch.float32
-    cfg.layer = 2
-    cfg.use_residual = True
-
     if cfg.use_residual:
-        cfg.activation_width = 512
+        if cfg.model_name == "EleutherAI/pythia-160m-deduped":
+            cfg.activation_width = 768
+        else:
+            cfg.activation_width = 512
     else:
         cfg.activation_width = 2048 # mlp_width is 4x the residual width
 

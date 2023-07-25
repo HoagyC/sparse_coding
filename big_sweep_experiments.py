@@ -192,6 +192,49 @@ def tied_vs_not_experiment(cfg):
         # all the different ranges for each hyperparameter
         {"tied": [True, False], "dict_size": dict_sizes, "l1_alpha": l1_values, "bias_decay": bias_decays})
 
+DICT_RATIO = None
+
+def dense_l1_range_experiment(cfg):
+    l1_values = np.logspace(-4, -2, 32)
+    devices = [f"cuda:{i}" for i in range(8)]
+
+    ensembles = []
+    for i in range(8):
+        j = i % 4
+        cfgs = l1_values[j*8:(j+1)*8]
+        dict_size = int(cfg.activation_width * DICT_RATIO)
+        models = [
+            FunctionalSAE.init(cfg.activation_width, dict_size, l1_alpha, bias_decay=0.0, dtype=cfg.dtype)
+            for l1_alpha in cfgs
+        ]
+        device = devices.pop()
+        ensemble = FunctionalEnsemble(
+            models, FunctionalSAE,
+            torchopt.adam, {
+                "lr": cfg.lr
+            },
+            device=device
+        )
+        args = {"batch_size": cfg.batch_size, "device": device, "dict_size": dict_size}
+        name = f"l1_range_8_{i}"
+        ensembles.append((ensemble, args, name))
+
+    return (ensembles, ["dict_size"], ["l1_alpha"], {"dict_size": [dict_size], "l1_alpha": l1_values})
+
 if __name__ == "__main__":
     cfg = parse_args()
-    sweep(tied_vs_not_experiment, cfg)
+
+    cfg.model_name = "EleutherAI/pythia-160m-deduped"
+    cfg.dataset_folder = "activation_data"
+    #cfg.output_folder = "output_aidan"
+    cfg.batch_size = 1024
+    cfg.lr = 3e-4
+    cfg.use_wandb = True
+    cfg.dtype = torch.float32
+    cfg.layer = 7
+    cfg.use_residual = True
+
+    for dict_ratio in [1]:
+        DICT_RATIO = dict_ratio
+        cfg.output_folder = f"output_{dict_ratio}"
+        sweep(dense_l1_range_experiment, cfg)
