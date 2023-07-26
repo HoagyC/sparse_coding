@@ -13,6 +13,7 @@ from autoencoders.sae_ensemble import FunctionalSAE, FunctionalTiedSAE
 from autoencoders.semilinear_autoencoder import SemiLinearSAE
 
 from activation_dataset import setup_data
+from sc_datasets.random_dataset import SparseMixDataset
 from utils import dotdict, make_tensor_name
 from argparser import parse_args
 
@@ -20,6 +21,8 @@ import numpy as np
 from itertools import product, chain
 
 from transformer_lens import HookedTransformer
+
+import tqdm
 
 import wandb
 import datetime
@@ -187,10 +190,9 @@ def ensemble_train_loop(ensemble, cfg, args, ensemble_name, sampler, dataset, pr
 
                 name = make_hyperparam_name(hyperparam_values)
 
-                log[f"{ensemble_name}_{name}_loss"] = losses["loss"][m].item()
-                log[f"{ensemble_name}_{name}_l_l1"] = losses["l_l1"][m].item()
-                log[f"{ensemble_name}_{name}_l_reconstruction"] = losses["l_reconstruction"][m].item()
-                log[f"{ensemble_name}_{name}_l_bias_decay"] = losses["l_bias_decay"][m].item()
+                for k in losses.keys():
+                    log[f"{ensemble_name}_{name}_{k}"] = losses[k][m].item()
+
                 log[f"{ensemble_name}_{name}_sparsity"] = num_nonzero[m].item()
 
             run.log(log, commit=True)
@@ -222,12 +224,18 @@ def unstacked_to_learned_dicts(ensemble, args, ensemble_hyperparams, buffer_hype
         learned_dicts.append((learned_dict, hyperparam_values))
     return learned_dicts
 
-def sweep(ensemble_init_func, cfg):
-    torch.set_grad_enabled(False)
-    mp.set_start_method("spawn", force=True)
-    torch.manual_seed(0)
-    np.random.seed(0)
+def generate_synthetic_dataset(cfg, generator, chunk_size, n_chunks):
+    batch_size = generator.batch_size
+    n_samples = chunk_size // batch_size
 
+    for i in range(n_chunks):
+        print(f"Generating chunk {i+1}/{n_chunks}")
+        chunk = torch.zeros((chunk_size, cfg.activation_width), dtype=torch.float32, device="cpu")
+        for j in tqdm.tqdm(range(n_samples)):
+            chunk[j*batch_size:(j+1)*batch_size] = generator.send(None).cpu()
+        torch.save(chunk, os.path.join(cfg.dataset_folder, f"{i}.pt"))
+
+def init_model_dataset(cfg):
     if cfg.use_residual:
         if cfg.model_name == "EleutherAI/pythia-160m-deduped":
             cfg.activation_width = 768
@@ -235,17 +243,7 @@ def sweep(ensemble_init_func, cfg):
             cfg.activation_width = 512
     else:
         cfg.activation_width = 2048 # mlp_width is 4x the residual width
-
-    start_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-
-    if cfg.use_wandb:
-        secrets = json.load(open("secrets.json"))
-        wandb.login(key=secrets["wandb_key"])
-        wandb_run_name = f"ensemble_{cfg.model_name}_{start_time[4:]}"  # trim year
-        cfg.wandb_instance = wandb.init(project="sparse coding", config=dict(cfg), name=wandb_run_name, entity="sparse_coding")
-
-    os.makedirs(cfg.dataset_folder, exist_ok=True)
-
+    
     if len(os.listdir(cfg.dataset_folder)) == 0:
         print(f"Activations in {cfg.dataset_folder} do not exist, creating them")
         transformer, tokenizer = get_model(cfg)
@@ -254,9 +252,50 @@ def sweep(ensemble_init_func, cfg):
     else:
         print(f"Activations in {cfg.dataset_folder} already exist, loading them")
 
-    dataset = torch.load(os.path.join(cfg.dataset_folder, "0.pt"))
-    n_lines = cfg.max_lines
-    del dataset
+def init_synthetic_dataset(cfg):
+    if len(os.listdir(cfg.dataset_folder)) == 0:
+        print(f"Activations in {cfg.dataset_folder} do not exist, creating them")
+        generator = SparseMixDataset(
+            cfg.activation_width,
+            cfg.n_ground_truth_components,
+            cfg.gen_batch_size,
+            cfg.feature_num_nonzero,
+            cfg.feature_prob_decay,
+            cfg.noise_magnitude_scale,
+            "cuda:0",
+            t_type=torch.float16
+        )
+        chunk_size = cfg.chunk_size_gb * 1024**3
+        chunk_activations = chunk_size // (cfg.activation_width * 2)
+        generate_synthetic_dataset(cfg, generator, chunk_activations, cfg.n_chunks)
+
+        # save the generator for later
+        torch.save(generator, os.path.join(cfg.output_folder, "generator.pt"))
+    else:
+        print(f"Activations in {cfg.dataset_folder} already exist, loading them")
+
+def sweep(ensemble_init_func, cfg):
+    torch.set_grad_enabled(False)
+    with torch.no_grad():
+        torch.cuda.empty_cache()
+    mp.set_start_method("spawn", force=True)
+    torch.manual_seed(0)
+    np.random.seed(0)
+
+    start_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    os.makedirs(cfg.dataset_folder, exist_ok=True)
+    os.makedirs(cfg.output_folder, exist_ok=True)
+
+    if cfg.use_wandb:
+        secrets = json.load(open("secrets.json"))
+        wandb.login(key=secrets["wandb_key"])
+        wandb_run_name = f"ensemble_{cfg.model_name}_{start_time[4:]}"  # trim year
+        cfg.wandb_instance = wandb.init(project="sparse coding", config=dict(cfg), name=wandb_run_name, entity="sparse_coding")
+
+    if cfg.use_synthetic_dataset:
+        init_synthetic_dataset(cfg)
+    else:
+        init_model_dataset(cfg)
 
     print("Initialising ensembles...", end=" ")
 

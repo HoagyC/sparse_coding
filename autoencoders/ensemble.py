@@ -130,26 +130,15 @@ class FunctionalEnsemble():
     
     def to_device(self, device):
         self.device = device
-        leaves_p, _ = optree.tree_flatten(self.params)
-        for leaf in leaves_p:
-            leaf.to(device)
-        leaves_b, _ = optree.tree_flatten(self.buffers)
-        for leaf in leaves_b:
-            leaf.to(device)
-        leaves_o, _ = optree.tree_flatten(self.optim_states)
-        for leaf in leaves_o:
-            leaf.to(device)
-    
+
+        self.params = optree.tree_map(lambda t: t.to(device), self.params)
+        self.buffers = optree.tree_map(lambda t: t.to(device), self.buffers)
+        self.optim_states = optree.tree_map(lambda t: t.to(device), self.optim_states)
+
     def to_shared_memory(self):
-        leaves_p, _ = optree.tree_flatten(self.params)
-        for leaf in leaves_p:
-            leaf.share_memory_()
-        leaves_b, _ = optree.tree_flatten(self.buffers)
-        for leaf in leaves_b:
-            leaf.share_memory_()
-        leaves_o, _ = optree.tree_flatten(self.optim_states)
-        for leaf in leaves_o:
-            leaf.share_memory_()
+        optree.tree_map_(lambda t: t.share_memory_(), self.params)
+        optree.tree_map_(lambda t: t.share_memory_(), self.buffers)
+        optree.tree_map_(lambda t: t.share_memory_(), self.optim_states)
     
     def step_batch(self, minibatches, expand_dims=True):
         with torch.no_grad():
