@@ -522,48 +522,6 @@ async def main(cfg: dotdict) -> None:
     if cfg.upload_to_aws:
         upload_to_aws(transform_folder)
 
-
-async def run_openai_example():
-    neuron_record = load_neuron(9, 10)
-
-    # Grab the activation records we'll need.
-    slice_params = ActivationRecordSliceParams(n_examples_per_split=5)
-    train_activation_records = neuron_record.train_activation_records(
-        activation_record_slice_params=slice_params
-    )
-    valid_activation_records = neuron_record.valid_activation_records(
-        activation_record_slice_params=slice_params
-    )
-
-    # Generate an explanation for the neuron.
-    explainer = TokenActivationPairExplainer(
-        model_name=EXPLAINER_MODEL_NAME,
-        prompt_format=PromptFormat.HARMONY_V4,
-        max_concurrent=1,
-    )
-    explanations = await explainer.generate_explanations(
-        all_activation_records=train_activation_records,
-        max_activation=calculate_max_activation(train_activation_records),
-        num_samples=1,
-    )
-    assert len(explanations) == 1
-    explanation = explanations[0]
-    print(f"{explanation=}")
-
-    # Simulate and score the explanation.
-    format = PromptFormat.HARMONY_V4 if SIMULATOR_MODEL_NAME == "gpt-3.5-turbo" else PromptFormat.INSTRUCTION_FOLLOWING
-    simulator = UncalibratedNeuronSimulator(
-        ExplanationNeuronSimulator(
-            SIMULATOR_MODEL_NAME,
-            explanation,
-            max_concurrent=1,
-            prompt_format=format, # INSTRUCTIONFOLLIWING
-        )
-    )
-    scored_simulation = await simulate_and_score(simulator, valid_activation_records)
-    print(f"score={scored_simulation.get_preferred_score():.2f}")
-
-
 def get_score(lines: List[str], mode: str):
     if mode == "top":
         return float(lines[-3].split(" ")[-1])
@@ -652,9 +610,7 @@ def read_results(activation_name: str, score_mode: str, exclude_mean: bool = Tru
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "openai":
-        asyncio.run(run_openai_example())
-    elif len(sys.argv) > 1 and sys.argv[1] == "read_results":
+    if len(sys.argv) > 1 and sys.argv[1] == "read_results":
         # parse --layer and --model_name from command line using custom parser
         argparser = argparse.ArgumentParser()
         argparser.add_argument("--layer", type=int, default=1)
