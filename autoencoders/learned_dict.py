@@ -10,7 +10,7 @@ _n_dict_components, _activation_size, _batch_size = None, None, None
 
 class LearnedDict(ABC):
     n_feats: int
-    n_dict_components: int
+    activation_size: int
     encoder: TensorType["_n_dict_components", "_activation_size"]
     encoder_bias: TensorType["_n_dict_components"]
 
@@ -37,7 +37,7 @@ class UntiedSAE(LearnedDict):
         self.encoder = encoder
         self.decoder = decoder
         self.encoder_bias = encoder_bias
-        self.n_feats, self.n_dict_components = self.encoder.shape
+        self.n_feats, self.activation_size = self.encoder.shape
 
     def get_learned_dict(self):
         norms = torch.norm(self.decoder, 2, dim=-1)
@@ -59,6 +59,7 @@ class TiedSAE(LearnedDict):
         self.encoder = encoder
         self.encoder_bias = encoder_bias
         self.norm_encoder = norm_encoder
+        self.n_feats, self.activation_size = self.encoder.shape
 
     def get_learned_dict(self):
         norms = torch.norm(self.encoder, 2, dim=-1)
