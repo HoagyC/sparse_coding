@@ -9,7 +9,7 @@ import os
 import pickle
 import requests
 import sys
-from typing import Any, Dict, Union, List, Callable
+from typing import Any, Dict, Union, List, Callable, Optional
 
 from baukit import Trace
 from datasets import load_dataset, ReadInstruction
@@ -51,7 +51,7 @@ from neuron_explainer.explanations.simulator import ExplanationNeuronSimulator
 from neuron_explainer.fast_dataclasses import loads
 
 EXPLAINER_MODEL_NAME = "gpt-4" # "gpt-3.5-turbo"
-SIMULATOR_MODEL_NAME = "text-davinci-003" # "text-davinci-003"
+SIMULATOR_MODEL_NAME = "text-davinci-003"
 
 OPENAI_MAX_FRAGMENTS = 50000
 OPENAI_FRAGMENT_LEN = 64
@@ -59,6 +59,7 @@ OPENAI_EXAMPLES_PER_SPLIT = 5
 N_SPLITS = 4
 TOTAL_EXAMPLES = OPENAI_EXAMPLES_PER_SPLIT * N_SPLITS
 REPLACEMENT_CHAR = "�"
+MAX_CONCURRENT = None
 
 
 # Replaces the load_neuron function in neuron_explainer.activations.activations because couldn't get blobfile to work
@@ -147,12 +148,18 @@ def make_feature_activation_dataset(
         device: str = "cpu",
         n_fragments = OPENAI_MAX_FRAGMENTS,
         random_fragment = True, # used for debugging
+        max_features: Optional[int] = None
     ):
     """
     Takes a specified point of a model, and a dataset. 
     Returns a dataset which contains the activations of the model at that point, 
     for each fragment in the dataset, transformed into the feature space
     """
+    if max_features and max_features < activation_dim:
+        feat_dim = max_features
+    else:
+        feat_dim = activation_dim
+
     sentence_dataset = load_dataset("openwebtext", split="train", streaming=True)
 
     if model_name == "nanoGPT":
@@ -175,9 +182,9 @@ def make_feature_activation_dataset(
     fragment_token_ids_list = []
     fragment_token_strs_list = []
 
-    activation_means_table = np.zeros((n_fragments, activation_dim), dtype=np.float16)
-    activation_maxes_table = np.zeros((n_fragments, activation_dim), dtype=np.float16)
-    activation_data_table = np.zeros((n_fragments, activation_dim * OPENAI_FRAGMENT_LEN), dtype=np.float16)
+    activation_means_table = np.zeros((n_fragments, feat_dim), dtype=np.float16)
+    activation_maxes_table = np.zeros((n_fragments, feat_dim), dtype=np.float16)
+    activation_data_table = np.zeros((n_fragments, feat_dim * OPENAI_FRAGMENT_LEN), dtype=np.float16)
     with torch.no_grad():
         while n_added < n_fragments:
             fragments: List[torch.Tensor] = []
@@ -222,13 +229,14 @@ def make_feature_activation_dataset(
                 feature_activation_data = activation_fn(activation_data)
                 feature_activation_means = torch.mean(feature_activation_data, dim=0)
                 feature_activation_maxes = torch.max(feature_activation_data, dim=0)[0]
+
                 assert feature_activation_means.shape == (activation_dim,), feature_activation_means.shape
                 assert feature_activation_maxes.shape == (activation_dim,), feature_activation_maxes.shape
 
-                activation_means_table[n_added, :] = feature_activation_means.cpu().numpy()
-                activation_maxes_table[n_added, :] = feature_activation_maxes.cpu().numpy()
-                feature_activation_data = feature_activation_data.cpu().numpy()
+                activation_means_table[n_added, :] = feature_activation_means.cpu().numpy()[:feat_dim]
+                activation_maxes_table[n_added, :] = feature_activation_maxes.cpu().numpy()[:feat_dim]
 
+                feature_activation_data = feature_activation_data.cpu().numpy()[:, :feat_dim]
 
                 activation_data_table[n_added, :] = feature_activation_data.flatten()
     
@@ -246,11 +254,11 @@ def make_feature_activation_dataset(
     df = pd.DataFrame()
     df["fragment_token_ids"] = fragment_token_ids_list
     df["fragment_token_strs"] = fragment_token_strs_list
-    means_column_names = [f"feature_{i}_mean" for i in range(activation_dim)]
-    maxes_column_names = [f"feature_{i}_max" for i in range(activation_dim)]
-    activations_column_names = [f"feature_{i}_activation_{j}" for j in range(OPENAI_FRAGMENT_LEN) for i in range(activation_dim)] # nested for loops are read left to right
+    means_column_names = [f"feature_{i}_mean" for i in range(feat_dim)]
+    maxes_column_names = [f"feature_{i}_max" for i in range(feat_dim)]
+    activations_column_names = [f"feature_{i}_activation_{j}" for j in range(OPENAI_FRAGMENT_LEN) for i in range(feat_dim)] # nested for loops are read left to right
     
-    assert feature_activation_data.shape == (OPENAI_FRAGMENT_LEN, activation_dim)
+    assert feature_activation_data.shape == (OPENAI_FRAGMENT_LEN, feat_dim)
     df = pd.concat([df, pd.DataFrame(activation_means_table, columns=means_column_names)], axis=1)
     df = pd.concat([df, pd.DataFrame(activation_maxes_table, columns=maxes_column_names)], axis=1)
     df = pd.concat([df, pd.DataFrame(activation_data_table, columns=activations_column_names)], axis=1)
@@ -412,6 +420,7 @@ async def main(cfg: dotdict) -> None:
             activation_dim=feature_size,
             device=cfg.device,
             use_baukit=use_baukit,
+            max_features=cfg.df_n_feats if cfg.df_n_feats else None,
         )
         # save the dataset, saving each column separately so that we can retrive just the columns we want later
         print(f"Saving dataset to {df_loc}")
@@ -435,6 +444,10 @@ async def main(cfg: dotdict) -> None:
 
         activation_col_names = [f"feature_{feat_n}_activation_{i}" for i in range(OPENAI_FRAGMENT_LEN)]
         read_fields = ["fragment_token_strs", f"feature_{feat_n}_mean", f"feature_{feat_n}_max", *activation_col_names]
+        # check that the dataset has the required columns
+        if not all([field in base_df.columns for field in read_fields]):
+            print(f"Dataset does not have all required columns for feature {feat_n}, skipping")
+            continue
         df = base_df[read_fields].copy()
         if cfg.sort_mode == "mean":
             sorted_df = df.sort_values(by=f"feature_{feat_n}_mean", ascending=False)
@@ -478,7 +491,7 @@ async def main(cfg: dotdict) -> None:
         explainer = TokenActivationPairExplainer(
             model_name=EXPLAINER_MODEL_NAME,
             prompt_format=PromptFormat.HARMONY_V4,
-            max_concurrent=1,
+            max_concurrent=MAX_CONCURRENT,
         )
         explanations = await explainer.generate_explanations(
             all_activation_records=train_activation_records,
@@ -495,12 +508,11 @@ async def main(cfg: dotdict) -> None:
             ExplanationNeuronSimulator(
                 SIMULATOR_MODEL_NAME,
                 explanation,
-                max_concurrent=1,
+                max_concurrent=MAX_CONCURRENT,
                 prompt_format=format,
             )
         )
         scored_simulation = await simulate_and_score(simulator, valid_activation_records)
-
         score = scored_simulation.get_preferred_score()
         assert len(scored_simulation.scored_sequence_simulations) == 10
         top_only_score = aggregate_scored_sequence_simulations(scored_simulation.scored_sequence_simulations[:5]).get_preferred_score()
@@ -517,7 +529,7 @@ async def main(cfg: dotdict) -> None:
             f.write(f"{explanation}\nScore: {score:.2f}\nExplainer model: {EXPLAINER_MODEL_NAME}\nSimulator model: {SIMULATOR_MODEL_NAME}\n")
             f.write(f"Top only score: {top_only_score:.2f}\n")
             f.write(f"Random only score: {random_only_score:.2f}\n")
-        
+                
     
     if cfg.upload_to_aws:
         upload_to_aws(transform_folder)

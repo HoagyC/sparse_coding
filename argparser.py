@@ -60,6 +60,7 @@ def parse_args() -> dotdict:
     parser.add_argument("--interp_name", type=str, default="") # name of run, otherwise will be feature_transform
     parser.add_argument("--sort_mode", type=str, default="max") # how to sort fragments, either max, mean
     parser.add_argument("--use_decoder", type=bool, default=True) # whether to use the transposed decoder instead of encoder in a non-tied ae
+    parser.add_argument("--df_n_feats", type=int, default=200) # number of features to use in dataframe, if 0 then use all
 
     args = parser.parse_args()
     cfg = dotdict(vars(args))  # convert to dotdict via dict
