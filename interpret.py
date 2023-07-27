@@ -545,6 +545,36 @@ def get_score(lines: List[str], mode: str):
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
+def run_folder(cfg: dotdict):
+    base_folder = cfg.load_interpret_autoencoder
+    all_encoders = os.listdir(cfg.load_interpret_autoencoder)
+    all_encoders = [x for x in all_encoders if (x.endswith(".pt") or x.endswith(".pkl"))]
+    print(f"Found {len(all_encoders)} encoders in {cfg.load_interpret_autoencoder}")
+    for i, encoder in enumerate(all_encoders):
+        print(f"Running encoder {i} of {len(all_encoders)}: {encoder}")
+        cfg.load_interpret_autoencoder = os.path.join(base_folder, encoder)
+        asyncio.run(main(cfg))
+
+def run_from_grouped(cfg: dotdict, results_loc: str):
+    """
+    Run autointerpretation across a file of learned dicts as outputted by big_sweep.py or similar.
+    Expects results_loc to a .pt file containing a list of tuples of (learned_dict, hparams_dict)
+    """
+    # First, read in the results file
+    results = torch.load(results_loc)
+    time_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    os.makedirs(os.path.join("auto_interp_results", time_str), exist_ok=True)
+    # Now split the results out into separate files 
+    for learned_dict, hparams_dict in results:
+        assert all([key in hparams_dict.keys() for key in ["tied", "dict_size", "l1_alpha", "bias_decay"]])
+        bd_tag = "0.0" if hparams_dict["bias_decay"] == 0 else f"{hparams_dict['bias_decay']:.1}"
+        filename = f"tied_{hparams_dict['tied']}_ds_{hparams_dict['dict_size']}_l1a_{hparams_dict['l1_alpha']:.1}_bd_{bd_tag}.pt"
+        torch.save(learned_dict, os.path.join("auto_interp_results", time_str, filename))
+    
+    cfg.load_interpret_autoencoder = os.path.join("auto_interp_results", time_str)
+    run_folder(cfg)
+
+
 def read_results(activation_name: str, score_mode: str, exclude_mean: bool = True) -> None:
     results_folder = os.path.join("auto_interp_results", activation_name)
     transforms = os.listdir(results_folder)
@@ -647,20 +677,17 @@ if __name__ == "__main__":
         for activation_name in activation_names:
             for score_mode in score_modes:
                 read_results(activation_name, score_mode, cfg.exclude_mean)
-
+            
+    elif len(sys.argv) > 1 and sys.argv[1] == "run_group":
+        sys.argv.pop(1)
+        default_cfg = parse_args()
+        run_from_grouped(default_cfg, default_cfg.load_interpret_autoencoder)
 
     else:
         default_cfg = parse_args()
         default_cfg.chunk_size_gb = 10
         if os.path.isdir(default_cfg.load_interpret_autoencoder):
-            base_folder = default_cfg.load_interpret_autoencoder
-            all_encoders = os.listdir(default_cfg.load_interpret_autoencoder)
-            all_encoders = [x for x in all_encoders if (x.endswith(".pt") or x.endswith(".pkl"))]
-            print(f"Found {len(all_encoders)} encoders in {default_cfg.load_interpret_autoencoder}")
-            for i, encoder in enumerate(all_encoders):
-                print(f"Running encoder {i} of {len(all_encoders)}: {encoder}")
-                default_cfg.load_interpret_autoencoder = os.path.join(base_folder, encoder)
-                asyncio.run(main(default_cfg))
+            run_folder(default_cfg)
 
         else:
             asyncio.run(main(default_cfg))
