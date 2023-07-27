@@ -197,7 +197,7 @@ def make_activation_dataset(cfg, sentence_dataset: DataLoader, model: HookedTran
                     mlp_activation_data = rearrange(mlp_activation_data, "b s n -> (b s) n").to(torch.float16).to(cfg.device)
                     mlp_activation_data = nn.functional.gelu(mlp_activation_data)
             else:
-                _, cache = model.run_with_cache(batch)
+                _, cache = model.run_with_cache(batch, stop_at_layer=cfg.layer+1)
                 mlp_activation_data = cache[tensor_name].to(cfg.device).to(torch.float16)  # NOTE: could do all layers at once, but currently just doing 1 layer
                 mlp_activation_data = rearrange(mlp_activation_data, "b s n -> (b s) n")
 

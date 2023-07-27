@@ -32,6 +32,7 @@ def job_wrapper(job, ensemble_state_dict, cfg, args, tag, dataset, done_flag, pr
     done_flag.value = 1
 
 def dispatch_job_on_chunk(ensembles, cfg, dataset, job):
+    dataset.pin_memory()
     dataset.share_memory_()
     for ensemble, _, _ in ensembles:
         ensemble.to_shared_memory()

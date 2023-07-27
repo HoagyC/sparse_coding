@@ -13,6 +13,7 @@ from autoencoders.sae_ensemble import FunctionalSAE, FunctionalTiedSAE
 from autoencoders.semilinear_autoencoder import SemiLinearSAE
 
 from activation_dataset import setup_data
+from sc_datasets.random_dataset import SparseMixDataset
 from utils import dotdict, make_tensor_name
 from argparser import parse_args
 
@@ -21,6 +22,8 @@ from itertools import product, chain
 
 from transformer_lens import HookedTransformer
 from transformers import GPT2Tokenizer
+
+import tqdm
 
 import wandb
 import datetime
@@ -32,7 +35,7 @@ import standard_metrics
 from autoencoders.learned_dict import LearnedDict, UntiedSAE, TiedSAE
 
 def get_model(cfg):
-    if cfg.model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]:
+    if cfg.model_name in ["gpt2", "EleutherAI/pythia-70m-deduped", "EleutherAI/pythia-160m-deduped"]:
         model = HookedTransformer.from_pretrained(cfg.model_name, device=cfg.device)
     else:
         raise ValueError("Model name not recognised")
@@ -108,34 +111,35 @@ def log_standard_metrics(learned_dicts, chunk, chunk_num, hyperparam_ranges, cfg
     l1_values = hyperparam_ranges["l1_alpha"]
     dict_sizes = hyperparam_ranges["dict_size"]
 
-    small_dict_size = dict_sizes[0]
+    if len(dict_sizes) > 1:
+        small_dict_size = dict_sizes[0]
 
-    mmcs_grid_plots = {}
+        mmcs_grid_plots = {}
 
-    for setting in mmcs_plot_settings:
-        mmcs_scores = np.zeros((len(l1_values), len(dict_sizes)))
+        for setting in mmcs_plot_settings:
+            mmcs_scores = np.zeros((len(l1_values), len(dict_sizes)))
 
-        for i, l1_value in enumerate(l1_values):
-            small_dict_setting_ = setting.copy()
-            small_dict_setting_["l1_alpha"] = l1_value
-            small_dict_setting_["dict_size"] = small_dict_size
+            for i, l1_value in enumerate(l1_values):
+                small_dict_setting_ = setting.copy()
+                small_dict_setting_["l1_alpha"] = l1_value
+                small_dict_setting_["dict_size"] = small_dict_size
 
-            small_dict = filter_learned_dicts(learned_dicts, small_dict_setting_)[0][0]
+                small_dict = filter_learned_dicts(learned_dicts, small_dict_setting_)[0][0]
 
-            for j, dict_size in enumerate(dict_sizes[1:]):
-                setting_ = setting.copy()
-                setting_["l1_alpha"] = l1_value
-                setting_["dict_size"] = dict_size
+                for j, dict_size in enumerate(dict_sizes[1:]):
+                    setting_ = setting.copy()
+                    setting_["l1_alpha"] = l1_value
+                    setting_["dict_size"] = dict_size
 
-                larger_dict = filter_learned_dicts(learned_dicts, setting_)[0][0]
-                mmcs_scores[i, j] = standard_metrics.mcs_duplicates(small_dict, larger_dict).mean().item()
-        
-        mmcs_grid_plots[make_hyperparam_name(setting)] = standard_metrics.plot_grid(
-            mmcs_scores,
-            l1_values, dict_sizes[1:],
-            "l1_alpha", "dict_size",
-            cmap="viridis"
-        )
+                    larger_dict = filter_learned_dicts(learned_dicts, setting_)[0][0]
+                    mmcs_scores[i, j] = standard_metrics.mcs_duplicates(small_dict, larger_dict).mean().item()
+            
+            mmcs_grid_plots[make_hyperparam_name(setting)] = standard_metrics.plot_grid(
+                mmcs_scores,
+                l1_values, dict_sizes[1:],
+                "l1_alpha", "dict_size",
+                cmap="viridis"
+            )
     
     sparsity_hists = {}
 
@@ -147,13 +151,14 @@ def log_standard_metrics(learned_dicts, chunk, chunk_num, hyperparam_ranges, cfg
             bins=20
         )
     
-    for k, plot in mmcs_grid_plots.items():
-        cfg.wandb_instance.log({f"mmcs_grid_{chunk_num}/{k}": wandb.Image(plot)}, commit=False)
+    if len(dict_sizes) > 1:
+        for k, plot in mmcs_grid_plots.items():
+            cfg.wandb_instance.log({f"mmcs_grid_{chunk_num}/{k}": wandb.Image(plot)}, commit=False)
     
     for k, plot in sparsity_hists.items():
         cfg.wandb_instance.log({f"sparsity_hist_{chunk_num}/{k}": wandb.Image(plot)})
 
-def ensemble_train_loop(ensemble, cfg, args, name, sampler, dataset, progress_counter):
+def ensemble_train_loop(ensemble, cfg, args, ensemble_name, sampler, dataset, progress_counter):
     torch.set_grad_enabled(False)
     torch.manual_seed(0)
     np.random.seed(0)
@@ -186,11 +191,10 @@ def ensemble_train_loop(ensemble, cfg, args, name, sampler, dataset, progress_co
 
                 name = make_hyperparam_name(hyperparam_values)
 
-                log[f"{name}_loss"] = losses["loss"][m].item()
-                log[f"{name}_l_l1"] = losses["l_l1"][m].item()
-                log[f"{name}_l_reconstruction"] = losses["l_reconstruction"][m].item()
-                log[f"{name}_l_bias_decay"] = losses["l_bias_decay"][m].item()
-                log[f"{name}_sparsity"] = num_nonzero[m].item()
+                for k in losses.keys():
+                    log[f"{ensemble_name}_{name}_{k}"] = losses[k][m].item()
+
+                log[f"{ensemble_name}_{name}_sparsity"] = num_nonzero[m].item()
 
             run.log(log, commit=True)
 
@@ -221,37 +225,26 @@ def unstacked_to_learned_dicts(ensemble, args, ensemble_hyperparams, buffer_hype
         learned_dicts.append((learned_dict, hyperparam_values))
     return learned_dicts
 
-def sweep(ensemble_init_func, cfg):
-    torch.set_grad_enabled(False)
-    mp.set_start_method("spawn", force=True)
-    torch.manual_seed(0)
-    np.random.seed(0)
+def generate_synthetic_dataset(cfg, generator, chunk_size, n_chunks):
+    batch_size = generator.batch_size
+    n_samples = chunk_size // batch_size
 
-    cfg.model_name = "EleutherAI/pythia-70m-deduped"
-    cfg.dataset_folder = "activation_data"
-    cfg.output_folder = "output"
-    cfg.batch_size = 1024
-    cfg.lr = 3e-4
-    cfg.use_wandb = True
-    cfg.dtype = torch.float32
-    cfg.layer = 2
-    cfg.use_residual = True
+    for i in range(n_chunks):
+        print(f"Generating chunk {i+1}/{n_chunks}")
+        chunk = torch.zeros((chunk_size, cfg.activation_width), dtype=torch.float32, device="cpu")
+        for j in tqdm.tqdm(range(n_samples)):
+            chunk[j*batch_size:(j+1)*batch_size] = generator.send(None).cpu()
+        torch.save(chunk, os.path.join(cfg.dataset_folder, f"{i}.pt"))
 
+def init_model_dataset(cfg):
     if cfg.use_residual:
-        cfg.activation_width = 512
+        if cfg.model_name == "EleutherAI/pythia-160m-deduped":
+            cfg.activation_width = 768
+        else:
+            cfg.activation_width = 512
     else:
         cfg.activation_width = 2048 # mlp_width is 4x the residual width
-
-    start_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-
-    if cfg.use_wandb:
-        secrets = json.load(open("secrets.json"))
-        wandb.login(key=secrets["wandb_key"])
-        wandb_run_name = f"ensemble_{cfg.model_name}_{start_time[4:]}"  # trim year
-        cfg.wandb_instance = wandb.init(project="sparse coding", config=dict(cfg), name=wandb_run_name, entity="sparse_coding")
-
-    os.makedirs(cfg.dataset_folder, exist_ok=True)
-
+    
     if len(os.listdir(cfg.dataset_folder)) == 0:
         print(f"Activations in {cfg.dataset_folder} do not exist, creating them")
         transformer, tokenizer = get_model(cfg)
@@ -260,9 +253,50 @@ def sweep(ensemble_init_func, cfg):
     else:
         print(f"Activations in {cfg.dataset_folder} already exist, loading them")
 
-    dataset = torch.load(os.path.join(cfg.dataset_folder, "0.pt"))
-    n_lines = cfg.max_lines
-    del dataset
+def init_synthetic_dataset(cfg):
+    if len(os.listdir(cfg.dataset_folder)) == 0:
+        print(f"Activations in {cfg.dataset_folder} do not exist, creating them")
+        generator = SparseMixDataset(
+            cfg.activation_width,
+            cfg.n_ground_truth_components,
+            cfg.gen_batch_size,
+            cfg.feature_num_nonzero,
+            cfg.feature_prob_decay,
+            cfg.noise_magnitude_scale,
+            "cuda:0",
+            t_type=torch.float16
+        )
+        chunk_size = cfg.chunk_size_gb * 1024**3
+        chunk_activations = chunk_size // (cfg.activation_width * 2)
+        generate_synthetic_dataset(cfg, generator, chunk_activations, cfg.n_chunks)
+
+        # save the generator for later
+        torch.save(generator, os.path.join(cfg.output_folder, "generator.pt"))
+    else:
+        print(f"Activations in {cfg.dataset_folder} already exist, loading them")
+
+def sweep(ensemble_init_func, cfg):
+    torch.set_grad_enabled(False)
+    with torch.no_grad():
+        torch.cuda.empty_cache()
+    mp.set_start_method("spawn", force=True)
+    torch.manual_seed(0)
+    np.random.seed(0)
+
+    start_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    os.makedirs(cfg.dataset_folder, exist_ok=True)
+    os.makedirs(cfg.output_folder, exist_ok=True)
+
+    if cfg.use_wandb:
+        secrets = json.load(open("secrets.json"))
+        wandb.login(key=secrets["wandb_key"])
+        wandb_run_name = f"ensemble_{cfg.model_name}_{start_time[4:]}"  # trim year
+        cfg.wandb_instance = wandb.init(project="sparse coding", config=dict(cfg), name=wandb_run_name, entity="sparse_coding")
+
+    if cfg.use_synthetic_dataset:
+        init_synthetic_dataset(cfg)
+    else:
+        init_model_dataset(cfg)
 
     print("Initialising ensembles...", end=" ")
 

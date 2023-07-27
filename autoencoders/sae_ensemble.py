@@ -87,7 +87,7 @@ class FunctionalTiedSAE:
 
     @staticmethod
     def to_learned_dict(params, buffers):
-        return TiedSAE(params["encoder"], params["encoder_bias"])
+        return TiedSAE(params["encoder"], params["encoder_bias"], norm_encoder=True)
 
     @staticmethod
     def loss(params, buffers, batch):

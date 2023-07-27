@@ -66,6 +66,83 @@ class RandomDatasetGenerator(Generator):
     def throw(self, type: Any = None, value: Any = None, traceback: Any = None) -> None:
         raise StopIteration
 
+@dataclass
+class SparseMixDataset(Generator):
+    activation_dim: int
+    n_sparse_components: int
+    batch_size: int
+    feature_num_nonzero: int
+    feature_prob_decay: float
+    noise_magnitude_scale: float
+    device: Union[torch.device, str]
+
+    sparse_component_dict: Optional[TensorType["n_sparse_components", "activation_dim"]] = None
+    sparse_component_covariance: Optional[TensorType["n_sparse_components", "n_sparse_components"]] = None
+    noise_covariance: Optional[TensorType["activation_dim", "activation_dim"]] = None
+    t_type: Optional[torch.dtype] = None
+
+    sparse_component_probs: Optional[TensorType["n_sparse_components"]] = field(init=False)
+
+    def __post_init__(self):
+        self.frac_nonzero = self.feature_num_nonzero / self.n_sparse_components
+
+        if self.sparse_component_dict is None:
+            self.sparse_component_dict = generate_rand_feats(
+                self.activation_dim,
+                self.n_sparse_components,
+                device=self.device,
+            )
+        
+        if self.sparse_component_covariance is None:
+            self.sparse_component_covariance = generate_corr_matrix(self.n_sparse_components, device=self.device)
+        
+        if self.noise_covariance is None:
+            self.noise_covariance = torch.eye(self.activation_dim, device=self.device)
+        
+        self.frac_nonzero = self.feature_num_nonzero / self.n_sparse_components
+        self.sparse_component_probs = torch.tensor([self.feature_prob_decay**i for i in range(self.n_sparse_components)], dtype=torch.float32)
+        self.sparse_component_probs = self.sparse_component_probs.to(self.device)
+
+        if self.t_type is None:
+            self.t_type = torch.float32
+    
+    def send(self, batch_size: Optional[int]) -> TensorType["dataset_size_", "activation_dim_"]:
+        _, _, sparse_data = generate_correlated_dataset(
+            self.n_sparse_components,
+            self.batch_size if batch_size is None else batch_size,
+            self.sparse_component_covariance,
+            self.sparse_component_dict,
+            self.frac_nonzero,
+            self.sparse_component_probs,
+            self.device,
+        )
+        noise_data = generate_noise_dataset(
+            self.batch_size if batch_size is None else batch_size,
+            self.noise_covariance,
+            self.noise_magnitude_scale,
+            self.device,
+        )
+
+        data = sparse_data + noise_data
+
+        return data.to(self.t_type)
+    
+    def throw(self, type: Any = None, value: Any = None, traceback: Any = None) -> None:
+        raise StopIteration
+
+def generate_noise_dataset(
+    dataset_size: int,
+    noise_covariance: TensorType["activation_dim_", "activation_dim_"],
+    noise_magnitude_scale: float,
+    device: Union[torch.device, str],
+) -> TensorType["dataset_size_", "activation_dim_"]:
+    noise = torch.distributions.MultivariateNormal(
+        loc=torch.zeros(noise_covariance.shape[0], device=device),
+        covariance_matrix=noise_covariance,
+    ).sample((dataset_size,))
+    noise *= noise_magnitude_scale
+
+    return noise
 
 def generate_rand_dataset(
     n_ground_truth_components: int,  #
