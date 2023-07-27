@@ -189,7 +189,7 @@ def tied_vs_not_experiment(cfg):
         # the values of these are in the buffers dict, and must be stackable (i.e. 0-dimensional tensors)
         ["l1_alpha", "bias_decay"],
         
-        # all the different ranges for each hyperparameter
+        # all the different ranges for each hyperparameter, these don't need to be in order, it's used to generate a cartesian product to then filter outputs before plotting
         {"tied": [True, False], "dict_size": dict_sizes, "l1_alpha": l1_values, "bias_decay": bias_decays})
 
 if __name__ == "__main__":
