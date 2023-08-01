@@ -15,7 +15,7 @@ SSH_PYTHON = "/opt/conda/bin/python"
 
 PORT = 22
 
-SSH_DIRECTORY = "sparse_coding_aidan"
+SSH_DIRECTORY = "sparse_coding_aidan_new"
 BUCKET_NAME = "sparse-coding"
 
 ACCESS_KEY_NAME_DICT = {

@@ -6,6 +6,7 @@ from utils import dotdict
 def parse_args() -> dotdict:
     parser = argparse.ArgumentParser()
     parser.add_argument("--use_wandb", type=bool, default=True)
+    parser.add_argument("--wandb_images", type=str, default=False)
     parser.add_argument("--n_ground_truth_components", type=int, default=512)
     parser.add_argument("--learned_dict_ratio", type=float, default=1.0)
     parser.add_argument("--max_length", type=int, default=256)  # when tokenizing, truncate to this length, basically the context size

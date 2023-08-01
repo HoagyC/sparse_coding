@@ -6,6 +6,7 @@ import numpy as np
 
 if __name__ == "__main__":
     learned_dict_files = [
+        "output_4_rd_deep/_0/learned_dicts.pt",
         "output_4_rd_deep/_1/learned_dicts.pt",
         "output_4_rd_deep/_2/learned_dicts.pt",
         "output_4_rd_deep/_3/learned_dicts.pt",
