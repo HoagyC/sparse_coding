@@ -137,12 +137,13 @@ def log_standard_metrics(learned_dicts, chunk, chunk_num, hyperparam_ranges, cfg
             bins=20
         )
     
-    if len(dict_sizes) > 1:
-        for k, plot in mmcs_grid_plots.items():
-            cfg.wandb_instance.log({f"mmcs_grid_{chunk_num}/{k}": wandb.Image(plot)}, commit=False)
-    
-    for k, plot in sparsity_hists.items():
-        cfg.wandb_instance.log({f"sparsity_hist_{chunk_num}/{k}": wandb.Image(plot)})
+    if cfg.use_wandb:
+        if len(dict_sizes) > 1:
+            for k, plot in mmcs_grid_plots.items():
+                cfg.wandb_instance.log({f"mmcs_grid_{chunk_num}/{k}": wandb.Image(plot)}, commit=False)
+        
+        for k, plot in sparsity_hists.items():
+            cfg.wandb_instance.log({f"sparsity_hist_{chunk_num}/{k}": wandb.Image(plot)})
 
 def ensemble_train_loop(ensemble, cfg, args, ensemble_name, sampler, dataset, progress_counter):
     torch.set_grad_enabled(False)
@@ -323,7 +324,7 @@ def sweep(ensemble_init_func, cfg):
         log_standard_metrics(learned_dicts, chunk, i, hyperparam_ranges, cfg)
 
         del chunk
-
-        torch.save(learned_dicts, os.path.join(cfg.iter_folder, "learned_dicts.pt"))
+        if i == n_chunks - 1 or i % cfg.save_every == 0:
+            torch.save(learned_dicts, os.path.join(cfg.iter_folder, "learned_dicts.pt"))
 
         print("\n")

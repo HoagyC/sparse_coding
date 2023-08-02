@@ -20,6 +20,7 @@ def parse_args() -> dotdict:
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--noise_level", type=float, default=0.0)
+    parser.add_argument("--save_every", type=int, default=1) # save every n chunks
 
     parser.add_argument("--feature_prob_decay", type=float, default=0.99)
     parser.add_argument("--feature_num_nonzero", type=int, default=5)

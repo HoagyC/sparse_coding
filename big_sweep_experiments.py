@@ -28,6 +28,7 @@ import datetime
 import pickle
 import json
 import os
+import shutil
 
 import standard_metrics
 from autoencoders.learned_dict import LearnedDict, UntiedSAE, TiedSAE
@@ -199,12 +200,12 @@ def tied_vs_not_experiment(cfg):
 DICT_RATIO = None
 
 def dense_l1_range_experiment(cfg):
-    l1_values = np.logspace(-4, -2, 32)
+    l1_values = np.logspace(-4, -2, 16)
     devices = [f"cuda:{i}" for i in range(8)]
 
     ensembles = []
     for i in range(8):
-        cfgs = l1_values[i*4:(i+1)*4]
+        cfgs = l1_values[i*2:(i+1)*2]
         dict_size = int(cfg.activation_width * cfg.learned_dict_ratio)
         if cfg.tied_ae:
             models = [
@@ -391,6 +392,35 @@ def run_dense_l1_range():
 
     sweep(dense_l1_range_experiment, cfg)
 
+def run_across_layers():
+    cfg = parse_args()
+    cfg.model_name = "EleutherAI/pythia-70m-deduped"
+    cfg.dataset_name = "EleutherAI/pile"
+
+    cfg.batch_size = 2048
+    cfg.use_wandb = False
+    cfg.activation_width = 512
+    cfg.save_every = 10
+    cfg.tied_ae=True
+    for layer in [0, 1, 2, 3, 4, 5]:
+        for use_resid in [True, False]:
+            for dict_ratio in [0.5, 1, 2, 4, 8, 16, 32]:
+                cfg.layer = layer
+                cfg.use_residual = use_resid
+                cfg.learned_dict_ratio = dict_ratio
+
+                cfg.output_folder = f"output_hoagy_dense_sweep{'_tied' if cfg.tied_ae else ''}_{'resid' if cfg.use_residual else 'mlp'}_l{cfg.layer}_r{int(cfg.learned_dict_ratio)}"
+                cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{'mlp' if not cfg.use_residual else 'resid'}"
+                cfg.use_synthetic_dataset = False
+                cfg.dtype = torch.float32
+                cfg.lr = 3e-4
+                cfg.n_chunks=30
+
+                sweep(dense_l1_range_experiment, cfg)
+
+            # delete the dataset
+            shutil.rmtree(cfg.dataset_folder)
+
 def run_zero_l1_baseline():
     cfg = parse_args()
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
@@ -413,4 +443,4 @@ def run_zero_l1_baseline():
     sweep(zero_l1_baseline, cfg)
 
 if __name__ == "__main__":
-    run_zero_l1_baseline()
+    run_across_layers()
