@@ -63,8 +63,11 @@ def parse_args() -> dotdict:
     parser.add_argument("--use_decoder", type=bool, default=True) # whether to use the transposed decoder instead of encoder in a non-tied ae
     parser.add_argument("--df_n_feats", type=int, default=200) # number of features to use in dataframe, if 0 then use all
 
+    parser.add_argument("--device", type=str, default="cuda:0")
     args = parser.parse_args()
     cfg = dotdict(vars(args))  # convert to dotdict via dict
-    cfg.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if not torch.cuda.is_available() and cfg.device != "cpu":
+        print("WARNING: CUDA not available, using CPU")
+    cfg.device = torch.device(cfg.device if torch.cuda.is_available() else "cpu")
 
     return cfg
