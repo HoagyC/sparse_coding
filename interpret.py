@@ -9,7 +9,7 @@ import os
 import pickle
 import requests
 import sys
-from typing import Any, Dict, Union, List, Callable, Optional
+from typing import Any, Dict, Union, List, Callable, Optional, Tuple
 
 from baukit import Trace
 from datasets import load_dataset, ReadInstruction
@@ -397,7 +397,7 @@ async def main(cfg: dotdict) -> None:
         raise ValueError(f"Activation transform {cfg.activation_transform} not recognised")
 
     if cfg.activation_transform == "feature_dict":
-        transform_name = cfg.load_interpret_autoencoder.split("/")[-1][:-4]
+        transform_name = cfg.load_interpret_autoencoder.split("/")[-1][:-3]
     else:
         transform_name = cfg.activation_transform
 
@@ -554,6 +554,20 @@ def run_folder(cfg: dotdict):
         print(f"Running encoder {i} of {len(all_encoders)}: {encoder}")
         cfg.load_interpret_autoencoder = os.path.join(base_folder, encoder)
         asyncio.run(main(cfg))
+    
+
+def make_tag_name(hparams: Dict) -> str:
+    tag = ""
+    if "tied" in hparams.keys():
+        tag += f"tied_{hparams['tied']}"
+    if "dict_size" in hparams.keys():
+        tag += f"dict_size_{hparams['dict_size']}"
+    if "l1_alpha" in hparams.keys():
+        tag += f"l1_alpha_{hparams['l1_alpha']:.2}"
+    if "bias_decay" in hparams.keys():
+        tag += "0.0" if hparams["bias_decay"] == 0 else f"{hparams['bias_decay']:.1}"
+    return tag
+
 
 def run_from_grouped(cfg: dotdict, results_loc: str):
     """
@@ -566,29 +580,23 @@ def run_from_grouped(cfg: dotdict, results_loc: str):
     os.makedirs(os.path.join("auto_interp_results", time_str), exist_ok=True)
     # Now split the results out into separate files 
     for learned_dict, hparams_dict in results:
-        assert all([key in hparams_dict.keys() for key in ["tied", "dict_size", "l1_alpha", "bias_decay"]])
-        bd_tag = "0.0" if hparams_dict["bias_decay"] == 0 else f"{hparams_dict['bias_decay']:.1}"
-        filename = f"tied_{hparams_dict['tied']}_ds_{hparams_dict['dict_size']}_l1a_{hparams_dict['l1_alpha']:.1}_bd_{bd_tag}.pt"
+        filename = make_tag_name(hparams_dict) + ".pt"
         torch.save(learned_dict, os.path.join("auto_interp_results", time_str, filename))
     
     cfg.load_interpret_autoencoder = os.path.join("auto_interp_results", time_str)
     run_folder(cfg)
 
-
-def read_results(activation_name: str, score_mode: str, exclude_mean: bool = True) -> None:
-    results_folder = os.path.join("auto_interp_results", activation_name)
+def read_scores(results_folder: str, score_mode: str = "top") -> Dict[str, Tuple[List[int], List[float]]]:
+    scores: Dict[str, Tuple[List[int], List[float]]] = {}
     transforms = os.listdir(results_folder)
     transforms = [transform for transform in transforms if os.path.isdir(os.path.join(results_folder, transform))]
-    scores: Dict[str, List[float]] = {}
-    plt.clf() # clear the plot
-
     if "sparse_coding" in transforms:
         transforms.remove("sparse_coding")
         transforms = ["sparse_coding"] + transforms
-    
   
     for transform in transforms:
-        scores[transform] = []
+        transform_scores = []
+        transform_ndxs = []
         # list all the features by looking for folders
         feat_folders = [x for x in os.listdir(os.path.join(results_folder, transform)) if x.startswith("feature_")]
         print(f"{transform=}, {len(feat_folders)=}")
@@ -604,12 +612,21 @@ def read_results(activation_name: str, score_mode: str, exclude_mean: bool = Tru
             score = get_score(lines, score_mode)
 
             print(f"{feature_ndx=}, {transform=}, {score=}")
-            scores[transform].append(score)
+            transform_scores.append(score)
+            transform_ndxs.append(feature_ndx)
         
-        # if no scores, add a 0 so it shows up and doesn't cause errors
-        if len(scores[transform]) == 0:
-            scores[transform].append(0)
-                
+        scores[transform] = (transform_ndxs, transform_scores)
+        
+    return scores
+
+
+def read_results(activation_name: str, score_mode: str, exclude_mean: bool = True) -> None:
+    results_folder = os.path.join("auto_interp_results", activation_name)
+
+    scores = read_scores(results_folder, score_mode) # Dict[str, Tuple[List[int], List[float]]], where the tuple is (feature_ndxs, scores)
+    transforms = scores.keys()
+
+    plt.clf() # clear the plot                
     
     # plot the scores as a violin plot
     colors = ["red", "blue", "green", "orange", "purple", "pink", "black", "brown", "cyan", "magenta", "grey"]
@@ -620,7 +637,7 @@ def read_results(activation_name: str, score_mode: str, exclude_mean: bool = Tru
     plt.yticks(np.arange(-0.2, 0.6, 0.1))
     plt.grid(axis="y", color="grey", linestyle="-", linewidth=0.5, alpha=0.3)
     # first we need to get the scores into a list of lists
-    scores_list = [scores[transform] for transform in transforms]
+    scores_list = [scores[transform][1] for transform in transforms]
     violin_parts = plt.violinplot(scores_list, showmeans=False, showextrema=False)
     for i, pc in enumerate(violin_parts['bodies']):
         pc.set_facecolor(colors[i % len(colors)])
@@ -631,9 +648,9 @@ def read_results(activation_name: str, score_mode: str, exclude_mean: bool = Tru
     plt.xticks(np.arange(1, len(transforms) + 1), transforms, rotation=90)
 
     # add standard errors around the means but don't plot the means
-    cis = [1.96 * np.std(scores[transform]) / np.sqrt(len(scores[transform])) for transform in transforms]
+    cis = [1.96 * np.std(scores[transform][1]) / np.sqrt(len(scores[transform][1])) for transform in transforms]
     for i, transform in enumerate(transforms):
-        plt.errorbar(i+1, np.mean(scores[transform]), yerr=cis[i], fmt="o", color=colors[i % len(colors)], elinewidth=2, capsize=20)
+        plt.errorbar(i+1, np.mean(scores[transform][1]), yerr=cis[i], fmt="o", color=colors[i % len(colors)], elinewidth=2, capsize=20)
 
     plt.title(f"{activation_name} {score_mode}")
     plt.xlabel("Transform")
