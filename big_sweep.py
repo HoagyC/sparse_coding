@@ -64,20 +64,6 @@ def calc_expected_interference(dictionary, batch):
     nonzero_capacity = capacities.sum(dim=0) / torch.clamp(nonzero_count, min=1.0)
     return nonzero_capacity
 
-# weird asymmetric kurtosis/skew with center at 0
-def calc_feature_skew(batch):
-    # batch: [batch_size, n_features]
-    variance = torch.var(batch, dim=0)
-    asymm_skew = torch.mean(batch**3, dim=0) / torch.clamp(variance**1.5, min=1e-8)
-
-    return asymm_skew
-
-def calc_feature_kurtosis(batch):
-    # batch: [batch_size, n_features]
-    variance = torch.var(batch, dim=0)
-    asymm_kurtosis = torch.mean(batch**4, dim=0) / torch.clamp(variance**2, min=1e-8)
-
-    return asymm_kurtosis
 
 def filter_learned_dicts(learned_dicts, hyperparam_filters):
     from math import isclose
