@@ -400,7 +400,8 @@ def run_across_layers():
     cfg.batch_size = 2048
     cfg.use_wandb = False
     cfg.activation_width = 512
-    cfg.save_every = 10
+    cfg.save_every = 5
+    cfg.n_chunks=10
     cfg.tied_ae=True
     for layer in [0, 1, 2, 3, 4, 5]:
         for use_resid in [True, False]:
