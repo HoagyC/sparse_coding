@@ -11,7 +11,7 @@ from cluster_runs import dispatch_job_on_chunk
 from autoencoders.ensemble import FunctionalEnsemble
 from autoencoders.sae_ensemble import FunctionalSAE, FunctionalTiedSAE
 from autoencoders.semilinear_autoencoder import SemiLinearSAE
-from autoencoders.lista_autoencoder import FunctionalResidualDenoisingSAE
+from autoencoders.residual_denoising_autoencoder import FunctionalLISTADenoisingSAE, FunctionalLISTASAE
 from autoencoders.direct_coef_search import DirectCoefOptimizer
 
 from activation_dataset import setup_data
@@ -253,15 +253,15 @@ def residual_denoising_experiment(cfg):
         cfgs = l1_values[i*4:(i+1)*4]
         dict_size = int(cfg.activation_width * DICT_RATIO)
         models = [
-            FunctionalResidualDenoisingSAE.init(cfg.activation_width, dict_size, 5, l1_alpha, dtype=cfg.dtype)
+            FunctionalLISTADenoisingSAE.init(cfg.activation_width, dict_size, 5, l1_alpha, dtype=cfg.dtype)
             for l1_alpha in cfgs
         ]
         device = devices.pop()
         ensemble = FunctionalEnsemble(
-            models, FunctionalResidualDenoisingSAE,
+            models, FunctionalLISTADenoisingSAE,
             #adam_grouped.Adam, {
             torchopt.adam, {
-                "lr": 3e-4
+                "lr": cfg.lr
             #    "lr_groups": FunctionalResidualDenoisingSAE.init_lr(3, lr=1e-4, lr_encoder=1e-3),
             #    "betas": (0.9, 0.999),
             #    "eps": 1e-8
@@ -314,7 +314,7 @@ def run_resid_denoise():
     cfg.output_folder = "output_aidan"
     cfg.n_chunks = 10
 
-    cfg.batch_size = 2048
+    cfg.batch_size = 1024
     cfg.gen_batch_size = 4096
     cfg.n_ground_truth_components = 1024
     cfg.activation_width = 512
@@ -322,8 +322,9 @@ def run_resid_denoise():
     cfg.feature_prob_decay = 0.99
     cfg.feature_num_nonzero = 10
 
-    cfg.lr = 3e-4
+    cfg.lr = 1e-3
     cfg.use_wandb = True
+    cfg.wandb_images = False
     cfg.dtype = torch.float32
 
     for dict_ratio in [4]:

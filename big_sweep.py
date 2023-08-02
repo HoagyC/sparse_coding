@@ -180,8 +180,8 @@ def ensemble_train_loop(ensemble, cfg, args, ensemble_name, sampler, dataset, pr
 
                 for k in losses.keys():
                     log[f"{ensemble_name}_{name}_{k}"] = losses[k][m].item()
-
-                log[f"{ensemble_name}_{name}_sparsity"] = num_nonzero[m].item()
+                
+                log[f"{ensemble_name}_{name}_num_nonzero"] = num_nonzero[m].item()
 
             run.log(log, commit=True)
 
@@ -321,7 +321,8 @@ def sweep(ensemble_init_func, cfg):
         for ensemble, arg, _ in ensembles:
             learned_dicts.extend(unstacked_to_learned_dicts(ensemble, arg, cfg.ensemble_hyperparams, cfg.buffer_hyperparams))
 
-        log_standard_metrics(learned_dicts, chunk, i, hyperparam_ranges, cfg)
+        if not cfg.wandb_images:
+            log_standard_metrics(learned_dicts, chunk, i, hyperparam_ranges, cfg)
 
         del chunk
         if i == n_chunks - 1 or i % cfg.save_every == 0:

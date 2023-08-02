@@ -5,13 +5,16 @@ import torch
 import numpy as np
 
 if __name__ == "__main__":
-    chunk_range = [30]
-    all_sets = []
-    learned_dict_files_2 = [f"output_hoagy_dense_sweep_tied_resid_l2_r2/_{x}/learned_dicts.pt" for x in chunk_range]
-    learned_dict_files_4 = [f"output_hoagy_dense_sweep_tied_resid_l2_r4/_{x}/learned_dicts.pt" for x in chunk_range]
-    learned_dict_files_8 = [f"output_hoagy_dense_sweep_tied_resid_l2_r8/_{x}/learned_dicts.pt" for x in chunk_range]
-    learned_dict_files_untied = [f"output_hoagy_dense_sweep_resid_l2_r4/_{x}/learned_dicts.pt" for x in chunk_range]
-    all_sets = [learned_dict_files_2, learned_dict_files_4, learned_dict_files_8]
+    learned_dict_files = [
+        "output_4_rd_deep/_0/learned_dicts.pt",
+        "output_4_rd_deep/_1/learned_dicts.pt",
+        "output_4_rd_deep/_2/learned_dicts.pt",
+        "output_4_rd_deep/_3/learned_dicts.pt",
+        "output_4_rd_deep/_4/learned_dicts.pt",
+        "output_4_rd_deep/_5/learned_dicts.pt",
+        "output_4_rd_deep/_6/learned_dicts.pt",
+        "output_4_rd_deep/_7/learned_dicts.pt",
+    ]
 
     learned_dict_sets = [[torch.load(f) for f in set] for set in all_sets]
 
