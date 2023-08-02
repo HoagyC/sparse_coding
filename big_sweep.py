@@ -21,6 +21,7 @@ import numpy as np
 from itertools import product, chain
 
 from transformer_lens import HookedTransformer
+from transformers import GPT2Tokenizer
 
 import tqdm
 
@@ -63,20 +64,6 @@ def calc_expected_interference(dictionary, batch):
     nonzero_capacity = capacities.sum(dim=0) / torch.clamp(nonzero_count, min=1.0)
     return nonzero_capacity
 
-# weird asymmetric kurtosis/skew with center at 0
-def calc_feature_skew(batch):
-    # batch: [batch_size, n_features]
-    variance = torch.var(batch, dim=0)
-    asymm_skew = torch.mean(batch**3, dim=0) / torch.clamp(variance**1.5, min=1e-8)
-
-    return asymm_skew
-
-def calc_feature_kurtosis(batch):
-    # batch: [batch_size, n_features]
-    variance = torch.var(batch, dim=0)
-    asymm_kurtosis = torch.mean(batch**4, dim=0) / torch.clamp(variance**2, min=1e-8)
-
-    return asymm_kurtosis
 
 def filter_learned_dicts(learned_dicts, hyperparam_filters):
     from math import isclose
@@ -150,12 +137,13 @@ def log_standard_metrics(learned_dicts, chunk, chunk_num, hyperparam_ranges, cfg
             bins=20
         )
     
-    if len(dict_sizes) > 1:
-        for k, plot in mmcs_grid_plots.items():
-            cfg.wandb_instance.log({f"mmcs_grid_{chunk_num}/{k}": wandb.Image(plot)}, commit=False)
-    
-    for k, plot in sparsity_hists.items():
-        cfg.wandb_instance.log({f"sparsity_hist_{chunk_num}/{k}": wandb.Image(plot)})
+    if cfg.use_wandb:
+        if len(dict_sizes) > 1:
+            for k, plot in mmcs_grid_plots.items():
+                cfg.wandb_instance.log({f"mmcs_grid_{chunk_num}/{k}": wandb.Image(plot)}, commit=False)
+        
+        for k, plot in sparsity_hists.items():
+            cfg.wandb_instance.log({f"sparsity_hist_{chunk_num}/{k}": wandb.Image(plot)})
 
 def ensemble_train_loop(ensemble, cfg, args, ensemble_name, sampler, dataset, progress_counter):
     torch.set_grad_enabled(False)
@@ -337,7 +325,7 @@ def sweep(ensemble_init_func, cfg):
             log_standard_metrics(learned_dicts, chunk, i, hyperparam_ranges, cfg)
 
         del chunk
-
-        torch.save(learned_dicts, os.path.join(cfg.iter_folder, "learned_dicts.pt"))
+        if i == n_chunks - 1 or i % cfg.save_every == 0:
+            torch.save(learned_dicts, os.path.join(cfg.iter_folder, "learned_dicts.pt"))
 
         print("\n")

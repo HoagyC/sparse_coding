@@ -1,23 +1,32 @@
 import torch
+from torch import nn
+
 from abc import ABC, abstractmethod
 from torchtyping import TensorType
 
 from autoencoders.ensemble import DictSignature
 
+_n_dict_components, _activation_size, _batch_size = None, None, None
+
 class LearnedDict(ABC):
+    n_feats: int
+    activation_size: int
+    encoder: TensorType["_n_dict_components", "_activation_size"]
+    encoder_bias: TensorType["_n_dict_components"]
+
     @abstractmethod
-    def get_learned_dict(self) -> TensorType["n_dict_components", "activation_size"]:
+    def get_learned_dict(self) -> TensorType["_n_dict_components", "_activation_size"]:
         pass
 
     @abstractmethod
-    def encode(self, batch: TensorType["batch_size", "activation_size"]) -> TensorType["batch_size", "n_dict_components"]:
+    def encode(self, batch: TensorType["_batch_size", "_activation_size"]) -> TensorType["_batch_size", "_n_dict_components"]:
         pass
     
     @abstractmethod
     def to_device(self, device):
         pass
     
-    def predict(self, batch: TensorType["batch_size", "activation_size"]) -> TensorType["batch_size", "activation_size"]:
+    def predict(self, batch: TensorType["_batch_size", "_activation_size"]) -> TensorType["_batch_size", "_activation_size"]:
         c = self.encode(batch)
         learned_dict = self.get_learned_dict()
         x_hat = torch.einsum("nd,bn->bd", learned_dict, c)
@@ -28,6 +37,7 @@ class UntiedSAE(LearnedDict):
         self.encoder = encoder
         self.decoder = decoder
         self.encoder_bias = encoder_bias
+        self.n_feats, self.activation_size = self.encoder.shape
 
     def get_learned_dict(self):
         norms = torch.norm(self.decoder, 2, dim=-1)
@@ -49,6 +59,7 @@ class TiedSAE(LearnedDict):
         self.encoder = encoder
         self.encoder_bias = encoder_bias
         self.norm_encoder = norm_encoder
+        self.n_feats, self.activation_size = self.encoder.shape
 
     def get_learned_dict(self):
         norms = torch.norm(self.encoder, 2, dim=-1)

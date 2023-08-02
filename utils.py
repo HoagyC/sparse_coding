@@ -15,7 +15,9 @@ SSH_PYTHON = "/opt/conda/bin/python"
 
 PORT = 22
 
-SSH_DIRECTORY = "sparse_coding_aidan_new"
+USER = "hoagy"
+
+SSH_DIRECTORY = f"sparse_coding_{USER}"
 BUCKET_NAME = "sparse-coding"
 
 ACCESS_KEY_NAME_DICT = {
@@ -59,6 +61,13 @@ def copy_recent():
     command = f"scp -P {PORT} -r {DEST_ADDR}:{output} outputs"
     subprocess.call(command, shell=True)
 
+def copy_dotfiles():
+    """Copy dotfiles into remote host and run install and deploy scripts"""
+    df_dir = f"dotfiles_{USER}"
+    command = f"scp -P {PORT} -r ~/git/dotfiles {DEST_ADDR}:{df_dir}"
+    subprocess.call(command, shell=True)
+    command = f"ssh -p {PORT} {DEST_ADDR} 'cd ~/{df_dir} && ./install.sh && ./deploy.sh'"
+    subprocess.call(command, shell=True)
 
 def setup():
     """Sync, copy models, create venv and install requirements."""
@@ -199,5 +208,7 @@ if __name__ == "__main__":
         copy_secrets()
     elif sys.argv[1] == "interp_sync":
         autointerp_sync()
+    elif sys.argv[1] == "dotfiles":
+        copy_dotfiles()
     else:
         raise NotImplementedError(f"Command {sys.argv[1]} not recognised")

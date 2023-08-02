@@ -18,9 +18,10 @@ def parse_args() -> dotdict:
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--noise_std", type=float, default=0.1)
     parser.add_argument("--l1_alpha", type=float, default=0.1)
-    parser.add_argument("--learning_rate", type=float, default=0.001)
+    parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--noise_level", type=float, default=0.0)
+    parser.add_argument("--save_every", type=int, default=1) # save every n chunks
 
     parser.add_argument("--feature_prob_decay", type=float, default=0.99)
     parser.add_argument("--feature_num_nonzero", type=int, default=5)
@@ -36,7 +37,7 @@ def parse_args() -> dotdict:
     parser.add_argument("--run_toy", type=bool, default=False)
     parser.add_argument("--model_name", type=str, default="EleutherAI/pythia-70m-deduped")
     parser.add_argument("--model_path", type=str, default="models/32d70k.pt")
-    parser.add_argument("--dataset_name", type=str, default="NeelNanda/pile-10k")
+    parser.add_argument("--dataset_name", type=str, default="NeelNanda/pile-10k") # EleutherAI/pile
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--layer", type=int, default=2)  # layer to extract mlp-post-non-lin features from, only if using real model
     parser.add_argument("--use_residual", type=bool, default=False)  # whether to train on residual stream data
@@ -61,6 +62,7 @@ def parse_args() -> dotdict:
     parser.add_argument("--interp_name", type=str, default="") # name of run, otherwise will be feature_transform
     parser.add_argument("--sort_mode", type=str, default="max") # how to sort fragments, either max, mean
     parser.add_argument("--use_decoder", type=bool, default=True) # whether to use the transposed decoder instead of encoder in a non-tied ae
+    parser.add_argument("--df_n_feats", type=int, default=200) # number of features to use in dataframe, if 0 then use all
 
     args = parser.parse_args()
     cfg = dotdict(vars(args))  # convert to dotdict via dict
