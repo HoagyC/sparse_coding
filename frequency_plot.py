@@ -5,6 +5,7 @@ import torch
 import numpy as np
 
 if __name__ == "__main__":
+    chunk_range = list(range(8))
     learned_dict_files = [
         "output_4_rd_deep/_0/learned_dicts.pt",
         "output_4_rd_deep/_1/learned_dicts.pt",
@@ -16,7 +17,7 @@ if __name__ == "__main__":
         "output_4_rd_deep/_7/learned_dicts.pt",
     ]
 
-    learned_dict_sets = [[torch.load(f) for f in set] for set in all_sets]
+    learned_dict_sets = [[torch.load(f) for f in set] for set in learned_dict_files]
 
     dataset = torch.load("pilechunks_l2_resid/0.pt")
     sample_idxs = np.random.choice(len(dataset), 5000, replace=False)
