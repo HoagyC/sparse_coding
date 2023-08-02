@@ -279,7 +279,7 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
 
     ground_truth_features = data_generator.feats
     # Train the model
-    optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.learning_rate)
+    optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.lr)
 
     # Hold a running average of the reconstruction loss
     running_recon_loss = 0.0
@@ -429,7 +429,7 @@ def main():
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--noise_std", type=float, default=0.1)
     parser.add_argument("--l1_alpha", type=float, default=0.1)
-    parser.add_argument("--learning_rate", type=float, default=0.001)
+    parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--epochs", type=int, default=20000)
     parser.add_argument("--noise_level", type=float, default=0.0)
 

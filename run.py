@@ -246,9 +246,9 @@ def cosine_sim(
     return vecs1_norm @ vecs2_norm.T
 
 
-def mean_max_cosine_similarity(ground_truth_features, learned_dictionary, debug=False):
+def mean_max_cosine_similarity(learned_dict_1, learned_dict_2, debug=False):
     # Calculate cosine similarity between all pairs of ground truth and learned features
-    cos_sim = cosine_sim(ground_truth_features, learned_dictionary)
+    cos_sim = cosine_sim(learned_dict_1, learned_dict_2)
     # Find the maximum cosine similarity for each ground truth feature, then average
     mmcs = cos_sim.max(axis=1).mean()
     return mmcs
@@ -300,7 +300,7 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
 
     ground_truth_features = data_generator.feats
     # Train the model
-    optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.learning_rate)
+    optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.lr)
 
     # Hold a running average of the reconstruction loss
     running_recon_loss = 0.0
@@ -561,7 +561,7 @@ def run_toy_model(cfg):
 
 
 def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 0, mini_run: int = 1, n_mini_runs: int = 1):
-    optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.learning_rate)
+    optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.lr)
     running_recon_loss = 0.0
     running_l1_loss = 0.0
     feature_activations = np.zeros((cfg.n_components_dictionary))

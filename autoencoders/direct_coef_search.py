@@ -40,7 +40,7 @@ class DirectCoefOptimizer:
         return l_reconstruction + l_sparsity, (losses, aux)
 
     @staticmethod
-    def basis_persuit(params, buffers, batch, normed_dict=None):
+    def basis_pursuit(params, buffers, batch, normed_dict=None):
         if normed_dict is None:
             decoder_norms = torch.norm(params["decoder"], 2, dim=-1)
             normed_dict = params["decoder"] / torch.clamp(decoder_norms, 1e-8)[:, None]
@@ -65,7 +65,7 @@ class DirectCoefOptimizer:
         normed_dict = params["decoder"] / torch.clamp(decoder_norms, 1e-8)[:, None]
 
         with torch.no_grad():
-            c = DirectCoefOptimizer.basis_persuit(params, buffers, batch, normed_dict=normed_dict)
+            c = DirectCoefOptimizer.basis_pursuit(params, buffers, batch, normed_dict=normed_dict)
 
         x_hat = torch.einsum("ij,bi->bj", normed_dict, c)
         l_reconstruction = (x_hat - batch).pow(2).mean()
@@ -82,7 +82,7 @@ class DirectCoefSearch(LearnedDict):
         self.buffers = buffers
     
     def encode(self, x):
-        return DirectCoefOptimizer.basis_persuit(self.params, self.buffers, x)
+        return DirectCoefOptimizer.basis_pursuit(self.params, self.buffers, x)
     
     def get_learned_dict(self):
         decoder_norms = torch.norm(self.params["decoder"], 2, dim=-1)

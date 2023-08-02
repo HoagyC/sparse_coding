@@ -67,7 +67,6 @@ class SAE(nn.Module):
     def device(self):
         return next(self.parameters()).device
 
-Encoder.register(SAE)
 
 class TiedSAE(nn.Module):
     def __init__(self, activation_size, n_dict_components, l1_coef=0.0, activation="relu", bias_l2_coef=0.0):
@@ -118,3 +117,18 @@ class TiedSAE(nn.Module):
 
     def configure_optimizers(self, **kwargs):
         return torch.optim.Adam(self.parameters(), **kwargs)
+
+
+class TiedSAEBias(TiedSAE):
+    def __init__(self, *args, **kwargs):
+        super(TiedSAEBias, self).__init__(*args, **kwargs)
+
+    def forward(self, x):
+        c = torch.einsum("ij,bj->bi", self.weights, x)
+        c = c + self.bias
+        c = self.act_module(c)
+
+        c = torch.where(c > 0, c - self.bias, c) # Adding back the bias to the positve values so it's closer to reversible
+        x_hat = torch.einsum("ij,bi->bj", self.weights, c)
+
+        return x_hat, c

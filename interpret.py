@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 from datetime import datetime
+from functools import partial
 import importlib
 import json
 import multiprocessing as mp
@@ -8,7 +9,7 @@ import os
 import pickle
 import requests
 import sys
-from typing import Any, Dict, Union, List, Callable
+from typing import Any, Dict, Union, List, Callable, Optional, Tuple
 
 from baukit import Trace
 from datasets import load_dataset, ReadInstruction
@@ -24,6 +25,7 @@ from tqdm import tqdm
 from transformer_lens import HookedTransformer
 from transformers import GPT2Tokenizer, AutoTokenizer
 
+from autoencoders.learned_dict import LearnedDict
 from argparser import parse_args
 from comparisons import NoCredentialsError
 from utils import dotdict, make_tensor_name, upload_to_aws
@@ -49,7 +51,7 @@ from neuron_explainer.explanations.simulator import ExplanationNeuronSimulator
 from neuron_explainer.fast_dataclasses import loads
 
 EXPLAINER_MODEL_NAME = "gpt-4" # "gpt-3.5-turbo"
-SIMULATOR_MODEL_NAME = "text-davinci-003" # "text-davinci-003"
+SIMULATOR_MODEL_NAME = "text-davinci-003"
 
 OPENAI_MAX_FRAGMENTS = 50000
 OPENAI_FRAGMENT_LEN = 64
@@ -57,6 +59,7 @@ OPENAI_EXAMPLES_PER_SPLIT = 5
 N_SPLITS = 4
 TOTAL_EXAMPLES = OPENAI_EXAMPLES_PER_SPLIT * N_SPLITS
 REPLACEMENT_CHAR = "�"
+MAX_CONCURRENT = None
 
 
 # Replaces the load_neuron function in neuron_explainer.activations.activations because couldn't get blobfile to work
@@ -112,6 +115,7 @@ def activation_ICA(dataset, n_activations):
     print(f"ICA fit in {datetime.now() - ica_start}")
     return ica
 
+
 def activation_PCA(dataset, n_activations):
     pca = PCA()
     print(f"Fitting PCA on {n_activations} activations")
@@ -119,6 +123,7 @@ def activation_PCA(dataset, n_activations):
     pca.fit(next(iter(dataset))[0].cpu().numpy()) # 1GB of activations takes about 40s
     print(f"PCA fit in {datetime.now() - pca_start}")
     return pca
+
 
 def activation_NMF(dataset, n_activations):
     nmf = NMF()
@@ -131,102 +136,30 @@ def activation_NMF(dataset, n_activations):
     print(f"NMF fit in {datetime.now() - nmf_start}")
     return nmf
 
-def flex_activation_function(input, activation_str, **kwargs):
-    if activation_str == "ica":
-        assert "ica" in kwargs
-        return torch.tensor(kwargs["ica"].transform(input.cpu()))
-    elif activation_str == "pca":
-        assert "pca" in kwargs
-        return torch.tensor(kwargs["pca"].transform(input.cpu()))
-    elif activation_str == "nmf":
-        assert "nmf" in kwargs
-        return torch.tensor(kwargs["nmf"].transform(input.cpu()))
-    elif activation_str == "random":
-        assert "random_matrix" in kwargs
-        return input @ kwargs["random_matrix"].to(kwargs["device"])
-    elif activation_str == "random_bias":
-        assert all([k in kwargs for k in ["random_matrix", "bias", "weight"]]), f"Missing keys {set(['random_matrix', 'bias', 'weight']) - set(kwargs.keys())}"
-        assert len(kwargs["bias"]) <= input.shape[1]
-        # going to divide the biases by the norm of the weight vector
-        norms = torch.norm(kwargs["weight"], dim=1)
-        assert len(norms) == len(kwargs["bias"])
-        adjusted_bias = kwargs["bias"] / norms
-        return torch.relu(input @ kwargs["random_matrix"].to(kwargs["device"]) + adjusted_bias[:input.shape[1]])
-    elif activation_str == "neuron_basis":
-        return input
-    elif activation_str == "neuron_relu":
-        return torch.relu(input)
-    elif activation_str == "neuron_basis_bias":
-        # here we take the neuron basis, add a (probably negative) bias term, and then apply a relu
-        assert all([k in kwargs for k in ["bias", "weight"]]), f"Missing keys {set(['bias', 'weight']) - set(kwargs.keys())}"
-        assert len(kwargs["bias"]) <= input.shape[1]
-        norms = torch.norm(kwargs["weight"], dim=1)
-        assert len(norms) == len(kwargs["bias"])
-        adjusted_bias = kwargs["bias"] / norms
-        return torch.relu(input + adjusted_bias[:input.shape[1]])
-
-    elif activation_str == "feature_no_bias":
-        assert "feature_matrix" in kwargs
-        return input @ kwargs["feature_matrix"].to(kwargs["device"])
-
-    elif activation_str == "feature_dict":
-        assert "autoencoder" in kwargs
-        reconstruction, dict_activations = kwargs["autoencoder"](input)
-        return dict_activations
-    else:
-        raise ValueError(f"Unknown activation function {activation_str}")
-
-
-def process_fragment(cfg, fragment_id, fragment_tokens, activation_data, tokenizer_model, activation_fn_kwargs: Dict):
-    # Project the activations into the feature space
-    # Need to define the activation function as a top-level function for mp to be able to pickle it
-    feature_activation_data = flex_activation_function(activation_data.detach(), cfg.activation_transform, **activation_fn_kwargs)
-    if not isinstance(feature_activation_data, torch.Tensor):
-        feature_activation_data = torch.tensor(feature_activation_data)
-    
-    # Get average activation for each feature
-    feature_activation_means = torch.mean(feature_activation_data, dim=0)
-
-    fragment_dict: Dict[str, Any] = {}
-    fragment_dict["fragment_id"] = fragment_id
-    fragment_dict["fragment_token_ids"] = fragment_tokens[0].tolist()
-    fragment_dict["fragment_token_strs"] = tokenizer_model.to_str_tokens(fragment_tokens[0])
-
-    # if there are any question marks in the fragment, throw it away (caused by byte pair encoding)
-
-    if REPLACEMENT_CHAR in fragment_dict["fragment_token_strs"]:
-        # throw away the fragment
-        return None
-    
-    # for j in range(feature_activation_means.shape[0]):
-    #     fragment_dict[f"feature_{j}_mean"] = feature_activation_means[j].item()
-    #     fragment_dict[f"feature_{j}_activations"] = feature_activation_data[:, j].tolist()
-    #     assert len(fragment_dict[f"feature_{j}_activations"]) == len(fragment_dict["fragment_token_strs"]), f"Feature {j} has {len(fragment_dict[f'feature_{j}_activations'])} activations but {len(fragment_dict['fragment_token_strs'])} tokens"
-
-    # rebuilding the above loop to be more efficient, using numpy
-    fragment_dict["feature_means"] = feature_activation_means.tolist()
-    fragment_dict["feature_activations"] = feature_activation_data.cpu().numpy()
-
-    return fragment_dict
 
 def make_feature_activation_dataset(
         model_name: str,
         model: HookedTransformer, 
         layer: int,
         use_residual: bool,
-        activation_fn_name: str,
-        activation_fn_kwargs: Dict, 
+        activation_fn: Callable,
         activation_dim: int,
         use_baukit: bool = False,
         device: str = "cpu",
         n_fragments = OPENAI_MAX_FRAGMENTS,
         random_fragment = True, # used for debugging
+        max_features: Optional[int] = None
     ):
     """
     Takes a specified point of a model, and a dataset. 
     Returns a dataset which contains the activations of the model at that point, 
     for each fragment in the dataset, transformed into the feature space
     """
+    if max_features and max_features < activation_dim:
+        feat_dim = max_features
+    else:
+        feat_dim = activation_dim
+
     sentence_dataset = load_dataset("openwebtext", split="train", streaming=True)
 
     if model_name == "nanoGPT":
@@ -249,9 +182,9 @@ def make_feature_activation_dataset(
     fragment_token_ids_list = []
     fragment_token_strs_list = []
 
-    activation_means_table = np.zeros((n_fragments, activation_dim), dtype=np.float16)
-    activation_maxes_table = np.zeros((n_fragments, activation_dim), dtype=np.float16)
-    activation_data_table = np.zeros((n_fragments, activation_dim * OPENAI_FRAGMENT_LEN), dtype=np.float16)
+    activation_means_table = np.zeros((n_fragments, feat_dim), dtype=np.float16)
+    activation_maxes_table = np.zeros((n_fragments, feat_dim), dtype=np.float16)
+    activation_data_table = np.zeros((n_fragments, feat_dim * OPENAI_FRAGMENT_LEN), dtype=np.float16)
     with torch.no_grad():
         while n_added < n_fragments:
             fragments: List[torch.Tensor] = []
@@ -293,16 +226,17 @@ def make_feature_activation_dataset(
                 activation_data = mlp_activation_data[i:i+1, :].squeeze(0)
                 token_ids = fragment_tokens[0].tolist()
                     
-                feature_activation_data = flex_activation_function(activation_data, activation_fn_name, **activation_fn_kwargs)
+                feature_activation_data = activation_fn(activation_data)
                 feature_activation_means = torch.mean(feature_activation_data, dim=0)
                 feature_activation_maxes = torch.max(feature_activation_data, dim=0)[0]
+
                 assert feature_activation_means.shape == (activation_dim,), feature_activation_means.shape
                 assert feature_activation_maxes.shape == (activation_dim,), feature_activation_maxes.shape
 
-                activation_means_table[n_added, :] = feature_activation_means.cpu().numpy()
-                activation_maxes_table[n_added, :] = feature_activation_maxes.cpu().numpy()
-                feature_activation_data = feature_activation_data.cpu().numpy()
+                activation_means_table[n_added, :] = feature_activation_means.cpu().numpy()[:feat_dim]
+                activation_maxes_table[n_added, :] = feature_activation_maxes.cpu().numpy()[:feat_dim]
 
+                feature_activation_data = feature_activation_data.cpu().numpy()[:, :feat_dim]
 
                 activation_data_table[n_added, :] = feature_activation_data.flatten()
     
@@ -320,11 +254,11 @@ def make_feature_activation_dataset(
     df = pd.DataFrame()
     df["fragment_token_ids"] = fragment_token_ids_list
     df["fragment_token_strs"] = fragment_token_strs_list
-    means_column_names = [f"feature_{i}_mean" for i in range(activation_dim)]
-    maxes_column_names = [f"feature_{i}_max" for i in range(activation_dim)]
-    activations_column_names = [f"feature_{i}_activation_{j}" for j in range(OPENAI_FRAGMENT_LEN) for i in range(activation_dim)] # nested for loops are read left to right
+    means_column_names = [f"feature_{i}_mean" for i in range(feat_dim)]
+    maxes_column_names = [f"feature_{i}_max" for i in range(feat_dim)]
+    activations_column_names = [f"feature_{i}_activation_{j}" for j in range(OPENAI_FRAGMENT_LEN) for i in range(feat_dim)] # nested for loops are read left to right
     
-    assert feature_activation_data.shape == (OPENAI_FRAGMENT_LEN, activation_dim)
+    assert feature_activation_data.shape == (OPENAI_FRAGMENT_LEN, feat_dim)
     df = pd.concat([df, pd.DataFrame(activation_means_table, columns=means_column_names)], axis=1)
     df = pd.concat([df, pd.DataFrame(activation_maxes_table, columns=maxes_column_names)], axis=1)
     df = pd.concat([df, pd.DataFrame(activation_data_table, columns=activations_column_names)], axis=1)
@@ -360,25 +294,11 @@ async def main(cfg: dotdict) -> None:
     # Load feature dict
     if cfg.activation_transform in ["feature_dict", "feature_no_bias", "neuron_basis_bias", "random_bias"]:
         assert cfg.load_interpret_autoencoder is not None
-        if cfg.tied_ae:
-            AutoEncoder: Any
-            from autoencoders.tied_ae import AutoEncoder
-            
-            with open(cfg.load_interpret_autoencoder, "rb") as f:
-                if ".pkl" in cfg.load_interpret_autoencoder:
-                    autoencoder = pickle.load(f).to(cfg.device)
-                elif ".pt" in cfg.load_interpret_autoencoder:
-                    autoencoder = torch.load(f).to(cfg.device)
-        else:
-            from run import AutoEncoder
-            with open(cfg.load_interpret_autoencoder, "rb") as f:
-                if ".pkl" in cfg.load_interpret_autoencoder:
-                    autoencoder = pickle.load(f).to(cfg.device)
-                elif ".pt" in cfg.load_interpret_autoencoder:
-                    autoencoder = torch.load(f).to(cfg.device)
-   
+        autoencoder: LearnedDict = torch.load(cfg.load_interpret_autoencoder)
+        autoencoder.to_device(cfg.device)
+
     if cfg.activation_transform in ["feature_dict", "feature_no_bias"]:
-        feature_size = autoencoder.decoder.weight.shape[1]
+        feature_size: int = autoencoder.n_feats
     else:
         feature_size = activation_width
     
@@ -388,21 +308,20 @@ async def main(cfg: dotdict) -> None:
 
     point_name = "resid" if cfg.use_residual else "postnonlin"
     activations_name = f"{cfg.model_name.split('/')[-1]}_layer{cfg.layer}_{point_name}"
-    activation_fn_kwargs = {"device": cfg.device}
+
+    print(f"Using activation transform {cfg.activation_transform}")
     if cfg.activation_transform == "neuron_basis":
-        print("Using neuron basis activation transform")
+        activation_fn = lambda x: x
     elif cfg.activation_transform == "neuron_relu":
-        print("Using neuron relu activation transform")
+        activation_fn = torch.relu
     elif cfg.activation_transform == "neuron_basis_bias":
-        print("Using neuron basis bias activation transform")
-        if cfg.tied_ae:
-            activation_fn_kwargs.update({"bias": autoencoder.decoder.bias})
-            activation_fn_kwargs.update({"weight": autoencoder.decoder.weight})
-        else:
-            activation_fn_kwargs.update({"bias": autoencoder.encoder[0].bias})
-            activation_fn_kwargs.update({"weight": autoencoder.encoder[0].weight.t()})
+        bias = autoencoder.encoder_bias
+        if not cfg.tied_ae:
+            norms = torch.norm(autoencoder.encoder, 2, dim=-1)
+            bias = bias / norms
+        activation_fn = lambda x: torch.relu(x + bias)
+
     elif cfg.activation_transform == "ica":
-        print("Using ICA activation transform")
         ica_path = os.path.join("auto_interp_results", activations_name, "ica_1gb.pkl")
         if os.path.exists(ica_path):
             print("Loading ICA")
@@ -412,10 +331,9 @@ async def main(cfg: dotdict) -> None:
             os.makedirs(os.path.dirname(ica_path), exist_ok=True)
             pickle.dump(ica, open(ica_path, "wb"))
         
-        activation_fn_kwargs.update({"ica": ica})
+        activation_fn = lambda x: torch.tensor(ica.transform(x.cpu()))
 
     elif cfg.activation_transform == "pca":
-        print("Using PCA activation transform")
         pca_path = os.path.join("auto_interp_results", activations_name, "pca_1gb.pkl")
         if os.path.exists(pca_path):
             print("Loading PCA")
@@ -424,10 +342,10 @@ async def main(cfg: dotdict) -> None:
             pca = activation_PCA(activation_dataset, n_activations)
             os.makedirs(os.path.dirname(pca_path), exist_ok=True)
             pickle.dump(pca, open(pca_path, "wb"))
-        activation_fn_kwargs.update({"pca": pca})
+        
+        activation_fn = lambda x: torch.tensor(pca.transform(x.cpu()))
 
     elif cfg.activation_transform == "nmf":
-        print("Using NMF activation transform")
         nmf_path = os.path.join("auto_interp_results", activations_name, "nmf_1gb.pkl")
         if os.path.exists(nmf_path):
             print("Loading NMF")
@@ -436,24 +354,16 @@ async def main(cfg: dotdict) -> None:
             nmf = activation_NMF(activation_dataset, n_activations)
             os.makedirs(os.path.dirname(nmf_path), exist_ok=True)
             pickle.dump(nmf, open(nmf_path, "wb"))
-        activation_fn_kwargs.update({"nmf": nmf})
+
+        activation_fn = lambda x: torch.tensor(nmf.transform(x.cpu()))
 
     elif cfg.activation_transform == "feature_dict":
-        print("Using feature dict activation transform")
-        activation_fn_kwargs.update({"autoencoder": autoencoder})
+        activation_fn = autoencoder.encode
 
     elif cfg.activation_transform == "feature_no_bias":
-        print("Using feature dict without bias")
-        if cfg.tied_ae:
-            activation_fn_kwargs.update({"feature_matrix": autoencoder.decoder.weight})
-        else:
-            if cfg.use_decoder:
-                activation_fn_kwargs.update({"feature_matrix": autoencoder.decoder.weight})
-            else:
-                activation_fn_kwargs.update({"feature_matrix": autoencoder.encoder[0].weight.t()})
+        activation_fn = partial(autoencoder.encode, bias=False)
         
     elif cfg.activation_transform == "random":
-        print("Using random activation transform")
         random_path = os.path.join("auto_interp_results", activations_name, "random_dirs.pkl")
         if os.path.exists(random_path):
             print("Loading random directions")
@@ -464,9 +374,9 @@ async def main(cfg: dotdict) -> None:
             os.makedirs(os.path.dirname(random_path), exist_ok=True)
             pickle.dump(random_direction_matrix, open(random_path, "wb"))
         
-        activation_fn_kwargs.update({"random_matrix": random_direction_matrix})
+        activation_fn = lambda x: torch.relu(x @ random_direction_matrix.to(cfg.device))
+
     elif cfg.activation_transform == "random_bias":
-        print("Using random activation transform")
         random_path = os.path.join("auto_interp_results", activations_name, "random_dirs.pkl")
         if os.path.exists(random_path):
             print("Loading random directions")
@@ -476,20 +386,18 @@ async def main(cfg: dotdict) -> None:
             os.makedirs(os.path.dirname(random_path), exist_ok=True)
             pickle.dump(random_direction_matrix, open(random_path, "wb"))
         
-        activation_fn_kwargs.update({"random_matrix": random_direction_matrix})
+        bias = autoencoder.encoder_bias
+        if not cfg.tied_ae:
+            norms = torch.norm(autoencoder.encoder, 2, dim=-1)
+            bias = bias / norms
 
-        if cfg.tied_ae:
-            activation_fn_kwargs.update({"bias": autoencoder.decoder.bias})
-            activation_fn_kwargs.update({"weight": autoencoder.decoder.weight})
-        else:
-            activation_fn_kwargs.update({"bias": autoencoder.encoder[0].bias})
-            activation_fn_kwargs.update({"weight": autoencoder.encoder[0].weight.t()})
+        activation_fn = lambda x: torch.relu(x @ random_direction_matrix.to(cfg.device) + bias)
 
     else:
         raise ValueError(f"Activation transform {cfg.activation_transform} not recognised")
 
     if cfg.activation_transform == "feature_dict":
-        transform_name = cfg.load_interpret_autoencoder.split("/")[-1][:-4]
+        transform_name = cfg.load_interpret_autoencoder.split("/")[-1][:-3]
     else:
         transform_name = cfg.activation_transform
 
@@ -508,11 +416,11 @@ async def main(cfg: dotdict) -> None:
             model,
             layer=cfg.layer,
             use_residual=cfg.use_residual,
-            activation_fn_name=cfg.activation_transform,
-            activation_fn_kwargs=activation_fn_kwargs,
+            activation_fn=activation_fn,
             activation_dim=feature_size,
             device=cfg.device,
             use_baukit=use_baukit,
+            max_features=cfg.df_n_feats if cfg.df_n_feats else None,
         )
         # save the dataset, saving each column separately so that we can retrive just the columns we want later
         print(f"Saving dataset to {df_loc}")
@@ -536,6 +444,10 @@ async def main(cfg: dotdict) -> None:
 
         activation_col_names = [f"feature_{feat_n}_activation_{i}" for i in range(OPENAI_FRAGMENT_LEN)]
         read_fields = ["fragment_token_strs", f"feature_{feat_n}_mean", f"feature_{feat_n}_max", *activation_col_names]
+        # check that the dataset has the required columns
+        if not all([field in base_df.columns for field in read_fields]):
+            print(f"Dataset does not have all required columns for feature {feat_n}, skipping")
+            continue
         df = base_df[read_fields].copy()
         if cfg.sort_mode == "mean":
             sorted_df = df.sort_values(by=f"feature_{feat_n}_mean", ascending=False)
@@ -579,7 +491,7 @@ async def main(cfg: dotdict) -> None:
         explainer = TokenActivationPairExplainer(
             model_name=EXPLAINER_MODEL_NAME,
             prompt_format=PromptFormat.HARMONY_V4,
-            max_concurrent=1,
+            max_concurrent=MAX_CONCURRENT,
         )
         explanations = await explainer.generate_explanations(
             all_activation_records=train_activation_records,
@@ -596,12 +508,11 @@ async def main(cfg: dotdict) -> None:
             ExplanationNeuronSimulator(
                 SIMULATOR_MODEL_NAME,
                 explanation,
-                max_concurrent=1,
+                max_concurrent=MAX_CONCURRENT,
                 prompt_format=format,
             )
         )
         scored_simulation = await simulate_and_score(simulator, valid_activation_records)
-
         score = scored_simulation.get_preferred_score()
         assert len(scored_simulation.scored_sequence_simulations) == 10
         top_only_score = aggregate_scored_sequence_simulations(scored_simulation.scored_sequence_simulations[:5]).get_preferred_score()
@@ -618,52 +529,10 @@ async def main(cfg: dotdict) -> None:
             f.write(f"{explanation}\nScore: {score:.2f}\nExplainer model: {EXPLAINER_MODEL_NAME}\nSimulator model: {SIMULATOR_MODEL_NAME}\n")
             f.write(f"Top only score: {top_only_score:.2f}\n")
             f.write(f"Random only score: {random_only_score:.2f}\n")
-        
+                
     
     if cfg.upload_to_aws:
         upload_to_aws(transform_folder)
-
-
-async def run_openai_example():
-    neuron_record = load_neuron(9, 10)
-
-    # Grab the activation records we'll need.
-    slice_params = ActivationRecordSliceParams(n_examples_per_split=5)
-    train_activation_records = neuron_record.train_activation_records(
-        activation_record_slice_params=slice_params
-    )
-    valid_activation_records = neuron_record.valid_activation_records(
-        activation_record_slice_params=slice_params
-    )
-
-    # Generate an explanation for the neuron.
-    explainer = TokenActivationPairExplainer(
-        model_name=EXPLAINER_MODEL_NAME,
-        prompt_format=PromptFormat.HARMONY_V4,
-        max_concurrent=1,
-    )
-    explanations = await explainer.generate_explanations(
-        all_activation_records=train_activation_records,
-        max_activation=calculate_max_activation(train_activation_records),
-        num_samples=1,
-    )
-    assert len(explanations) == 1
-    explanation = explanations[0]
-    print(f"{explanation=}")
-
-    # Simulate and score the explanation.
-    format = PromptFormat.HARMONY_V4 if SIMULATOR_MODEL_NAME == "gpt-3.5-turbo" else PromptFormat.INSTRUCTION_FOLLOWING
-    simulator = UncalibratedNeuronSimulator(
-        ExplanationNeuronSimulator(
-            SIMULATOR_MODEL_NAME,
-            explanation,
-            max_concurrent=1,
-            prompt_format=format, # INSTRUCTIONFOLLIWING
-        )
-    )
-    scored_simulation = await simulate_and_score(simulator, valid_activation_records)
-    print(f"score={scored_simulation.get_preferred_score():.2f}")
-
 
 def get_score(lines: List[str], mode: str):
     if mode == "top":
@@ -676,20 +545,58 @@ def get_score(lines: List[str], mode: str):
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
-def read_results(activation_name: str, score_mode: str, exclude_mean: bool = True) -> None:
-    results_folder = os.path.join("auto_interp_results", activation_name)
+def run_folder(cfg: dotdict):
+    base_folder = cfg.load_interpret_autoencoder
+    all_encoders = os.listdir(cfg.load_interpret_autoencoder)
+    all_encoders = [x for x in all_encoders if (x.endswith(".pt") or x.endswith(".pkl"))]
+    print(f"Found {len(all_encoders)} encoders in {cfg.load_interpret_autoencoder}")
+    for i, encoder in enumerate(all_encoders):
+        print(f"Running encoder {i} of {len(all_encoders)}: {encoder}")
+        cfg.load_interpret_autoencoder = os.path.join(base_folder, encoder)
+        asyncio.run(main(cfg))
+    
+
+def make_tag_name(hparams: Dict) -> str:
+    tag = ""
+    if "tied" in hparams.keys():
+        tag += f"tied_{hparams['tied']}"
+    if "dict_size" in hparams.keys():
+        tag += f"dict_size_{hparams['dict_size']}"
+    if "l1_alpha" in hparams.keys():
+        tag += f"l1_alpha_{hparams['l1_alpha']:.2}"
+    if "bias_decay" in hparams.keys():
+        tag += "0.0" if hparams["bias_decay"] == 0 else f"{hparams['bias_decay']:.1}"
+    return tag
+
+
+def run_from_grouped(cfg: dotdict, results_loc: str):
+    """
+    Run autointerpretation across a file of learned dicts as outputted by big_sweep.py or similar.
+    Expects results_loc to a .pt file containing a list of tuples of (learned_dict, hparams_dict)
+    """
+    # First, read in the results file
+    results = torch.load(results_loc)
+    time_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    os.makedirs(os.path.join("auto_interp_results", time_str), exist_ok=True)
+    # Now split the results out into separate files 
+    for learned_dict, hparams_dict in results:
+        filename = make_tag_name(hparams_dict) + ".pt"
+        torch.save(learned_dict, os.path.join("auto_interp_results", time_str, filename))
+    
+    cfg.load_interpret_autoencoder = os.path.join("auto_interp_results", time_str)
+    run_folder(cfg)
+
+def read_scores(results_folder: str, score_mode: str = "top") -> Dict[str, Tuple[List[int], List[float]]]:
+    scores: Dict[str, Tuple[List[int], List[float]]] = {}
     transforms = os.listdir(results_folder)
     transforms = [transform for transform in transforms if os.path.isdir(os.path.join(results_folder, transform))]
-    scores: Dict[str, List[float]] = {}
-    plt.clf() # clear the plot
-
     if "sparse_coding" in transforms:
         transforms.remove("sparse_coding")
         transforms = ["sparse_coding"] + transforms
-    
   
     for transform in transforms:
-        scores[transform] = []
+        transform_scores = []
+        transform_ndxs = []
         # list all the features by looking for folders
         feat_folders = [x for x in os.listdir(os.path.join(results_folder, transform)) if x.startswith("feature_")]
         print(f"{transform=}, {len(feat_folders)=}")
@@ -705,12 +612,21 @@ def read_results(activation_name: str, score_mode: str, exclude_mean: bool = Tru
             score = get_score(lines, score_mode)
 
             print(f"{feature_ndx=}, {transform=}, {score=}")
-            scores[transform].append(score)
+            transform_scores.append(score)
+            transform_ndxs.append(feature_ndx)
         
-        # if no scores, add a 0 so it shows up and doesn't cause errors
-        if len(scores[transform]) == 0:
-            scores[transform].append(0)
-                
+        scores[transform] = (transform_ndxs, transform_scores)
+        
+    return scores
+
+
+def read_results(activation_name: str, score_mode: str, exclude_mean: bool = True) -> None:
+    results_folder = os.path.join("auto_interp_results", activation_name)
+
+    scores = read_scores(results_folder, score_mode) # Dict[str, Tuple[List[int], List[float]]], where the tuple is (feature_ndxs, scores)
+    transforms = scores.keys()
+
+    plt.clf() # clear the plot                
     
     # plot the scores as a violin plot
     colors = ["red", "blue", "green", "orange", "purple", "pink", "black", "brown", "cyan", "magenta", "grey"]
@@ -721,7 +637,7 @@ def read_results(activation_name: str, score_mode: str, exclude_mean: bool = Tru
     plt.yticks(np.arange(-0.2, 0.6, 0.1))
     plt.grid(axis="y", color="grey", linestyle="-", linewidth=0.5, alpha=0.3)
     # first we need to get the scores into a list of lists
-    scores_list = [scores[transform] for transform in transforms]
+    scores_list = [scores[transform][1] for transform in transforms]
     violin_parts = plt.violinplot(scores_list, showmeans=False, showextrema=False)
     for i, pc in enumerate(violin_parts['bodies']):
         pc.set_facecolor(colors[i % len(colors)])
@@ -732,9 +648,9 @@ def read_results(activation_name: str, score_mode: str, exclude_mean: bool = Tru
     plt.xticks(np.arange(1, len(transforms) + 1), transforms, rotation=90)
 
     # add standard errors around the means but don't plot the means
-    cis = [1.96 * np.std(scores[transform]) / np.sqrt(len(scores[transform])) for transform in transforms]
+    cis = [1.96 * np.std(scores[transform][1]) / np.sqrt(len(scores[transform][1])) for transform in transforms]
     for i, transform in enumerate(transforms):
-        plt.errorbar(i+1, np.mean(scores[transform]), yerr=cis[i], fmt="o", color=colors[i % len(colors)], elinewidth=2, capsize=20)
+        plt.errorbar(i+1, np.mean(scores[transform][1]), yerr=cis[i], fmt="o", color=colors[i % len(colors)], elinewidth=2, capsize=20)
 
     plt.title(f"{activation_name} {score_mode}")
     plt.xlabel("Transform")
@@ -753,9 +669,7 @@ def read_results(activation_name: str, score_mode: str, exclude_mean: bool = Tru
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "openai":
-        asyncio.run(run_openai_example())
-    elif len(sys.argv) > 1 and sys.argv[1] == "read_results":
+    if len(sys.argv) > 1 and sys.argv[1] == "read_results":
         # parse --layer and --model_name from command line using custom parser
         argparser = argparse.ArgumentParser()
         argparser.add_argument("--layer", type=int, default=1)
@@ -780,20 +694,17 @@ if __name__ == "__main__":
         for activation_name in activation_names:
             for score_mode in score_modes:
                 read_results(activation_name, score_mode, cfg.exclude_mean)
-
+            
+    elif len(sys.argv) > 1 and sys.argv[1] == "run_group":
+        sys.argv.pop(1)
+        default_cfg = parse_args()
+        run_from_grouped(default_cfg, default_cfg.load_interpret_autoencoder)
 
     else:
         default_cfg = parse_args()
         default_cfg.chunk_size_gb = 10
         if os.path.isdir(default_cfg.load_interpret_autoencoder):
-            base_folder = default_cfg.load_interpret_autoencoder
-            all_encoders = os.listdir(default_cfg.load_interpret_autoencoder)
-            all_encoders = [x for x in all_encoders if (x.endswith(".pt") or x.endswith(".pkl"))]
-            print(f"Found {len(all_encoders)} encoders in {default_cfg.load_interpret_autoencoder}")
-            for i, encoder in enumerate(all_encoders):
-                print(f"Running encoder {i} of {len(all_encoders)}: {encoder}")
-                default_cfg.load_interpret_autoencoder = os.path.join(base_folder, encoder)
-                asyncio.run(main(default_cfg))
+            run_folder(default_cfg)
 
         else:
             asyncio.run(main(default_cfg))
