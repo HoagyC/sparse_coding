@@ -279,7 +279,7 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
 
     ground_truth_features = data_generator.feats
     # Train the model
-    optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.learning_rate)
+    optimizer = optim.Adam(auto_encoder.parameters(), lr=cfg.lr)
 
     # Hold a running average of the reconstruction loss
     running_recon_loss = 0.0
