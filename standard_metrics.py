@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import pickle
-from typing import List, Tuple, Union, Optional
+from typing import List, Tuple, Union, Optional, Dict, Any
 
 from datasets import load_dataset
 import matplotlib.pyplot as plt
@@ -41,7 +41,7 @@ MAX_CONCURRENT = 5
 REPLACEMENT_CHAR = "�"
 TRUE_THRESHOLD = 2
 
-_batch_size, _activation_size, _n_dict_components, _fragment_len, _n_sentences = None, None, None, None, None
+_batch_size, _activation_size, _n_dict_components, _fragment_len, _n_sentences, _n_dicts = None, None, None, None, None, None
 
 async def get_synthetic_dataset(
         explanation: str, 
@@ -197,11 +197,26 @@ def measure_concept_erasure(
     # not sure what summary to use here?
     return 1 - (auroc_ablated - 0.5) / (auroc_true - 0.5), auroc_true, auroc_ablated
 
-def mcs_duplicates(ground: LearnedDict, model: LearnedDict):
+def mcs_duplicates(ground: LearnedDict, model: LearnedDict) -> TensorType["_n_dict_components"]:
     # get max cosine sim between each model atom and all ground atoms
     cosine_sim = torch.einsum("md,gd->mg", model.get_learned_dict(), ground.get_learned_dict())
     max_cosine_sim = cosine_sim.max(dim=-1).values
     return max_cosine_sim
+
+def mmcs(model: LearnedDict, model2: LearnedDict) -> float:
+    return mcs_duplicates(model, model2).mean().item()
+
+def mmcs_from_list(ld_list: List[LearnedDict]) -> TensorType["_n_dicts", "_n_dicts"]:
+    """
+    Returns a lower triangular matrix of mmcs between all pairs of dicts in the list.
+    """
+    n_dicts = len(ld_list)
+    mmcs_t = torch.eye(n_dicts)
+    for i in range(n_dicts):
+        for j in range(i):
+            mmcs_t[i, j] = mmcs(ld_list[i], ld_list[j])
+            mmcs_t[j, i] = mmcs_t[i, j]
+    return mmcs_t
 
 def mean_nonzero_activations(model: LearnedDict, batch: TensorType["_batch_size", "_activation_size"]):
     c = model.encode(batch)
@@ -215,6 +230,13 @@ def fraction_variance_unexplained(model: LearnedDict, batch: TensorType["_batch_
 
 def r_squared(model: LearnedDict, batch: TensorType["_batch_size", "_activation_size"]):
     return 1.0 - fraction_variance_unexplained(model, batch)
+
+def neurons_per_feature(model: LearnedDict) -> float:
+    """ Gets the average numbrer of neurons attended to per learned feature, as measured by the Simpson diversity index."""
+    c: TensorType["_n_dict_components", "_activation_size"] = model.get_learned_dict()
+    c = c / c.abs().sum(dim=-1, keepdim=True)
+    c = c.pow(2).sum(dim=-1)
+    return (1.0 / c).mean()
 
 def plot_hist(scores: TensorType["_n_dict_components"], x_label, y_label, **kwargs):
     fig = plt.figure()
@@ -246,6 +268,38 @@ def plot_scatter(scores_x: TensorType["_n_dict_components"], scores_y: TensorTyp
 
     return Image.fromarray(data, mode="RGB")
 
+def calc_feature_n_active(batch):
+    # batch: [batch_size, n_features]
+    n_active = torch.sum(batch != 0, dim=0)
+    return n_active
+
+def calc_feature_mean(batch):
+    # batch: [batch_size, n_features]
+    mean = torch.mean(batch, dim=0)
+    return mean
+
+def calc_feature_variance(batch):
+    # batch: [batch_size, n_features]
+    variance = torch.var(batch, dim=0)
+    return variance
+
+# weird asymmetric kurtosis/skew with center at 0
+def calc_feature_skew(batch):
+    # batch: [batch_size, n_features]
+    variance = torch.var(batch, dim=0)
+    asymm_skew = torch.mean(batch**3, dim=0) / torch.clamp(variance**1.5, min=1e-8)
+
+    return asymm_skew
+
+def calc_feature_kurtosis(batch):
+    # batch: [batch_size, n_features]
+    variance = torch.var(batch, dim=0)
+    asymm_kurtosis = torch.mean(batch**4, dim=0) / torch.clamp(variance**2, min=1e-8)
+
+    return asymm_kurtosis
+
+ 
+
 def plot_grid(scores: np.ndarray, first_tick_labels, second_tick_labels, first_label, second_label, **kwargs):
     fig = plt.figure()
     ax = fig.add_subplot(111)
@@ -275,9 +329,8 @@ def process_scored_simulation(simulation: ScoredSimulation, tokenizer: HookedTra
         assert len(tokens[i]) == len(sim_activations[i]) 
     return token_strs, sim_activations, tokens
 
-if __name__ == "__main__":
+def measure_ablation_score():    
     from argparser import parse_args
-    
     cfg = parse_args()
 
     cfg.layer = 1
@@ -345,3 +398,20 @@ if __name__ == "__main__":
     # r_sq = fraction_variance_unexplained(model, activations.reshape(-1, activations.shape[-1])).item()
 
     print(erasure_score, true, ablated)
+
+if __name__ == "__main__":
+    ld_loc = "output_hoagy_dense_sweep_tied_resid_l2_r4/_38/learned_dicts.pt"
+    learned_dicts: List[Tuple[LearnedDict, Dict[str, Any]]] = torch.load(ld_loc)
+    activations_loc = "pilechunks_l2_resid/0.pt"
+    activations = torch.load(activations_loc).to(torch.float32)
+
+    for learned_dict, hparams in learned_dicts:
+        feat_activations = learned_dict.encode(activations)
+        means = calc_feature_mean(activations)
+
+
+
+    # for learned_dict, hparams in learned_dicts:
+    #     neurons_per_feat = neurons_per_feature(learned_dict)
+    #     l1_value = hparams["l1_alpha"]
+    #     print(f"l1: {l1_value}, neurons per feat: {neurons_per_feat}")
