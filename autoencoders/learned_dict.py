@@ -80,3 +80,43 @@ class TiedSAE(LearnedDict):
         c = c + self.encoder_bias
         c = torch.clamp(c, min=0.0)
         return c
+    
+class ReverseSAE(LearnedDict):
+    """This is the same as a tied SAE, but we reverse the bias if the feature activation is non-zero before the decoder matrix"""
+    def __init__(self, encoder, encoder_bias, norm_encoder=False):
+        self.encoder = encoder
+        self.encoder_bias = encoder_bias
+        self.norm_encoder = norm_encoder
+        self.n_feats, self.activation_size = self.encoder.shape
+
+    def get_learned_dict(self):
+        norms = torch.norm(self.encoder, 2, dim=-1)
+        return self.encoder / torch.clamp(norms, 1e-8)[:, None]
+
+    def to_device(self, device):
+        self.encoder = self.encoder.to(device)
+        self.encoder_bias = self.encoder_bias.to(device)
+    
+    def encode(self, batch):
+        if self.norm_encoder:
+            norms = torch.norm(self.encoder, 2, dim=-1)
+            encoder = self.encoder / torch.clamp(norms, 1e-8)[:, None]
+        else:
+            encoder = self.encoder
+
+        c = torch.einsum("nd,bd->bn", encoder, batch)
+        c = c + self.encoder_bias
+        c = torch.clamp(c, min=0.0)
+        return c
+
+    def decode(self, c):
+        if self.norm_encoder:
+            norms = torch.norm(self.encoder, 2, dim=-1)
+            encoder = self.encoder / torch.clamp(norms, 1e-8)[:, None]
+        else:
+            encoder = self.encoder
+        
+        feat_is_on = c > 0.0
+        c[feat_is_on] = c[feat_is_on] - self.encoder_bias.repeat(c.shape[0], 1)[feat_is_on]
+        x_hat = torch.einsum("dn,bn->bd", encoder, c)
+        return x_hat

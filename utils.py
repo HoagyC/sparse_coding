@@ -147,7 +147,7 @@ def upload_to_aws(local_file_name) -> bool:
     except FileNotFoundError:
         print(f"File {local_file_name} was not found")
         return False
-    except NoCredentialsError:
+    except NoCredentialsError: # mypy: ignore, not sure why it doesn't think it's a valid exception class
         print("Credentials not available")
         return False
     
