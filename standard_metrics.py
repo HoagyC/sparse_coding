@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 import matplotlib
 import numpy as np
 from PIL import Image
+from sklearn.cluster import KMeans
+from sklearn.manifold import TSNE
 import torch
 from torchtyping import TensorType
 
@@ -328,6 +330,42 @@ def process_scored_simulation(simulation: ScoredSimulation, tokenizer: HookedTra
     for i in range(len(tokens)):
         assert len(tokens[i]) == len(sim_activations[i]) 
     return token_strs, sim_activations, tokens
+
+
+def cluster_vectors(model: LearnedDict, n_clusters: int = 1000, top_clusters: int = 10, save_loc: str = "outputs/top_clusters.txt"):
+    # take the direction vectors and cluster them
+    # get the direction vectors
+    direction_vectors: TensorType["_n_dict_components", "_activation_size"] = model.get_learned_dict()
+
+    # first apply t-SNE to reduce dimensionality
+    tsne = TSNE(n_components=2, random_state=0)
+    direction_vectors_tsne = tsne.fit_transform(direction_vectors)
+
+    # now we're going to cluster the direction vectors
+    # first, we'll try k-means
+    print("Clustering vectors using kmeans")
+    kmeans = KMeans(n_clusters=n_clusters, random_state=0).fit(direction_vectors_tsne)
+    # now get the clusters which have the most points in them and get the ids of the points in those clusters
+    cluster_ids, cluster_counts = np.unique(kmeans.labels_, return_counts=True)
+    cluster_ids = cluster_ids[np.argsort(cluster_counts)[::-1]]
+    cluster_counts = cluster_counts[np.argsort(cluster_counts)[::-1]]   
+    # now get the ids of the points in the top 10 clusters
+    top_cluster_ids = cluster_ids[:top_clusters]
+    top_cluster_points = []
+    for cluster_id in top_cluster_ids:
+        top_cluster_points.append(np.where(kmeans.labels_ == cluster_id)[0])
+
+    # save clusters as separate lines on a text file
+    with open(save_loc, "w") as f:
+        for cluster in top_cluster_points:
+            f.write(f"{list(cluster)}\n")
+
+    # now want to take a selection of points, and find the nearest neighbours to them
+    # first, take a random selection of points
+    # n_points = 10
+    # random_points = np.random.choice(direction_vectors_tsne.shape[0], n_points, replace=False)
+    # # now find the nearest neighbours to these points
+    # nbrs = NearestNeighbors(n_neighbors=5, algorithm='ball_tree').fit(direction_vectors_tsne)
 
 def measure_ablation_score():    
     from argparser import parse_args
