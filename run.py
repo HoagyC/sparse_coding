@@ -757,7 +757,19 @@ def run_real_data_model(cfg: dotdict):
 
     if len(os.listdir(cfg.dataset_folder)) == 0:
         print(f"Activations in {cfg.dataset_folder} do not exist, creating them")
-        n_lines = setup_data(cfg, tokenizer, model, use_baukit=use_baukit)
+        n_lines = setup_data(
+            tokenizer, 
+            model,
+            model_name=cfg.model_name,
+            activation_width=cfg.activation_width,
+            dataset_name=cfg.dataset_name,
+            dataset_folder=cfg.dataset_folder,
+            layer=cfg.layer,
+            use_residual=cfg.use_residual,
+            use_baukit=cfg.use_baukit,
+            n_chunks=cfg.n_chunks,
+            device=cfg.device
+        )
     else:
         print(f"Activations in {cfg.dataset_folder} already exist, loading them")
         # get activation_dim from first file
@@ -902,8 +914,20 @@ def run_real_data_model(cfg: dotdict):
         if cfg.refresh_data:
             print("Remaking dataset")
             os.system(f"rm -rf {cfg.dataset_folder}/*") # delete the old dataset
-            n_new_lines = setup_data(cfg, tokenizer, model, use_baukit, start_line=n_lines)
-            n_lines += n_new_lines
+            n_new_lines = setup_data(
+                tokenizer, 
+                model, 
+                model_name=cfg.model_name,
+                activation_width=cfg.activation_width,
+                dataset_name=cfg.dataset_name,
+                dataset_folder=cfg.dataset_folder,
+                layer=cfg.layer,
+                use_residual=cfg.use_residual,
+                use_baukit=cfg.use_baukit,
+                n_chunks=cfg.n_chunks,
+                device=cfg.device,
+                start_line=n_lines
+            )
 
 
     # clamp dead_features to 0-100 for better visualisation

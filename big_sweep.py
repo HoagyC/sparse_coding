@@ -235,7 +235,19 @@ def init_model_dataset(cfg):
     if len(os.listdir(cfg.dataset_folder)) == 0:
         print(f"Activations in {cfg.dataset_folder} do not exist, creating them")
         transformer, tokenizer = get_model(cfg)
-        setup_data(cfg, tokenizer, transformer)
+        setup_data(
+            tokenizer,
+            transformer,
+            model_name=cfg.model_name,
+            activation_width=cfg.activation_width,
+            dataset_name=cfg.dataset_name,
+            dataset_folder=cfg.dataset_folder,
+            layer=cfg.layer,
+            use_residual=cfg.use_residual,
+            use_baukit=cfg.use_baukit,
+            n_chunks=cfg.n_chunks,
+            device=cfg.device
+        )
         del transformer, tokenizer
     else:
         print(f"Activations in {cfg.dataset_folder} already exist, loading them")

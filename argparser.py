@@ -9,12 +9,9 @@ def parse_args() -> dotdict:
     parser.add_argument("--wandb_images", type=str, default=False)
     parser.add_argument("--n_ground_truth_components", type=int, default=512)
     parser.add_argument("--learned_dict_ratio", type=float, default=1.0)
-    parser.add_argument("--max_length", type=int, default=256)  # when tokenizing, truncate to this length, basically the context size
     parser.add_argument("--load_autoencoders", type=str, default="")
     parser.add_argument("--activation_dim", type=int, default=256)
-    parser.add_argument("--chunk_size_gb", type=float, default=2)
 
-    parser.add_argument("--model_batch_size", type=int, default=4)
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--noise_std", type=float, default=0.1)
     parser.add_argument("--l1_alpha", type=float, default=0.1)

@@ -14,26 +14,12 @@ from autoencoders.semilinear_autoencoder import SemiLinearSAE
 from autoencoders.residual_denoising_autoencoder import FunctionalLISTADenoisingSAE, FunctionalLISTASAE
 from autoencoders.direct_coef_search import DirectCoefOptimizer
 
-from activation_dataset import setup_data
-from utils import dotdict, make_tensor_name
 from argparser import parse_args
 
 import numpy as np
-from itertools import product, chain
 
-from transformer_lens import HookedTransformer
-
-import wandb
-import datetime
-import pickle
-import json
-import os
 import shutil
-
-import standard_metrics
-from autoencoders.learned_dict import LearnedDict, UntiedSAE, TiedSAE
-
-from optimizers import adam as adam_grouped
+from itertools import product
 
 from big_sweep import sweep
 

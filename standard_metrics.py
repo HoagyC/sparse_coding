@@ -31,6 +31,7 @@ from neuron_explainer.activations.activations import ActivationRecord
 from autoencoders.learned_dict import LearnedDict
 
 import utils
+from activation_dataset import setup_data
 
 from sklearn.linear_model import LogisticRegression, Ridge, RidgeClassifier
 from sklearn import metrics
@@ -367,7 +368,7 @@ def cluster_vectors(model: LearnedDict, n_clusters: int = 1000, top_clusters: in
     # # now find the nearest neighbours to these points
     # nbrs = NearestNeighbors(n_neighbors=5, algorithm='ball_tree').fit(direction_vectors_tsne)
 
-def measure_ablation_score():    
+def measure_ablation_score() -> None:    
     from argparser import parse_args
     cfg = parse_args()
 
@@ -437,15 +438,40 @@ def measure_ablation_score():
 
     print(erasure_score, true, ablated)
 
-if __name__ == "__main__":
-    ld_loc = "output_hoagy_dense_sweep_tied_resid_l2_r4/_38/learned_dicts.pt"
-    learned_dicts: List[Tuple[LearnedDict, Dict[str, Any]]] = torch.load(ld_loc)
-    activations_loc = "pilechunks_l2_resid/0.pt"
-    activations = torch.load(activations_loc).to(torch.float32)
+def make_one_chunk_per_layer() -> None:
+    device = torch.device("cuda:1")
+    model_name = "EleutherAI/pythia-70m-deduped"
+    model = HookedTransformer.from_pretrained(model_name, device=device)
+    tokenizer = model.tokenizer
 
-    for learned_dict, hparams in learned_dicts:
-        feat_activations = learned_dict.encode(activations)
-        means = calc_feature_mean(activations)
+    for use_residual in [False, True]:
+        activation_width = 512 if use_residual else 2048
+        for layer in range(6):
+            setup_data(
+                tokenizer,
+                model,
+                model_name=model_name,
+                activation_width=activation_width,
+                dataset_name="EleutherAI/pile",
+                dataset_folder=f"single_chunks/l{layer}_{'resid' if use_residual else 'mlp'}",
+                layer=layer,
+                use_residual=use_residual,
+                use_baukit=False,
+                n_chunks=1,
+                device=device,
+            )
+
+if __name__ == "__main__":
+    make_one_chunk_per_layer()
+
+    # ld_loc = "output_hoagy_dense_sweep_tied_resid_l2_r4/_38/learned_dicts.pt"
+    # learned_dicts: List[Tuple[LearnedDict, Dict[str, Any]]] = torch.load(ld_loc)
+    # activations_loc = "pilechunks_l2_resid/0.pt"
+    # activations = torch.load(activations_loc).to(torch.float32)
+
+    # for learned_dict, hparams in learned_dicts:
+    #     feat_activations = learned_dict.encode(activations)
+    #     means = calc_feature_mean(activations)
 
 
 

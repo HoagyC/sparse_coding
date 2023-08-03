@@ -94,7 +94,19 @@ def make_activation_dataset(cfg, model, activation_dim: int,  total_activation_s
     if not os.path.exists(cfg.dataset_folder) or len(os.listdir(cfg.dataset_folder)) == 0:
         cfg.n_chunks = 1
         cfg.activation_dim = activation_dim
-        setup_data(cfg, tokenizer, model, use_baukit=True)
+        setup_data(
+            tokenizer, 
+            model,
+            model_name=cfg.model_name,
+            activation_width=cfg.activation_width,
+            dataset_name=cfg.dataset_name,
+            dataset_folder=cfg.dataset_folder,
+            layer=cfg.layer,
+            use_residual=cfg.use_residual,
+            use_baukit=cfg.use_baukit,
+            n_chunks=cfg.n_chunks,
+            device=cfg.device
+        )
     chunk_loc = os.path.join(cfg.dataset_folder, f"0.pkl")
 
     elem_size = 4

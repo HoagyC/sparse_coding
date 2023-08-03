@@ -32,6 +32,10 @@ from utils import *
 
 T = TypeVar("T", bound=Union[Dataset, DatasetDict])
 
+MODEL_BATCH_SIZE = 4
+CHUNK_SIZE_GB = 2.0
+MAX_SENTENCE_LEN = 256
+
 def read_from_pile(address: str, max_lines: int = 100_000, start_line: int = 0):
     """Reads a file from the Pile dataset. Returns a generator."""
     
@@ -179,58 +183,97 @@ def get_columns_all_equal(dataset: Union[Dataset, DatasetDict]) -> List[str]:
 
 # End Nora's Code from https://github.com/AlignmentResearch/tuned-lens/blob/main/tuned_lens/data.py
 
-def make_activation_dataset(cfg, sentence_dataset: DataLoader, model: HookedTransformer, tensor_name: str, baukit: bool = False, chunk_size_gb: int = 2) -> pd.DataFrame:
-    print(f"Running model and saving activations to {cfg.dataset_folder}")
+def make_activation_dataset(
+        sentence_dataset: DataLoader, 
+        model: HookedTransformer, 
+        tensor_name: str, 
+        activation_width: int,
+        dataset_folder: str,
+        baukit: bool = False, 
+        chunk_size_gb: float = 2, 
+        device: torch.device = torch.device("cuda:0"), 
+        layer: int = 2,
+        n_chunks: int = 1,
+        max_length: int = 256,
+        model_batch_size: int = 4
+        ) -> pd.DataFrame:
+    print(f"Running model and saving activations to {dataset_folder}")
     with torch.no_grad():
         chunk_size = chunk_size_gb * (2**30)  # 2GB
-        activation_size = cfg.activation_width * 2 * cfg.model_batch_size * cfg.max_length  # 3072 mlp activations, 2 bytes per half, 1024 context window
+        activation_size = activation_width * 2 * model_batch_size * max_length  # 3072 mlp activations, 2 bytes per half, 1024 context window
         max_chunks = chunk_size // activation_size
         dataset = []
         n_saved_chunks = 0
         for batch_idx, batch in tqdm(enumerate(sentence_dataset)):
-            batch = batch["input_ids"].to(cfg.device)
+            batch = batch["input_ids"].to(device)
             if baukit:
                 # Don't have nanoGPT models integrated with transformer_lens so using baukit for activations
                 with Trace(model, tensor_name) as ret:
                     _ = model(batch)
                     mlp_activation_data = ret.output
-                    mlp_activation_data = rearrange(mlp_activation_data, "b s n -> (b s) n").to(torch.float16).to(cfg.device)
+                    mlp_activation_data = rearrange(mlp_activation_data, "b s n -> (b s) n").to(torch.float16).to(device)
                     mlp_activation_data = nn.functional.gelu(mlp_activation_data)
             else:
-                _, cache = model.run_with_cache(batch, stop_at_layer=cfg.layer+1)
-                mlp_activation_data = cache[tensor_name].to(cfg.device).to(torch.float16)  # NOTE: could do all layers at once, but currently just doing 1 layer
+                _, cache = model.run_with_cache(batch, stop_at_layer=layer+1)
+                mlp_activation_data = cache[tensor_name].to(device).to(torch.float16)  # NOTE: could do all layers at once, but currently just doing 1 layer
                 mlp_activation_data = rearrange(mlp_activation_data, "b s n -> (b s) n")
 
             dataset.append(mlp_activation_data)
             if len(dataset) >= max_chunks:
                 # Need to save, restart the list
-                save_activation_chunk(dataset, n_saved_chunks, cfg)
+                save_activation_chunk(dataset, n_saved_chunks, dataset_folder)
                 n_saved_chunks += 1
                 print(f"Saved chunk {n_saved_chunks} of activations, total size:  {batch_idx * activation_size} ")
                 dataset = []
-                if n_saved_chunks == cfg.n_chunks:
+                if n_saved_chunks == n_chunks:
                     break
     
-        if n_saved_chunks < cfg.n_chunks:
-            save_activation_chunk(dataset, n_saved_chunks, cfg)
+        if n_saved_chunks < n_chunks:
+            save_activation_chunk(dataset, n_saved_chunks, dataset_folder)
             print(f"Saved undersized chunk {n_saved_chunks} of activations, total size:  {batch_idx * activation_size} ")
 
-def save_activation_chunk(dataset, n_saved_chunks, cfg):
+def save_activation_chunk(dataset, n_saved_chunks, dataset_folder):
     dataset_t = torch.cat(dataset, dim=0).to("cpu")
-    os.makedirs(cfg.dataset_folder, exist_ok=True)
-    with open(cfg.dataset_folder + "/" + str(n_saved_chunks) + ".pt", "wb") as f:
+    os.makedirs(dataset_folder, exist_ok=True)
+    with open(dataset_folder + "/" + str(n_saved_chunks) + ".pt", "wb") as f:
         torch.save(dataset_t, f)
 
 
-def setup_data(cfg, tokenizer, model, use_baukit=False, start_line=0, chunk_size_gb=2):
+def setup_data(
+        tokenizer,
+        model,
+        model_name: str,
+        activation_width: int,
+        dataset_name: str, # Name of dataset to load
+        dataset_folder: str, # Folder to save activations to
+        layer: int = 2,
+        use_residual: bool = False,
+        use_baukit: bool = False, 
+        start_line: int = 0, 
+        n_chunks: int = 1,
+        device: torch.device = torch.device("cuda:0")
+    ):
     sentence_len_lower = 1000
-    max_lines = int((chunk_size_gb * 1e9  * cfg.n_chunks)/ (cfg.activation_width * sentence_len_lower * 2))
+    max_lines = int((CHUNK_SIZE_GB * 1e9  * n_chunks)/ (activation_width * sentence_len_lower * 2))
     print(f"Setting max_lines to {max_lines} to minimize sentences processed")
 
-    sentence_dataset = make_sentence_dataset(cfg.dataset_name, max_lines=max_lines, start_line=start_line)
-    tensor_name = make_tensor_name(cfg.layer, cfg.use_residual, cfg.model_name)
-    tokenized_sentence_dataset, bits_per_byte = chunk_and_tokenize(sentence_dataset, tokenizer, max_length=cfg.max_length)
-    token_loader = DataLoader(tokenized_sentence_dataset, batch_size=cfg.model_batch_size, shuffle=True)
-    make_activation_dataset(cfg, token_loader, model, tensor_name, use_baukit, chunk_size_gb=chunk_size_gb)
+    sentence_dataset = make_sentence_dataset(dataset_name, max_lines=max_lines, start_line=start_line)
+    tensor_name = make_tensor_name(layer, use_residual, model_name)
+    tokenized_sentence_dataset, bits_per_byte = chunk_and_tokenize(sentence_dataset, tokenizer, max_length=MAX_SENTENCE_LEN)
+    token_loader = DataLoader(tokenized_sentence_dataset, batch_size=MODEL_BATCH_SIZE, shuffle=True)
+    make_activation_dataset(
+        sentence_dataset = token_loader, 
+        model=model,
+        tensor_name=tensor_name, 
+        activation_width=activation_width,
+        dataset_folder=dataset_folder,
+        baukit=use_baukit, 
+        chunk_size_gb=CHUNK_SIZE_GB,
+        device=device,
+        layer=layer,
+        n_chunks=n_chunks,
+        max_length=MAX_SENTENCE_LEN,
+        model_batch_size=MODEL_BATCH_SIZE
+        )
     n_lines = len(sentence_dataset)
     return n_lines
