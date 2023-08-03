@@ -101,6 +101,7 @@ class FunctionalLISTADenoisingSAE:
 class LISTADenoisingSAE(LearnedDict):
     def __init__(self, params):
         self.params = params
+        self.n_feats, self.activation_size = params["decoder"].shape
 
     def encode(self, x):
         learned_dict = self.get_learned_dict()
@@ -193,6 +194,7 @@ class FunctionalLISTASAE:
 class LISTASAE(LearnedDict):
     def __init__(self, params):
         self.params = params
+        self.n_feats, self.activation_size = params["dict"].shape
     
     def encode(self, batch):
         return FunctionalLISTASAE.encode(self.params, batch)
