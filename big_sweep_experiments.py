@@ -407,8 +407,36 @@ def run_across_layers():
 
                 sweep(dense_l1_range_experiment, cfg)
 
-            # delete the dataset
+            # delete the dataset to save space
             shutil.rmtree(cfg.dataset_folder)
+
+def run_across_layers_attn():
+    cfg = parse_args()
+    cfg.model_name = "EleutherAI/pythia-70m-deduped"
+    cfg.dataset_name = "EleutherAI/pile"
+
+    cfg.batch_size = 2048
+    cfg.use_wandb = False
+    cfg.save_every = 2
+    cfg.tied_ae=True
+    for layer in [0, 1, 2, 3, 4, 5]:
+        layer_loc = "attn"
+        for dict_ratio in [1, 2, 4, 8]:
+            cfg.layer = layer
+            cfg.layer_loc = layer_loc
+            cfg.learned_dict_ratio = dict_ratio
+
+            cfg.output_folder = f"output_attn_sweep{'_tied' if cfg.tied_ae else ''}_{cfg.layer_loc}_l{cfg.layer}_r{int(cfg.learned_dict_ratio)}"
+            cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{cfg.layer_loc}"
+            cfg.use_synthetic_dataset = False
+            cfg.dtype = torch.float32
+            cfg.lr = 3e-4
+            cfg.n_chunks=10
+
+            sweep(dense_l1_range_experiment, cfg)
+
+        # delete the dataset
+        shutil.rmtree(cfg.dataset_folder)
 
 def run_zero_l1_baseline():
     cfg = parse_args()
@@ -432,4 +460,4 @@ def run_zero_l1_baseline():
     sweep(zero_l1_baseline, cfg)
 
 if __name__ == "__main__":
-    run_dense_l1_range()
+    run_across_layers_attn()

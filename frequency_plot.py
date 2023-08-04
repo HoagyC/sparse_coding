@@ -10,10 +10,13 @@ import standard_metrics
 
 if __name__ == "__main__":
     chunk_range = [9]
-    learned_dict_files = os.listdir("/mnt/ssd-cluster/bigrun0308")
+    learned_dict_files = ["/mnt/ssd-cluster/bigrun0308" + x for x in os.listdir("/mnt/ssd-cluster/bigrun0308")]
+    learned_dict_files += [f for f in os.listdir(".") if f.startswith("output_attn")]
 
     resid_dicts = [f for f in learned_dict_files if "resid" in f]
     mlp_dicts = [f for f in learned_dict_files if "mlp" in f]
+    attn_dicts = [f for f in learned_dict_files if "attn" in f]
+    mlp_out_dicts = [f for f in learned_dict_files if "mlp_out" in f]
 
     layer_0_dicts = [f for f in learned_dict_files if "l0" in f]
     layer_1_dicts = [f for f in learned_dict_files if "l1" in f]
@@ -30,28 +33,34 @@ if __name__ == "__main__":
     ratio16_dicts = [f for f in learned_dict_files if "r16" in f]
     ratio32_dicts = [f for f in learned_dict_files if "r32" in f]
 
+
+
+    # experiments = [
+    #     ("l0_resid", [layer_0_dicts, resid_dicts]),
+    #     ("l1_resid", [layer_1_dicts, resid_dicts]),
+    #     ("l2_resid", [layer_2_dicts, resid_dicts]),
+    #     ("l3_resid", [layer_3_dicts, resid_dicts]),
+    #     ("l4_resid", [layer_4_dicts, resid_dicts]),
+    #     ("l5_resid", [layer_5_dicts, resid_dicts]),
+    #     ("l0_mlp", [layer_0_dicts, mlp_dicts]),
+    #     ("l1_mlp", [layer_1_dicts, mlp_dicts]),
+    #     ("l2_mlp", [layer_2_dicts, mlp_dicts]),
+    #     ("l3_mlp", [layer_3_dicts, mlp_dicts]),
+    #     ("l4_mlp", [layer_4_dicts, mlp_dicts]),
+    #     ("l5_mlp", [layer_5_dicts, mlp_dicts]),
+    # ]
     experiments = [
-        ("l0_resid", [layer_0_dicts, resid_dicts]),
-        ("l1_resid", [layer_1_dicts, resid_dicts]),
-        ("l2_resid", [layer_2_dicts, resid_dicts]),
-        ("l3_resid", [layer_3_dicts, resid_dicts]),
-        ("l4_resid", [layer_4_dicts, resid_dicts]),
-        ("l5_resid", [layer_5_dicts, resid_dicts]),
-        ("l0_mlp", [layer_0_dicts, mlp_dicts]),
-        ("l1_mlp", [layer_1_dicts, mlp_dicts]),
-        ("l2_mlp", [layer_2_dicts, mlp_dicts]),
-        ("l3_mlp", [layer_3_dicts, mlp_dicts]),
-        ("l4_mlp", [layer_4_dicts, mlp_dicts]),
-        ("l5_mlp", [layer_5_dicts, mlp_dicts]),
+        ("l0_attn", [layer_0_dicts, attn_dicts]),
+        ("l1_attn", [layer_1_dicts, attn_dicts]),
     ]
-    
+
     for graph_name, categories in experiments:
 
         learned_dict_locs = list(set.intersection(*[set(x) for x in categories]))
         learned_dict_locs.sort(key=lambda x: int(x.split("_")[-1][1:])) # sort by ratio
         print(f"Found {len(learned_dict_locs)} lists of dicts for experiment {graph_name}")
 
-        learned_dict_tuples = [(x.split("sweep_")[-1], torch.load(os.path.join("/mnt/ssd-cluster/bigrun0308", x, "_9", "learned_dicts.pt"))) for x in learned_dict_locs]
+        learned_dict_tuples = [(x.split("sweep_")[-1], torch.load(os.path.join(x, "_9", "learned_dicts.pt"))) for x in learned_dict_locs]
 
         dataset = torch.load(f"/mnt/ssd-cluster/single_chunks/{graph_name}/0.pt")
         sample_idxs = np.random.choice(len(dataset), 5000, replace=False)
@@ -92,3 +101,4 @@ if __name__ == "__main__":
         ax.set_ylabel("Unexplained Variance")
         ax.legend()
         plt.savefig(f"freq_plot_compare_{graph_name}.png")
+        print(f"Saved plot for {graph_name}")

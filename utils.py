@@ -127,7 +127,7 @@ def get_activation_size(model_name: str, layer_loc: str):
 
 def make_tensor_name(layer: int, layer_loc: str, model_name: str) -> str:
     """Make the tensor name for a given layer and model."""
-    assert layer_loc in ["residual", "mlp", "attn"], f"Layer location {layer_loc} not supported"
+    assert layer_loc in ["residual", "mlp", "attn", "mlp_out"], f"Layer location {layer_loc} not supported"
     if layer_loc == "residual":
         if model_name in ["gpt2", "EleutherAI/pythia-70m-deduped", "EleutherAI/pythia-160m-deduped"]:
             tensor_name = f"blocks.{layer}.hook_resid_post"
@@ -145,6 +145,11 @@ def make_tensor_name(layer: int, layer_loc: str, model_name: str) -> str:
             tensor_name = f"blocks.{layer}.hook_resid_post"
         else:
             raise NotImplementedError(f"Model {model_name} not supported for attention stream")
+    elif layer_loc == "mlp_out":
+        if model_name in ["gpt2", "EleutherAI/pythia-70m-deduped", "EleutherAI/pythia-160m-deduped"]:
+            tensor_name = f"blocks.{layer}.hook_mlp_out"
+        else:
+            raise NotImplementedError(f"Model {model_name} not supported for MLP")
 
     return tensor_name
 
