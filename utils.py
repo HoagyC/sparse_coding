@@ -101,18 +101,27 @@ class dotdict(dict):
     def __delattr__(self, name):
         del self[name]
 
-def make_tensor_name(layer: int, use_residual: bool, model_name: str) -> str:
+def make_tensor_name(layer: int, layer_loc: str, model_name: str) -> str:
     """Make the tensor name for a given layer and model."""
-    if use_residual:
+    assert layer_loc in ["residual", "mlp", "attn"], f"Layer location {layer_loc} not supported"
+    if layer_loc == "residual":
         if model_name in ["gpt2", "EleutherAI/pythia-70m-deduped", "EleutherAI/pythia-160m-deduped"]:
             tensor_name = f"blocks.{layer}.hook_resid_post"
-    else:
+        else:
+            raise NotImplementedError(f"Model {model_name} not supported for residual stream")
+    elif layer_loc == "mlp":
         if model_name in ["gpt2", "EleutherAI/pythia-70m-deduped", "EleutherAI/pythia-160m-deduped"]:
             tensor_name = f"blocks.{layer}.mlp.hook_post"
         elif model_name == "nanoGPT":
             tensor_name = f"transformer.h.{layer}.mlp.c_fc"
         else:
-            raise NotImplementedError(f"Model {model_name} not supported")
+            raise NotImplementedError(f"Model {model_name} not supported for MLP")
+    elif layer_loc == "attn":
+        if model_name in ["gpt2", "EleutherAI/pythia-70m-deduped", "EleutherAI/pythia-160m-deduped"]:
+            tensor_name = f"blocks.{layer}.hook_resid_post"
+        else:
+            raise NotImplementedError(f"Model {model_name} not supported for attention stream")
+
     return tensor_name
 
 def upload_to_aws(local_file_name) -> bool:

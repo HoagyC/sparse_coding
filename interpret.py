@@ -102,7 +102,7 @@ def make_activation_dataset(cfg, model, activation_dim: int,  total_activation_s
             dataset_name=cfg.dataset_name,
             dataset_folder=cfg.dataset_folder,
             layer=cfg.layer,
-            use_residual=cfg.use_residual,
+            layer_loc=cfg.layer_loc,
             use_baukit=cfg.use_baukit,
             n_chunks=cfg.n_chunks,
             device=cfg.device
@@ -153,7 +153,7 @@ def make_feature_activation_dataset(
         model_name: str,
         model: HookedTransformer, 
         layer: int,
-        use_residual: bool,
+        layer_loc: str,
         activation_fn: Callable,
         activation_dim: int,
         use_baukit: bool = False,
@@ -179,7 +179,7 @@ def make_feature_activation_dataset(
     else:
         tokenizer_model = model
     
-    tensor_name = make_tensor_name(layer, use_residual, model_name)
+    tensor_name = make_tensor_name(layer, layer_loc, model_name)
     # make list of sentence, tokenization pairs
     
     iter_dataset = iter(sentence_dataset)
@@ -298,10 +298,10 @@ async def main(cfg: dotdict) -> None:
         resid_width = 32
     else:
         raise ValueError("Model name not recognised")
-    if cfg.use_residual:
-        activation_width = resid_width
-    else:
+    if cfg.layer_loc == "mlp":
         activation_width = resid_width * 4
+    else:
+        activation_width = resid_width
     
     # Load feature dict
     if cfg.activation_transform in ["feature_dict", "feature_no_bias", "neuron_basis_bias", "random_bias"]:
@@ -318,8 +318,7 @@ async def main(cfg: dotdict) -> None:
         activation_dataset, n_activations = make_activation_dataset(cfg, model, activation_dim=feature_size)
 
 
-    point_name = "resid" if cfg.use_residual else "postnonlin"
-    activations_name = f"{cfg.model_name.split('/')[-1]}_layer{cfg.layer}_{point_name}"
+    activations_name = f"{cfg.model_name.split('/')[-1]}_layer{cfg.layer}_{cfg.layer_loc}"
 
     print(f"Using activation transform {cfg.activation_transform}")
     if cfg.activation_transform == "neuron_basis":
@@ -427,7 +426,7 @@ async def main(cfg: dotdict) -> None:
             cfg.model_name,
             model,
             layer=cfg.layer,
-            use_residual=cfg.use_residual,
+            layer_loc=cfg.layer_loc,
             activation_fn=activation_fn,
             activation_dim=feature_size,
             device=cfg.device,
@@ -686,7 +685,7 @@ if __name__ == "__main__":
         argparser = argparse.ArgumentParser()
         argparser.add_argument("--layer", type=int, default=1)
         argparser.add_argument("--model_name", type=str, default="EleutherAI/pythia-70m-deduped")
-        argparser.add_argument("--use_residual", type=bool, default=False)
+        argparser.add_argument("--layer_loc", type=bool, default="mlp")
         argparser.add_argument("--score_mode", type=str, default="top_random") # can be "top", "random", "top_random", "all"
         argparser.add_argument("--run_all", type=bool, default=False)
         argparser.add_argument("--exclude_mean", type=bool, default=True)
@@ -700,8 +699,7 @@ if __name__ == "__main__":
         if cfg.run_all:
             activation_names = [x for x in os.listdir("auto_interp_results") if os.path.isdir(os.path.join("auto_interp_results", x))]
         else:
-            point_name = "resid" if cfg.use_residual else "postnonlin"
-            activation_names = [f"{cfg.model_name.split('/')[-1]}_layer{cfg.layer}_{point_name}"]
+            activation_names = [f"{cfg.model_name.split('/')[-1]}_layer{cfg.layer}_{cfg.layer_loc}"]
         
         for activation_name in activation_names:
             for score_mode in score_modes:

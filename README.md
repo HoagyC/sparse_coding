@@ -10,9 +10,9 @@ The repo also contains utils for running code on vast.ai computers which can spe
 
 ## Automatic Interpretation
 
-`interpret.py` contains tools to interpret learned dictionaries using OpenAI's automatic interpretation protocol. Set `--load_interpret_autoencoder` to the location of the autoencoder you want to test, and `--model_name`, `--layer` and `--use_residual` to specify the activations that should be used. `--activation_tranform` should be set to `feature_dict` for interpreting a learned dictionary but there are many baselines that can also be run, including `pca`, `ica`, `nmf`, `neuron_basis`, and `random`.
+`interpret.py` contains tools to interpret learned dictionaries using OpenAI's automatic interpretation protocol. Set `--load_interpret_autoencoder` to the location of the autoencoder you want to test, and `--model_name`, `--layer` and `--layer_loc` to specify the activations that should be used. `--activation_tranform` should be set to `feature_dict` for interpreting a learned dictionary but there are many baselines that can also be run, including `pca`, `ica`, `nmf`, `neuron_basis`, and `random`.
 
-If you run `interpret.py read_results --kwargs..` and select the `--model_name`, `--layer` and `--use_residual`, this will produce a series of plots comparing 
+If you run `interpret.py read_results --kwargs..` and select the `--model_name`, `--layer` and `--layer_loc`, this will produce a series of plots comparing 
 
 ## Training a custom small transformer
 

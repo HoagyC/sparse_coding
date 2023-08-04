@@ -376,7 +376,7 @@ def measure_ablation_score() -> None:
     cfg = parse_args()
 
     cfg.layer = 1
-    cfg.use_residual = False
+    cfg.layer_loc = "mlp"
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.fresh_synth_data = False
 
@@ -409,8 +409,8 @@ def measure_ablation_score() -> None:
     features_to_ablate = torch.zeros(model.n_feats).to(dtype=torch.bool)
     features_to_ablate[feature_id] = 1
 
-    tensor_to_ablate = utils.make_tensor_name(cfg.layer, cfg.use_residual, cfg.model_name)
-    tensor_to_read = utils.make_tensor_name(cfg.layer+1, use_residual=True, model_name=cfg.model_name)
+    tensor_to_ablate = utils.make_tensor_name(cfg.layer, cfg.layer_loc, cfg.model_name)
+    tensor_to_read = utils.make_tensor_name(cfg.layer+1, layer_loc="residual", model_name=cfg.model_name)
     
     print(f"num nonzero activations: {(torch.Tensor(sim_activations) > 2).sum()}")
     breakpoint()
@@ -447,8 +447,8 @@ def make_one_chunk_per_layer() -> None:
     model = HookedTransformer.from_pretrained(model_name, device=device)
     tokenizer = model.tokenizer
 
-    for use_residual in [False, True]:
-        activation_width = 512 if use_residual else 2048
+    for layer_loc in ["residual", "mlp"]:
+        activation_width = 2048 if layer_loc == "mlp" else 512
         for layer in range(6):
             setup_data(
                 tokenizer,
@@ -456,9 +456,9 @@ def make_one_chunk_per_layer() -> None:
                 model_name=model_name,
                 activation_width=activation_width,
                 dataset_name="EleutherAI/pile",
-                dataset_folder=f"single_chunks/l{layer}_{'resid' if use_residual else 'mlp'}",
+                dataset_folder=f"single_chunks/l{layer}_{layer_loc}",
                 layer=layer,
-                use_residual=use_residual,
+                layer_loc=layer_loc,
                 use_baukit=False,
                 n_chunks=1,
                 device=device,

@@ -14,8 +14,6 @@ from autoencoders.semilinear_autoencoder import SemiLinearSAE
 
 from activation_dataset import setup_data
 from sc_datasets.random_dataset import SparseMixDataset
-from utils import dotdict, make_tensor_name
-from argparser import parse_args
 
 import numpy as np
 from itertools import product, chain
@@ -224,14 +222,14 @@ def generate_synthetic_dataset(cfg, generator, chunk_size, n_chunks):
         torch.save(chunk, os.path.join(cfg.dataset_folder, f"{i}.pt"))
 
 def init_model_dataset(cfg):
-    if cfg.use_residual:
+    if cfg.layer_loc =="mlp":
+        cfg.activation_width = 2048
+    else:
         if cfg.model_name == "EleutherAI/pythia-160m-deduped":
             cfg.activation_width = 768
         else:
             cfg.activation_width = 512
-    else:
-        cfg.activation_width = 2048 # mlp_width is 4x the residual width
-    
+
     if len(os.listdir(cfg.dataset_folder)) == 0:
         print(f"Activations in {cfg.dataset_folder} do not exist, creating them")
         transformer, tokenizer = get_model(cfg)
@@ -243,8 +241,7 @@ def init_model_dataset(cfg):
             dataset_name=cfg.dataset_name,
             dataset_folder=cfg.dataset_folder,
             layer=cfg.layer,
-            use_residual=cfg.use_residual,
-            use_baukit=cfg.use_baukit,
+            layer_loc=cfg.layer_loc,
             n_chunks=cfg.n_chunks,
             device=cfg.device
         )

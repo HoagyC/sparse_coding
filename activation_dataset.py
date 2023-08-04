@@ -247,7 +247,7 @@ def setup_data(
         dataset_name: str, # Name of dataset to load
         dataset_folder: str, # Folder to save activations to
         layer: int = 2,
-        use_residual: bool = False,
+        layer_loc: str = "residual",
         use_baukit: bool = False, 
         start_line: int = 0, 
         n_chunks: int = 1,
@@ -258,13 +258,13 @@ def setup_data(
     print(f"Setting max_lines to {max_lines} to minimize sentences processed")
 
     sentence_dataset = make_sentence_dataset(dataset_name, max_lines=max_lines, start_line=start_line)
-    tensor_name = make_tensor_name(layer, use_residual, model_name)
+    tensor_name = make_tensor_name(layer, layer_loc, model_name)
     tokenized_sentence_dataset, bits_per_byte = chunk_and_tokenize(sentence_dataset, tokenizer, max_length=MAX_SENTENCE_LEN)
     token_loader = DataLoader(tokenized_sentence_dataset, batch_size=MODEL_BATCH_SIZE, shuffle=True)
     make_activation_dataset(
         sentence_dataset = token_loader, 
         model=model,
-        tensor_name=tensor_name, 
+        tensor_name=tensor_name,
         activation_width=activation_width,
         dataset_folder=dataset_folder,
         baukit=use_baukit, 

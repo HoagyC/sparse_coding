@@ -765,7 +765,7 @@ def run_real_data_model(cfg: dotdict):
             dataset_name=cfg.dataset_name,
             dataset_folder=cfg.dataset_folder,
             layer=cfg.layer,
-            use_residual=cfg.use_residual,
+            layer_loc=cfg.layer_loc,
             use_baukit=cfg.use_baukit,
             n_chunks=cfg.n_chunks,
             device=cfg.device
@@ -922,7 +922,7 @@ def run_real_data_model(cfg: dotdict):
                 dataset_name=cfg.dataset_name,
                 dataset_folder=cfg.dataset_folder,
                 layer=cfg.layer,
-                use_residual=cfg.use_residual,
+                layer_loc=cfg.layer_loc,
                 use_baukit=cfg.use_baukit,
                 n_chunks=cfg.n_chunks,
                 device=cfg.device,
