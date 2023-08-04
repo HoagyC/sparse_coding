@@ -49,7 +49,7 @@ def run_pca_on_activation_dataset(cfg: dotdict, outputs_folder):
 
     with open(os.path.join(cfg.dataset_folder, "0.pkl"), "rb") as f:
         dataset = pickle.load(f)
-    cfg.activation_dim = dataset.tensors[0][0].shape[-1]
+    cfg.activation_dim = get_activation_size(cfg.model_name, cfg.layer_loc)
     n_lines = cfg.max_lines
     del dataset
 
@@ -125,23 +125,13 @@ def main():
             tokenizer, 
             model,
             model_name=cfg.model_name,
-            activation_width=cfg.activation_width,
             dataset_name=cfg.dataset_name,
             dataset_folder=cfg.dataset_folder,
             layer=cfg.layer,
-            use_residual=cfg.use_residual,
-            use_baukit=cfg.use_baukit,
+            layer_loc=cfg.layer_loc,
             n_chunks=cfg.n_chunks,
             device=cfg.device
         )
-    else:
-        print(f"Activations in {cfg.dataset_folder} already exist, loading them")
-        # get activation_dim from first file
-        with open(os.path.join(cfg.dataset_folder, "0.pkl"), "rb") as f:
-            dataset = pickle.load(f)
-        cfg.activation_dim = dataset.tensors[0][0].shape[-1]
-        n_lines = cfg.max_lines
-        del dataset
     
     # do pca on activations
     pca_directions, pca_components = run_pca_on_activation_dataset(cfg, outputs_folder=outputs_folder)

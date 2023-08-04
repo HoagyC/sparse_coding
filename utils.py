@@ -101,6 +101,30 @@ class dotdict(dict):
     def __delattr__(self, name):
         del self[name]
 
+
+def check_use_baukit(model_name):
+    if model_name in ["nanoGPT"]:
+        return True
+    elif model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]:
+        return False
+    else:
+        raise NotImplementedError(f"Unknown if model {model_name} uses baukit")
+
+
+def get_activation_size(model_name: str, layer_loc: str):
+    if model_name == "EleutherAI/pythia-70m-deduped":
+        residual_dim = 512
+    elif model_name in ["EleutherAI/pythia-160m-deduped", "gpt2"]:
+        residual_dim = 768
+    elif model_name == "nanoGPT":
+        residual_dim = 32
+
+    if layer_loc == "mlp":
+        return residual_dim * 4
+    else:
+        return residual_dim
+    
+
 def make_tensor_name(layer: int, layer_loc: str, model_name: str) -> str:
     """Make the tensor name for a given layer and model."""
     assert layer_loc in ["residual", "mlp", "attn"], f"Layer location {layer_loc} not supported"

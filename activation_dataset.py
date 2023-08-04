@@ -189,7 +189,7 @@ def make_activation_dataset(
         tensor_name: str, 
         activation_width: int,
         dataset_folder: str,
-        baukit: bool = False, 
+        baukit: bool = False,
         chunk_size_gb: float = 2, 
         device: torch.device = torch.device("cuda:0"), 
         layer: int = 2,
@@ -243,17 +243,17 @@ def setup_data(
         tokenizer,
         model,
         model_name: str,
-        activation_width: int,
         dataset_name: str, # Name of dataset to load
         dataset_folder: str, # Folder to save activations to
         layer: int = 2,
         layer_loc: str = "residual",
-        use_baukit: bool = False, 
         start_line: int = 0, 
         n_chunks: int = 1,
         device: torch.device = torch.device("cuda:0")
     ):
     sentence_len_lower = 1000
+    activation_width = get_activation_size(model_name, layer_loc)
+    baukit = check_use_baukit(model_name)
     max_lines = int((CHUNK_SIZE_GB * 1e9  * n_chunks)/ (activation_width * sentence_len_lower * 2))
     print(f"Setting max_lines to {max_lines} to minimize sentences processed")
 
@@ -266,8 +266,8 @@ def setup_data(
         model=model,
         tensor_name=tensor_name,
         activation_width=activation_width,
+        baukit=baukit,
         dataset_folder=dataset_folder,
-        baukit=use_baukit, 
         chunk_size_gb=CHUNK_SIZE_GB,
         device=device,
         layer=layer,

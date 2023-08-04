@@ -4,14 +4,8 @@ import torch.nn.functional as F
 import torch.multiprocessing as mp
 import torch.utils.data as data
 
-import torchopt
 
 from cluster_runs import dispatch_job_on_chunk
-
-from autoencoders.ensemble import FunctionalEnsemble
-from autoencoders.sae_ensemble import FunctionalSAE, FunctionalTiedSAE
-from autoencoders.semilinear_autoencoder import SemiLinearSAE
-
 from activation_dataset import setup_data
 from sc_datasets.random_dataset import SparseMixDataset
 
@@ -237,7 +231,6 @@ def init_model_dataset(cfg):
             tokenizer,
             transformer,
             model_name=cfg.model_name,
-            activation_width=cfg.activation_width,
             dataset_name=cfg.dataset_name,
             dataset_folder=cfg.dataset_folder,
             layer=cfg.layer,

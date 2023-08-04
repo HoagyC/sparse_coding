@@ -28,7 +28,7 @@ from transformers import GPT2Tokenizer, AutoTokenizer
 from autoencoders.learned_dict import LearnedDict
 from argparser import parse_args
 from comparisons import NoCredentialsError
-from utils import dotdict, make_tensor_name, upload_to_aws
+from utils import dotdict, make_tensor_name, upload_to_aws, get_activation_size, check_use_baukit
 from nanoGPT_model import GPT
 from activation_dataset import setup_data
 
@@ -80,37 +80,36 @@ def load_neuron(
         )
     return neuron_record
 
-def make_activation_dataset(cfg, model, activation_dim: int,  total_activation_size: int = 512 * 1024 * 1024):
+def make_activation_dataset(cfg, model, total_activation_size: int = 512 * 1024 * 1024):
     if cfg.model_name in ["gpt2", "nanoGPT"]:
         tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
     elif cfg.model_name == "EleutherAI/pythia-70m-deduped":
         tokenizer = AutoTokenizer.from_pretrained("EleutherAI/pythia-70m-deduped")
     else:
         raise NotImplementedError
+
     cfg.n_chunks = 1
     dataset_name = cfg.dataset_name.split("/")[-
     1] + "-" + cfg.model_name.split("/")[-1] + "-" + str(cfg.layer)
     cfg.dataset_folder = os.path.join(cfg.datasets_folder, dataset_name)
     if not os.path.exists(cfg.dataset_folder) or len(os.listdir(cfg.dataset_folder)) == 0:
         cfg.n_chunks = 1
-        cfg.activation_dim = activation_dim
         setup_data(
             tokenizer, 
             model,
             model_name=cfg.model_name,
-            activation_width=cfg.activation_width,
             dataset_name=cfg.dataset_name,
             dataset_folder=cfg.dataset_folder,
             layer=cfg.layer,
             layer_loc=cfg.layer_loc,
-            use_baukit=cfg.use_baukit,
             n_chunks=cfg.n_chunks,
             device=cfg.device
         )
     chunk_loc = os.path.join(cfg.dataset_folder, f"0.pkl")
 
     elem_size = 4
-    n_activations = total_activation_size // (elem_size * cfg.activation_dim)
+    activation_dim = get_activation_size(cfg.model_name, cfg.layer_loc)
+    n_activations = total_activation_size // (elem_size * activation_dim)
 
     dataset = DataLoader(pickle.load(open(chunk_loc, "rb")), batch_size=n_activations, shuffle=True)
     return dataset, n_activations
@@ -155,8 +154,6 @@ def make_feature_activation_dataset(
         layer: int,
         layer_loc: str,
         activation_fn: Callable,
-        activation_dim: int,
-        use_baukit: bool = False,
         device: str = "cpu",
         n_fragments = OPENAI_MAX_FRAGMENTS,
         random_fragment = True, # used for debugging
@@ -167,6 +164,9 @@ def make_feature_activation_dataset(
     Returns a dataset which contains the activations of the model at that point, 
     for each fragment in the dataset, transformed into the feature space
     """
+    activation_dim = get_activation_size(model_name, layer_loc)
+    use_baukit = check_use_baukit(model_name)
+
     if max_features and max_features < activation_dim:
         feat_dim = max_features
     else:
@@ -315,7 +315,7 @@ async def main(cfg: dotdict) -> None:
         feature_size = activation_width
     
     if cfg.activation_transform in ["ica", "pca", "nmf"]:
-        activation_dataset, n_activations = make_activation_dataset(cfg, model, activation_dim=feature_size)
+        activation_dataset, n_activations = make_activation_dataset(cfg, model)
 
 
     activations_name = f"{cfg.model_name.split('/')[-1]}_layer{cfg.layer}_{cfg.layer_loc}"
@@ -428,9 +428,7 @@ async def main(cfg: dotdict) -> None:
             layer=cfg.layer,
             layer_loc=cfg.layer_loc,
             activation_fn=activation_fn,
-            activation_dim=feature_size,
             device=cfg.device,
-            use_baukit=use_baukit,
             max_features=cfg.df_n_feats if cfg.df_n_feats else None,
         )
         # save the dataset, saving each column separately so that we can retrive just the columns we want later
