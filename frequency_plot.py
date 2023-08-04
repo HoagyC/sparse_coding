@@ -44,6 +44,7 @@ if __name__ == "__main__":
         ("l4_mlp", [layer_4_dicts, mlp_dicts]),
         ("l5_mlp", [layer_5_dicts, mlp_dicts]),
     ]
+    
     for graph_name, categories in experiments:
 
         learned_dict_locs = list(set.intersection(*[set(x) for x in categories]))

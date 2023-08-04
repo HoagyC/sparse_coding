@@ -1,10 +1,12 @@
 import asyncio
+from functools import partial
 import json
 import os
 import pickle
 from typing import List, Tuple, Union, Optional, Dict, Any
 
-from datasets import load_dataset
+from datasets import load_dataset, Dataset
+from einops import rearrange
 import matplotlib.pyplot as plt
 import matplotlib
 import numpy as np
@@ -12,8 +14,9 @@ from PIL import Image
 from sklearn.cluster import KMeans
 from sklearn.manifold import TSNE
 import torch
+from torch.utils.data import DataLoader
 from torchtyping import TensorType
-
+from tqdm.auto import tqdm
 from transformer_lens import HookedTransformer
 
 # set OPENAI_API_KEY environment variable from secrets.json['openai_key']
@@ -460,6 +463,96 @@ def make_one_chunk_per_layer() -> None:
                 n_chunks=1,
                 device=device,
             )
+
+def calculate_perplexity(
+        model: HookedTransformer, 
+        autoencoders: Union[Tuple[LearnedDict, Dict], List[Tuple[LearnedDict, Dict]]],
+        layer: int,
+        setting: str,
+        dataset_name: str = "NeelNaanda/pile-10k",
+        model_batch_size: int = 32,
+        fragment_len: int = 256
+    ) -> Tuple[float, List[float]]:
+    """
+    Takes an autoencoder or list of autoencoders, and calculates the perplexity of the model 
+    on the dataset when the activations of the layer are replaced with the reconstruction 
+    of the autoencoder. 
+    Returns the original perplexity and a list containing the perplexity for each autoencoder.
+    """
+    if isinstance(autoencoders, tuple): # if only one autoencoder, make it a list
+        autoencoders = [autoencoders]
+    num_dictionaries = len(autoencoders)    
+
+    # Define function to replace activations with reconstruction
+    def replace_with_reconstruction(value, hook, autoencoder):
+        # Rearrange to fit autoencoder
+        int_val = rearrange(value, 'b s h -> (b s) h')
+        # Run through the autoencoder
+        reconstruction = autoencoder.predict(int_val)
+        batch, seq_len, hidden_size = value.shape
+        reconstruction = rearrange(reconstruction, '(b s) h -> b s h', b=batch, s=seq_len)
+        return reconstruction
+
+    # Load model
+    device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
+    model = model.eval()
+
+    assert setting in ["residual", "mlp"], "setting must be either 'residual' or 'mlp'"
+    if setting == "residual":
+        cache_name = f"blocks.{layer}.hook_resid_post"
+    elif setting == "mlp":
+        cache_name = f"blocks.{layer}.mlp.hook_post"
+    else:
+        raise NotImplementedError
+
+    dataset = load_dataset(dataset_name, split="train").map(
+        lambda x: model.tokenizer(x['text']),
+        batched=True,
+    ).filter(
+        lambda x: len(x['input_ids']) > fragment_len
+    ).map(
+        lambda x: {'input_ids': x['input_ids'][:fragment_len]}
+    )
+
+    with torch.no_grad(), dataset.formatted_as("pt"):
+        dl = DataLoader(dataset["input_ids"], batch_size=model_batch_size, shuffle=False)
+        # Calculate Original Perplexity ie no intervention/no dictionary
+        total_loss = 0
+        for i, batch in enumerate(dl):
+            loss = model(batch.to(device), return_type="loss")
+            total_loss += loss.item()
+        # Average
+        avg_neg_log_likelihood_orig = torch.tensor(total_loss / len(dl)).to(device)
+        # Exponentiate to compute perplexity
+        original_perplexity = torch.exp(avg_neg_log_likelihood_orig)
+        print("Perplexity for original model: ", original_perplexity.item())
+
+        # Compute perplexity for each dictionary
+        all_perplexities = np.zeros(num_dictionaries)
+        # Calculate Perplexity for each dictionary
+        for dict_index in range(num_dictionaries):
+            autoencoder, hparams = autoencoders[dict_index]
+            autoencoder.to_device(device)
+            total_loss = 0
+            for i, batch in enumerate(dl):
+                # Perplexity with reconstructed activations
+                loss = model.run_with_hooks(batch.to(device), 
+                    return_type="loss",
+                    fwd_hooks=[(
+                        cache_name, # intermediate activation that we intervene on
+                        partial(replace_with_reconstruction, autoencoder=autoencoder), # function to apply to cache_name
+                        )]
+                    )
+                total_loss += loss.item()
+
+            # Average
+            avg_neg_log_likelihood_recon = torch.tensor(total_loss / len(dl)).to(device)
+            # Exponentiate to compute perplexity
+            recon_perplexity = torch.exp(avg_neg_log_likelihood_recon)
+            print(f"Perplexity for hparams {hparams}: {recon_perplexity.item():.2f}")
+            all_perplexities[dict_index] = recon_perplexity.item()
+
+    return original_perplexity.item(), all_perplexities.tolist()
 
 if __name__ == "__main__":
     make_one_chunk_per_layer()
