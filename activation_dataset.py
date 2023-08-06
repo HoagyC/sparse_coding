@@ -277,3 +277,9 @@ def setup_data(
         )
     n_lines = len(sentence_dataset)
     return n_lines
+
+def setup_token_data(cfg, tokenizer, model):
+    sentence_dataset = make_sentence_dataset(cfg.dataset_name)
+    tokenized_sentence_dataset, bits_per_byte = chunk_and_tokenize(sentence_dataset, tokenizer, max_length=cfg.max_length)
+    token_loader = DataLoader(tokenized_sentence_dataset, batch_size=cfg.model_batch_size, shuffle=True)
+    return token_loader

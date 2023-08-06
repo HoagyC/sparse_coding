@@ -64,7 +64,7 @@ def unstack_dict(params, n_models, device=None):
     return [optree.tree_unflatten(treespec, ts) for ts in tensors_]
 
 class FunctionalEnsemble():
-    def __init__(self, models, sig: Type[DictSignature], optimizer_func, optimizer_kwargs, device=None):
+    def __init__(self, models, sig: Type[DictSignature], optimizer_func, optimizer_kwargs, device=None, no_stacking=False):
         if device is None:
             self.device = models[0]["encoder"].device
         else:
@@ -76,6 +76,7 @@ class FunctionalEnsemble():
         self.buffers = stack_dict(buffers, device=self.device)
 
         self.sig = sig
+        self.no_stacking = no_stacking
 
         self.optimizer_func = optimizer_func
         self.optimizer_kwargs = optimizer_kwargs
@@ -86,10 +87,27 @@ class FunctionalEnsemble():
         self.init_functions()
     
     def init_functions(self):
-        def calc_grads(params, buffers, batch):
-            return torch.func.grad(self.sig.loss, has_aux=True)(params, buffers, batch)
+        if self.no_stacking:
+            def calc_grads_(params, buffers, batch):
+                return torch.func.grad(self.sig.loss, has_aux=True)(params, buffers, batch)
 
-        self.calc_grads = torch.vmap(calc_grads)
+            def calc_grads(params, buffers, batch):
+                grads, auxs = [], []
+                for i in range(self.n_models):
+                    params_ = optree.tree_map(lambda t: t[i], params)
+                    buffers_ = optree.tree_map(lambda t: t[i], buffers)
+
+                    g, a = calc_grads_(params_, buffers_, batch[i])
+                    grads.append(g)
+                    auxs.append(a)
+                return stack_dict(grads), stack_dict(auxs)
+            
+            self.calc_grads = calc_grads
+        else:
+            def calc_grads(params, buffers, batch):
+                return torch.func.grad(self.sig.loss, has_aux=True)(params, buffers, batch)
+
+            self.calc_grads = torch.vmap(calc_grads)
         self.update = torch.vmap(self.optimizer.update)
 
     @staticmethod
@@ -101,6 +119,7 @@ class FunctionalEnsemble():
         self.params = state_dict["params"]
         self.buffers = state_dict["buffers"]
         self.sig = state_dict["sig"]
+        self.no_stacking = state_dict["no_stacking"]
         self.optimizer_func = state_dict["optimizer_func"]
         self.optimizer_kwargs = state_dict["optimizer_kwargs"]
         self.optim_states = state_dict["optim_states"]
@@ -123,6 +142,7 @@ class FunctionalEnsemble():
             "params": self.params,
             "buffers": self.buffers,
             "sig": self.sig,
+            "no_stacking": self.no_stacking,
             "optimizer_func": self.optimizer_func,
             "optimizer_kwargs": self.optimizer_kwargs,
             "optim_states": self.optim_states

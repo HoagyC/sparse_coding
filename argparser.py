@@ -46,6 +46,7 @@ def parse_args() -> dotdict:
     parser.add_argument("--mini_runs", type=int, default=1)  # How many times to run the inner loop, each time with a different random subset o f the data
     parser.add_argument("--save_after_mini", type=bool, default=False)  # Whether to save the model after each mini run
     parser.add_argument("--upload_to_aws", type=bool, default=False)  # Whether to upload the model to aws after each mini run
+    parser.add_argument("--n_repetitions", type=int, default=1)  # How many times to repeat the whole process
 
     parser.add_argument("--refresh_data", type=bool, default=False)  # Whether to remake the dataset after each mini run
     parser.add_argument("--max_lines", type=int, default=100000)  # How many lines to read from the dataset

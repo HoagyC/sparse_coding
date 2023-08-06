@@ -5,6 +5,10 @@ from autoencoders.learned_dict import LearnedDict
 
 import optree
 
+def shrinkage(r, theta):
+    # return F.relu(r + theta[None, :])
+    return torch.sign(r) * F.relu(torch.abs(r) - theta[None, :])
+
 # https://arxiv.org/pdf/2008.02683.pdf
 class LISTALayer:
     @staticmethod
@@ -24,7 +28,8 @@ class LISTALayer:
 
         Ay = torch.einsum("ij,bi->bj", A, y)
         r = y + torch.einsum("ij,bj->bi", params["W"], b - Ay)
-        x_ = F.relu(r + params["theta"][None, :])
+        #x_ = F.relu(r + params["theta"][None, :])
+        x_ = shrinkage(r, params["theta"])
         y_ = x_ + m * (x_ - x)
         return y_, x_
 
@@ -53,6 +58,7 @@ class FunctionalLISTADenoisingSAE:
         x = y
         for layer in params["encoder_layers"]:
             y, x = LISTALayer.forward(layer, y, b, x, learned_dict)
+        #return F.relu(y)
         return y
 
     @staticmethod
@@ -116,61 +122,49 @@ class LISTADenoisingSAE(LearnedDict):
         learned_dict = self.params["decoder"] / torch.clamp(decoder_norms, 1e-8)[:, None]
         return learned_dict
 
-def shrinkage(x, b):
-    #return x * torch.exp(- b.pow(2) / x.pow(2))
-    return F.relu(x + b[None, :])
-
-LISTA_ITERS = 3
-
-class LISTA:
-    @staticmethod
+class ResidualDenoisingLayer:
     def init(d_activation, n_features, dtype=torch.float32):
         params = {}
-        params["W_e"] = torch.empty(d_activation, n_features, dtype=dtype)
-        torch.nn.init.orthogonal_(params["W_e"])
-
-        params["S"] = torch.empty(n_features, n_features, dtype=dtype)
-        torch.nn.init.orthogonal_(params["S"])
-
-        params["theta"] = torch.empty(n_features, dtype=dtype)
-        torch.nn.init.normal_(params["theta"])
-
+        params["W"] = torch.empty(n_features, n_features, dtype=dtype)
+        torch.nn.init.orthogonal_(params["W"])
+        params["theta"] = torch.randn(n_features, dtype=dtype) * 0.02
         return params
     
-    @staticmethod
-    def forward(params, batch, iters=LISTA_ITERS):
-        b = torch.einsum("bi,ij->bj", batch, params["W_e"])
-        z = shrinkage(b, params["theta"])
+    def forward(params, x):
+        x_ = F.relu(x + params["theta"][None, :])
+        x_ = torch.einsum("ij,bj->bi", params["W"], x_)
+        return x_ + x
 
-        for _ in range(iters):
-            c = b + torch.einsum("bj,jg->bg", z, params["S"])
-            z = shrinkage(c, params["theta"])
-        
-        return z
+class FunctionalResidualDenoisingSAE:
+    def init(d_activation, n_features, n_hidden_layers, l1_alpha, dtype=torch.float32):
+        params = {}
+        params["decoder"] = torch.empty(n_features, d_activation, dtype=dtype)
+        torch.nn.init.orthogonal_(params["decoder"])
 
-class FunctionalLISTASAE:
-    @staticmethod
-    def init(d_activation, n_features, l1_alpha, dtype=torch.float32):
-        params, buffers = {}, {}
+        params["encoder_layers"] = [
+            ResidualDenoisingLayer.init(d_activation, n_features, dtype=dtype)
+            for _ in range(n_hidden_layers)
+        ]
+        params["encoder_bias"] = torch.randn(n_features, dtype=dtype) * 0.02
 
-        params["LISTA"] = LISTA.init(d_activation, n_features, dtype=dtype)
-        params["dict"] = torch.empty(n_features, d_activation, dtype=dtype)
-        torch.nn.init.orthogonal_(params["dict"])
-
+        buffers = {}
         buffers["l1_alpha"] = torch.tensor(l1_alpha, dtype=dtype)
 
         return params, buffers
     
-    @staticmethod
-    def encode(params, batch):
-        c = LISTA.forward(params["LISTA"], batch)
-        return c
+    def encode(params, b, learned_dict):
+        x = torch.einsum("ij,bj->bi", learned_dict, b)
+        for layer in params["encoder_layers"]:
+            x = ResidualDenoisingLayer.forward(layer, x)
+        return F.relu(x + params["encoder_bias"][None, :])
     
-    @staticmethod
     def loss(params, buffers, batch):
-        normed_dict = params["dict"] / torch.norm(params["dict"], 2, dim=-1)[:, None]
-        c = LISTA.forward(params["LISTA"], batch)
-        x_hat = torch.einsum("ji,bj->bi", normed_dict, c)
+        decoder_norms = torch.norm(params["decoder"], 2, dim=-1)
+        learned_dict = params["decoder"] / torch.clamp(decoder_norms, 1e-8)[:, None]
+
+        c = FunctionalResidualDenoisingSAE.encode(params, batch, learned_dict)
+
+        x_hat = torch.einsum("ij,bi->bj", learned_dict, c)
 
         l_reconstruction = (x_hat - batch).pow(2).mean()
         l_sparsity = buffers["l1_alpha"] * torch.norm(c, 1, dim=-1).mean()
@@ -180,27 +174,29 @@ class FunctionalLISTASAE:
             "l_reconstruction": l_reconstruction,
             "l_l1": l_sparsity
         }
-
         aux_data = {
             "c": c
         }
 
         return l_reconstruction + l_sparsity, (loss_data, aux_data)
     
-    @staticmethod
     def to_learned_dict(params, buffers):
-        return LISTASAE(params)
+        return ResidualDenoisingSAE(params)
 
-class LISTASAE(LearnedDict):
+class ResidualDenoisingSAE(LearnedDict):
     def __init__(self, params):
         self.params = params
         self.n_feats, self.activation_size = params["dict"].shape
     
-    def encode(self, batch):
-        return FunctionalLISTASAE.encode(self.params, batch)
-    
+    def encode(self, x):
+        learned_dict = self.get_learned_dict()
+
+        return FunctionalResidualDenoisingSAE.encode(self.params, x, learned_dict)
+
     def to_device(self, device):
         self.params = optree.tree_map(lambda t: t.to(device=device), self.params)
-    
+
     def get_learned_dict(self):
-        return self.params["dict"] / torch.norm(self.params["dict"], 2, dim=-1)[:, None]
+        decoder_norms = torch.norm(self.params["decoder"], 2, dim=-1)
+        learned_dict = self.params["decoder"] / torch.clamp(decoder_norms, 1e-8)[:, None]
+        return learned_dict

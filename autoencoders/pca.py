@@ -16,6 +16,9 @@ from transformers import GPT2Tokenizer
 from transformer_lens import HookedTransformer
 import pickle
 
+from autoencoders.learned_dict import LearnedDict
+from autoencoders.topk_encoder import TopKLearnedDict
+
 class BatchedPCA():
     def __init__(self, n_dims, device):
         super().__init__()
@@ -45,5 +48,36 @@ class BatchedPCA():
         eigvecs = eigvecs[:, torch.argsort(eigvals, descending=True)].T
         return eigvecs
     
-    def configure_optimizers(self, **kwargs):
-        return None
+    def to_learned_dict(self, sparsity):
+        eigvals, eigvecs = self.get_pca()
+        eigvecs = eigvecs[:, torch.argsort(eigvals, descending=True)].T
+        return PCAEncoder(eigvecs, sparsity)
+    
+    def to_topk_dict(self, sparsity):
+        eigvals, eigvecs = self.get_pca()
+        eigvecs = eigvecs[:, torch.argsort(eigvals, descending=True)].T
+        eigvecs_ = torch.cat([eigvecs, -eigvecs], dim=0)
+        return TopKLearnedDict(eigvecs_, sparsity)
+
+class PCAEncoder(LearnedDict):
+    def __init__(self, pca_dict, sparsity):
+        normed_dict = pca_dict / torch.norm(pca_dict, dim=-1)[:, None]
+        self.pca_dict = normed_dict
+        self.sparsity = sparsity
+    
+    def to_device(self, device):
+        self.pca_dict = self.pca_dict.to(device)
+    
+    def encode(self, x):
+        # for every x, find the top-k PCA components
+
+        scores = torch.einsum("ij,bj->bi", self.pca_dict, x)
+        topk_idxs = torch.topk(scores.abs(), self.sparsity, dim=-1).indices
+
+        code = torch.zeros_like(scores)
+        code.scatter_(dim=-1, index=topk_idxs, src=scores.gather(dim=-1, index=topk_idxs))
+
+        return code
+    
+    def get_learned_dict(self):
+        return self.pca_dict

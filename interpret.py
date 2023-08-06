@@ -50,6 +50,7 @@ from neuron_explainer.explanations.scoring import simulate_and_score, aggregate_
 from neuron_explainer.explanations.simulator import ExplanationNeuronSimulator
 from neuron_explainer.fast_dataclasses import loads
 
+
 EXPLAINER_MODEL_NAME = "gpt-4" # "gpt-3.5-turbo"
 SIMULATOR_MODEL_NAME = "text-davinci-003"
 
@@ -542,6 +543,7 @@ async def main(cfg: dotdict) -> None:
     
     if cfg.upload_to_aws:
         upload_to_aws(transform_folder)
+
 
 def get_score(lines: List[str], mode: str):
     if mode == "top":

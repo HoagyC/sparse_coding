@@ -254,8 +254,12 @@ def init_synthetic_dataset(cfg):
             cfg.feature_prob_decay,
             cfg.noise_magnitude_scale,
             "cuda:0",
+            sparse_component_covariance = None if cfg.correlated_components else torch.eye(cfg.n_ground_truth_components, device="cuda:0"),
             t_type=torch.float16
         )
+
+        print("generated dataset")
+
         chunk_size = cfg.chunk_size_gb * 1024**3
         chunk_activations = chunk_size // (cfg.activation_width * 2)
         generate_synthetic_dataset(cfg, generator, chunk_activations, cfg.n_chunks)
@@ -309,7 +313,11 @@ def sweep(ensemble_init_func, cfg):
     print("Ensembles initialised.")
 
     n_chunks = len(os.listdir(cfg.dataset_folder))
+
     chunk_order = np.random.permutation(n_chunks)
+
+    if cfg.n_repetitions is not None:
+        chunk_order = np.tile(chunk_order, cfg.n_repetitions)
 
     for i, chunk_idx in enumerate(chunk_order):
         print(f"Chunk {i+1}/{n_chunks}")
@@ -328,7 +336,7 @@ def sweep(ensemble_init_func, cfg):
         for ensemble, arg, _ in ensembles:
             learned_dicts.extend(unstacked_to_learned_dicts(ensemble, arg, cfg.ensemble_hyperparams, cfg.buffer_hyperparams))
 
-        if not cfg.wandb_images:
+        if cfg.wandb_images:
             log_standard_metrics(learned_dicts, chunk, i, hyperparam_ranges, cfg)
 
         del chunk

@@ -15,7 +15,7 @@ SSH_PYTHON = "/opt/conda/bin/python"
 
 PORT = 22
 
-USER = "hoagy"
+USER = "aidan"
 
 SSH_DIRECTORY = f"sparse_coding_{USER}"
 BUCKET_NAME = "sparse-coding"
@@ -77,6 +77,8 @@ def setup():
     command = f'ssh -p {PORT} {DEST_ADDR} "cd {SSH_DIRECTORY} && sudo apt -y install python3.9 python3.9-venv && python3.9 -m venv .env --system-site-packages && source .env/bin/activate && pip install -r requirements.txt" && apt install vim'
     # command = f"ssh -p {VAST_PORT} {dest_addr} \"cd {SSH_DIRECTORY} && echo $PATH\""
     subprocess.call(command, shell=True)
+
+import warnings
 
 class dotdict(dict):
     """Dictionary that can be accessed with dot notation."""
