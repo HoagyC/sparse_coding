@@ -22,6 +22,7 @@ import datetime
 import pickle
 import json
 import os
+import sys
 
 import standard_metrics
 from autoencoders.learned_dict import LearnedDict, UntiedSAE, TiedSAE
@@ -265,6 +266,10 @@ def init_synthetic_dataset(cfg):
         print(f"Activations in {cfg.dataset_folder} already exist, loading them")
 
 def sweep(ensemble_init_func, cfg):
+    if not sys.warnoptions:
+        import warnings
+        warnings.simplefilter('ignore')
+    
     torch.set_grad_enabled(False)
     with torch.no_grad():
         torch.cuda.empty_cache()

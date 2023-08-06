@@ -49,13 +49,13 @@ def run_pca_on_activation_dataset(cfg: dotdict, outputs_folder):
 
     with open(os.path.join(cfg.dataset_folder, "0.pkl"), "rb") as f:
         dataset = pickle.load(f)
-    cfg.activation_dim = get_activation_size(cfg.model_name, cfg.layer_loc)
+    activation_dim = get_activation_size(cfg.model_name, cfg.layer_loc)
     n_lines = cfg.max_lines
     del dataset
 
     # actual pca
 
-    pca_model = BatchedPCA(cfg.activation_dim, cfg.device)
+    pca_model = BatchedPCA(activation_dim, cfg.device)
 
     n_chunks_in_folder = len(os.listdir(cfg.dataset_folder))
 
