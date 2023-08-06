@@ -85,8 +85,8 @@ class SparseMixDataset(Generator):
 
     def __post_init__(self):
         self.frac_nonzero = self.feature_num_nonzero / self.n_sparse_components
-
         if self.sparse_component_dict is None:
+            print("generating features...")
             self.sparse_component_dict = generate_rand_feats(
                 self.activation_dim,
                 self.n_sparse_components,
@@ -94,6 +94,7 @@ class SparseMixDataset(Generator):
             )
         
         if self.sparse_component_covariance is None:
+            print("generating covariances...")
             self.sparse_component_covariance = generate_corr_matrix(self.n_sparse_components, device=self.device)
         
         if self.noise_covariance is None:
