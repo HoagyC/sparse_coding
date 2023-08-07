@@ -1,91 +1,33 @@
-import asyncio
-import json
-import os
-import pickle
-from typing import List, Tuple, Union, Optional, Dict, Any, Literal
+from functools import partial
+from itertools import product
+from typing import List, Tuple, Union, Any, Dict, Literal
 
 from datasets import load_dataset
+from einops import rearrange
 import matplotlib.pyplot as plt
 import matplotlib
 import numpy as np
 from PIL import Image
+from sklearn.cluster import KMeans
+from sklearn.manifold import TSNE
 import torch
+from torch.utils.data import DataLoader
 from torchtyping import TensorType
 
 import tqdm
 
 from transformer_lens import HookedTransformer
 
-"""
-# set OPENAI_API_KEY environment variable from secrets.json['openai_key']
-# needs to be done before importing openai interp bits
-with open("secrets.json") as f:
-    secrets = json.load(f)
-    os.environ["OPENAI_API_KEY"] = secrets["openai_key"]
-
-from neuron_explainer.explanations.calibrated_simulator import UncalibratedNeuronSimulator
-from neuron_explainer.explanations.explanations import ScoredSimulation
-from neuron_explainer.explanations.simulator import ExplanationNeuronSimulator
-from neuron_explainer.explanations.prompt_builder import PromptFormat
-from neuron_explainer.activations.activations import ActivationRecord
-"""
-
 from autoencoders.learned_dict import LearnedDict
 
-import utils
+from activation_dataset import setup_data
 
 from sklearn.linear_model import LogisticRegression, Ridge, RidgeClassifier
 from sklearn import metrics
 
 matplotlib.use('Agg')
 
-"""
-SIMULATOR_MODEL_NAME = "text-davinci-003" 
-PROMPT_FORMAT = PromptFormat.INSTRUCTION_FOLLOWING
-MAX_CONCURRENT = 5
-REPLACEMENT_CHAR = "�"
-TRUE_THRESHOLD = 2
-"""
-
 _batch_size, _activation_size, _n_dict_components, _fragment_len, _n_sentences, _n_dicts = None, None, None, None, None, None
-
-async def get_synthetic_dataset(
-        explanation: str, 
-        sentences: List[str], 
-        tokenizer, 
-        str_len: int = 64
-    ) -> Tuple[List[List[str]], List[List[float]], List[List[int]]]:
-    token_strs_list = []
-    sim_activations_list = []
-    tokens_list = []
-
-    simulator = UncalibratedNeuronSimulator(
-        ExplanationNeuronSimulator(
-            SIMULATOR_MODEL_NAME,
-            explanation,
-            max_concurrent=MAX_CONCURRENT,
-            prompt_format=PROMPT_FORMAT, # INSTRUCTIONFOLLIWING
-        )
-    )
-
-    for sentence in sentences:
-        # Getting activations - using HookedTransformer to avoid tokenization artefacts like 'Ġand'
-        tokens = tokenizer.to_tokens(sentence, prepend_bos=False)[:, :str_len]
-        print(tokens.shape)
-        token_strs = tokenizer.to_str_tokens(tokens)
-        if REPLACEMENT_CHAR in token_strs:
-            continue
-
-        simulation = await simulator.simulate(token_strs)
-
-        assert len(simulation.expected_activations) == len(tokens[0]), f"Expected activations length {len(simulation.expected_activations)} does not match tokens length {len(tokens[0])}"
-
-        token_strs_list.append(token_strs)
-        sim_activations_list.append(simulation.expected_activations)
-        tokens_list.append(tokens[0].tolist())
-        breakpoint()
-
-    return token_strs_list, sim_activations_list, tokens_list
 
 def run_with_model_intervention(transformer: HookedTransformer, model: LearnedDict, tensor_name, tokens, other_hooks=[], **kwargs):
     def intervention(tensor, hook=None):
@@ -106,46 +48,6 @@ def run_with_model_intervention(transformer: HookedTransformer, model: LearnedDi
         **kwargs
     )
 
-def run_ablating_model_directions(transformer: HookedTransformer, model: LearnedDict, tensor_name, features_to_ablate, tokens, other_hooks=[], ablation_positions=[], run_with_cache=False, **kwargs):
-    def intervention(tensor, hook=None):
-        nonlocal ablation_positions
-
-        B, L, C = tensor.shape # batch_size, sequence_length, activation_size
-
-        if ablation_positions == None:
-            ablation_positions = list(range(L))
-        
-        L_ = len(ablation_positions)
-
-        activations_at_positions = tensor[:, ablation_positions, :]
-        reshaped_activations = activations_at_positions.reshape(B * L_, C)
-        feat_activations = model.encode(reshaped_activations)
-        ablation_mask = torch.zeros_like(feat_activations)
-        ablation_mask[:, features_to_ablate] = 1.0
-        ablated_feat_activations = feat_activations * ablation_mask
-        reshaped_ablation = torch.einsum("nd,bn->bd", model.get_learned_dict(), ablated_feat_activations).reshape(B, L_, C)
-        tensor[:, ablation_positions, :] -= reshaped_ablation
-
-        return tensor
-    
-    if run_with_cache:
-        return transformer.run_with_cache(
-            tokens,
-            fwd_hooks = other_hooks + [(
-                tensor_name,
-                intervention
-            )],
-            **kwargs
-        )
-    else:
-        return transformer.run_with_hooks(
-            tokens,
-            fwd_hooks = other_hooks + [(
-                tensor_name,
-                intervention
-            )],
-            **kwargs
-        )
 
 Location = Tuple[int, Literal["residual", "mlp"]]
 
@@ -204,24 +106,25 @@ def cache_all_activations(
 # model location, feature index
 FeatureIdx = Tuple[int, int]
 Feature = Tuple[Location, FeatureIdx]
+FeatureNoPos = Tuple[Location, int]
 
 def build_ablation_graph(
     transformer: HookedTransformer,
     models: Dict[Location, LearnedDict],
     tokens: TensorType["_n_sentences", "_fragment_len"],
-    features_to_ablate: Optional[Dict[Location, List[Feature]]] = None,
-    root_features: Optional[Dict[Location, List[Feature]]] = None,
+    features_to_ablate: Dict[Location, List[FeatureIdx]] = {},
+    target_features: Dict[Location, List[FeatureIdx]] = {},
 ) -> Dict[Tuple[Feature, Feature], float]:
     
     B, L = tokens.shape
 
-    if features_to_ablate == None:
-        features_to_ablate = {location: list(zip(range(L), range(model.get_learned_dict().shape[0]))) for location, model in models.items()}
+    if not features_to_ablate:
+        features_to_ablate = {location: list(product(range(L), range(model.get_learned_dict().shape[0]))) for location, model in models.items()}
 
-    if root_features == None:
-        root_features = {}
+    if not target_features:
+        target_features = {}
     
-    all_features = [(location, feature) for location, features in {**features_to_ablate, **root_features}.items() for feature in features]
+    all_features = [(location, feature) for location, features in {**features_to_ablate, **target_features}.items() for feature in features]
 
     activations = cache_all_activations(transformer, models, tokens)
 
@@ -271,47 +174,46 @@ def build_ablation_graph_non_positional(
     transformer: HookedTransformer,
     models: Dict[Location, LearnedDict],
     tokens: TensorType["_n_sentences", "_fragment_len"],
-    features_to_ablate: Optional[Dict[Location, List[FeatureIdx]]] = None,
-    root_features: Optional[Dict[Location, List[FeatureIdx]]] = None,
-) -> Dict[Tuple[FeatureIdx, FeatureIdx], float]:
-        
-        B, L = tokens.shape
+    features_to_ablate: Dict[Location, List[int]] = {},
+    target_features: Dict[Location, List[int]] = {},
+) -> Dict[Tuple[FeatureNoPos, FeatureNoPos], float]:
+    B, L = tokens.shape
+
+    if not features_to_ablate:
+        features_to_ablate = {location: list(range(model.get_learned_dict().shape[0])) for location, model in models.items()}
+
+    if not target_features:
+        target_features = {}
     
-        if features_to_ablate == None:
-            features_to_ablate = {location: list(range(model.get_learned_dict().shape[0])) for location, model in models.items()}
+    all_features = [(location, feature) for location, features in {**features_to_ablate, **target_features}.items() for feature in features]
+
+    activations = cache_all_activations(transformer, models, tokens)
+
+    graph = {}
+    for location, model in models.items():
+        for feature in tqdm.tqdm(features_to_ablate[location]):
+            tensor_name = get_model_tensor_name(location)
+
+            ablated_activations = cache_all_activations(
+                transformer,
+                models,
+                tokens,
+                fwd_hooks = [(
+                    tensor_name,
+                    ablate_feature_intervention_non_positional(model, location, feature)
+                )]
+            )
+
+            # maybe later on compress into a single op
+            for location_, feature_ in all_features:
+                if location_ == location and feature_ == feature:
+                    continue
+                
+                unablated = activations[location_][:, :, feature_]
+                ablated = ablated_activations[location_][:, :, feature_]
+                graph[(location, feature), (location_, feature_)] = torch.norm(unablated - ablated, dim=-1).mean().item()
     
-        if root_features == None:
-            root_features = {}
-        
-        all_features = [(location, feature) for location, features in {**features_to_ablate, **root_features}.items() for feature in features]
-    
-        activations = cache_all_activations(transformer, models, tokens)
-    
-        graph = {}
-        for location, model in models.items():
-            for feature in tqdm.tqdm(features_to_ablate[location]):
-                tensor_name = get_model_tensor_name(location)
-    
-                ablated_activations = cache_all_activations(
-                    transformer,
-                    models,
-                    tokens,
-                    fwd_hooks = [(
-                        tensor_name,
-                        ablate_feature_intervention_non_positional(model, location, feature)
-                    )]
-                )
-    
-                # maybe later on compress into a single op
-                for location_, feature_ in all_features:
-                    if location_ == location and feature_ == feature:
-                        continue
-                    
-                    unablated = activations[location_][:, :, feature_]
-                    ablated = ablated_activations[location_][:, :, feature_]
-                    graph[(location, feature), (location_, feature_)] = torch.norm(unablated - ablated, dim=-1).mean().item()
-        
-        return graph
+    return graph
 
 def perplexity_under_reconstruction(
     transformer: HookedTransformer,
@@ -358,60 +260,6 @@ def ridge_regression_auroc(activations: TensorType["_batch_size", "_activation_s
 
     clf.fit(activations_, labels_)
     return metrics.roc_auc_score(labels_, clf.predict(activations_))
-
-def measure_concept_erasure(
-        transformer: HookedTransformer, 
-        model: LearnedDict, 
-        ablation_t_name: str, 
-        features_to_ablate: TensorType["_n_dict_components"], 
-        read_t_name: str, 
-        tokens: TensorType["_n_sentences", "_fragment_len"], 
-        labels: TensorType["_n_sentences", "_fragment_len"], 
-        **kwargs
-        ) -> Tuple[float, float, float]:
-    """ Testing whether a concept which is believed to be represented by a learned direction 
-    is actually represented by that direction. We do this by ablation of the direction, and
-    then measuring the effect on the model's predictions/.
-    """
-    assert tokens.shape == labels.shape, f"tokens shape {tokens.shape} does not match labels shape {labels.shape}"
-    assert features_to_ablate.shape == (model.n_feats, ), f"to ablate shape {features_to_ablate.shape} is not {model.n_feats}" # features_to_ablate is a binary vector of length n_feats indicating which features to ablate
-    B, L = tokens.shape  # tokens: [batch_size, sequence_length]
-
-
-    activation_cache = torch.empty(0)
-    def read_tensor_hook(tensor, hook=None):
-        nonlocal activation_cache
-        activation_cache = tensor.clone()
-        return tensor
-    
-    with torch.no_grad():
-        transformer.run_with_hooks(
-            tokens,
-            fwd_hooks = [(read_t_name, read_tensor_hook)],
-            **kwargs
-        )
-    y_true = activation_cache.reshape(B * L, -1)
-
-    with torch.no_grad():
-        run_ablating_model_directions(transformer, model, ablation_t_name, features_to_ablate, tokens, other_hooks=[(read_t_name, read_tensor_hook)], **kwargs)
-    y_ablated = activation_cache.reshape(B * L, -1)
-
-    labels_reshaped = labels.reshape(B * L)
-    labels_thresholded = labels_reshaped.cpu().numpy() > TRUE_THRESHOLD
-
-    # should use different classifiers for each task, we want to compare linear separability
-    # just using this for sanity checks atm
-    regression_model = RidgeClassifier()
-    regression_model.fit(y_true.cpu().numpy(), labels_thresholded)
-
-    y_true_pred = regression_model.predict(y_true.cpu().numpy())
-    y_ablated_pred = regression_model.predict(y_ablated.cpu().numpy())
-
-    auroc_true = metrics.roc_auc_score(labels_thresholded, y_true_pred)
-    auroc_ablated = metrics.roc_auc_score(labels_thresholded, y_ablated_pred)
-
-    # not sure what summary to use here?
-    return 1 - (auroc_ablated - 0.5) / (auroc_true - 0.5), auroc_true, auroc_ablated
 
 def mcs_duplicates(ground: LearnedDict, model: LearnedDict) -> TensorType["_n_dict_components"]:
     # get max cosine sim between each model atom and all ground atoms
@@ -461,6 +309,34 @@ def neurons_per_feature(model: LearnedDict) -> float:
     c = c / c.abs().sum(dim=-1, keepdim=True)
     c = c.pow(2).sum(dim=-1)
     return (1.0 / c).mean()
+
+# calculating the capacity metric from Scherlis et al 2022 
+# https://arxiv.org/pdf/2210.01892.pdf
+def capacity_per_feature(model: LearnedDict) -> TensorType["_n_dict_components"]:
+    learned_dict: TensorType["_n_dict_components", "_activation_size"] = model.get_learned_dict()
+
+    squared_dot_products = torch.einsum("md,nd->mn", learned_dict, learned_dict).pow(2)
+    sum_of_sq_dot = squared_dot_products.sum(dim=-1)
+    capacities = torch.diag(squared_dot_products) / sum_of_sq_dot
+    return capacities
+
+def plot_capacities(dicts: List[Tuple[LearnedDict, Dict[str, Any]]], show: bool =False, save_name: str = "capacities") -> None:
+    max_capacity = dicts[0][0].activation_size
+    capacity_sums = [sum(capacity_per_feature(d[0])) for d in dicts]
+    l1_values = [d[1]["l1_alpha"] for d in dicts]
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    ax.scatter(l1_values, capacity_sums)
+    ax.set_xlabel("L1 alpha")
+    ax.set_ylabel("Sum of capacities")
+    ax.set_xscale("log")
+    ax.axhline(max_capacity, color="red", linestyle="--")
+    ax.set_ylim(0, max_capacity * 1.1)
+    ax.set_title(f"Sum of capacities vs L1 alpha - {save_name}")
+    if show:
+        plt.show()
+    plt.savefig(save_name + ".png")
 
 def plot_hist(scores: TensorType["_n_dict_components"], x_label, y_label, **kwargs):
     fig = plt.figure()
@@ -543,96 +419,165 @@ def plot_grid(scores: np.ndarray, first_tick_labels, second_tick_labels, first_l
 
     return Image.fromarray(data, mode="RGB")
 
-"""
-def process_scored_simulation(simulation: ScoredSimulation, tokenizer: HookedTransformer) -> Tuple[List[List[str]], List[List[float]], List[List[int]]]:
-    token_strs = [x.simulation.tokens for x in simulation.scored_sequence_simulations]
-    sim_activations = [x.simulation.expected_activations for x in simulation.scored_sequence_simulations]
 
-    tokens = [tokenizer.to_tokens("".join(x), prepend_bos=False)[0].tolist() for x in token_strs]
-    breakpoint()
-    for i in range(len(tokens)):
-        assert len(tokens[i]) == len(sim_activations[i]) 
-    return token_strs, sim_activations, tokens
+def cluster_vectors(model: LearnedDict, n_clusters: int = 1000, top_clusters: int = 10, save_loc: str = "outputs/top_clusters.txt"):
+    # take the direction vectors and cluster them
+    # get the direction vectors
+    direction_vectors: TensorType["_n_dict_components", "_activation_size"] = model.get_learned_dict()
 
-def measure_ablation_score():    
-    from argparser import parse_args
-    cfg = parse_args()
+    # first apply t-SNE to reduce dimensionality
+    tsne = TSNE(n_components=2, random_state=0)
+    direction_vectors_tsne = tsne.fit_transform(direction_vectors)
 
-    cfg.layer = 1
-    cfg.use_residual = False
-    cfg.model_name = "EleutherAI/pythia-70m-deduped"
-    cfg.fresh_synth_data = False
+    # now we're going to cluster the direction vectors
+    # first, we'll try k-means
+    print("Clustering vectors using kmeans")
+    kmeans = KMeans(n_clusters=n_clusters, random_state=0).fit(direction_vectors_tsne)
+    # now get the clusters which have the most points in them and get the ids of the points in those clusters
+    cluster_ids, cluster_counts = np.unique(kmeans.labels_, return_counts=True)
+    cluster_ids = cluster_ids[np.argsort(cluster_counts)[::-1]]
+    cluster_counts = cluster_counts[np.argsort(cluster_counts)[::-1]]   
+    # now get the ids of the points in the top 10 clusters
+    top_cluster_ids = cluster_ids[:top_clusters]
+    top_cluster_points = []
+    for cluster_id in top_cluster_ids:
+        top_cluster_points.append(np.where(kmeans.labels_ == cluster_id)[0])
 
-    device = "cuda:0"
-    dicts = torch.load("output/_0/learned_dicts.pt")
-    pile_10k = load_dataset("NeelNanda/pile-10k")
-    transformer = HookedTransformer.from_pretrained("EleutherAI/pythia-70m-deduped", device=device)
+    # save clusters as separate lines on a text file
+    with open(save_loc, "w") as f:
+        for cluster in top_cluster_points:
+            f.write(f"{list(cluster)}\n")
 
-    sentences = pile_10k["train"]["text"][:10]
+    # now want to take a selection of points, and find the nearest neighbours to them
+    # first, take a random selection of points
+    # n_points = 10
+    # random_points = np.random.choice(direction_vectors_tsne.shape[0], n_points, replace=False)
+    # # now find the nearest neighbours to these points
+    # nbrs = NearestNeighbors(n_neighbors=5, algorithm='ball_tree').fit(direction_vectors_tsne)
 
-    feature_id = 11
 
-    if cfg.fresh_synth_data:
-        token_strs, sim_activations, tokens = asyncio.run(
-            get_synthetic_dataset(
-                explanation=" mathematical expressions and sequences.", 
-                sentences=sentences,
-                tokenizer=transformer,
+def make_one_chunk_per_layer() -> None:
+    device = torch.device("cuda:1")
+    model_name = "EleutherAI/pythia-70m-deduped"
+    model = HookedTransformer.from_pretrained(model_name, device=device)
+    tokenizer = model.tokenizer
+
+    for layer_loc in ["residual", "mlp", "mlp_out", "attn"]:
+        activation_width = 2048 if layer_loc == "mlp" else 512
+        for layer in range(6):
+            setup_data(
+                tokenizer,
+                model,
+                model_name=model_name,
+                dataset_name="EleutherAI/pile",
+                dataset_folder=f"single_chunks/l{layer}_{layer_loc}",
+                layer=layer,
+                layer_loc=layer_loc,
+                n_chunks=1,
+                device=device,
             )
-        )
+
+def calculate_perplexity(
+        model: HookedTransformer, 
+        autoencoders: Union[Tuple[LearnedDict, Dict], List[Tuple[LearnedDict, Dict]]],
+        layer: int,
+        setting: str,
+        dataset_name: str = "NeelNaanda/pile-10k",
+        model_batch_size: int = 32,
+        fragment_len: int = 256
+    ) -> Tuple[float, List[float]]:
+    """
+    Takes an autoencoder or list of autoencoders, and calculates the perplexity of the model 
+    on the dataset when the activations of the layer are replaced with the reconstruction 
+    of the autoencoder. 
+    Returns the original perplexity and a list containing the perplexity for each autoencoder.
+    """
+    if isinstance(autoencoders, tuple): # if only one autoencoder, make it a list
+        autoencoders = [autoencoders]
+    num_dictionaries = len(autoencoders)    
+
+    # Define function to replace activations with reconstruction
+    def replace_with_reconstruction(value, hook, autoencoder):
+        # Rearrange to fit autoencoder
+        int_val = rearrange(value, 'b s h -> (b s) h')
+        # Run through the autoencoder
+        reconstruction = autoencoder.predict(int_val)
+        batch, seq_len, hidden_size = value.shape
+        reconstruction = rearrange(reconstruction, '(b s) h -> b s h', b=batch, s=seq_len)
+        return reconstruction
+
+    # Load model
+    device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
+    model = model.eval()
+
+    assert setting in ["residual", "mlp"], "setting must be either 'residual' or 'mlp'"
+    if setting == "residual":
+        cache_name = f"blocks.{layer}.hook_resid_post"
+    elif setting == "mlp":
+        cache_name = f"blocks.{layer}.mlp.hook_post"
     else:
-        data_loc = f"auto_interp_results/pythia-70m-deduped_layer1_postnonlin/ld_mlp/feature_{feature_id}/scored_simulation.pkl"
-        with open(data_loc, "rb") as file:
-            scored_simulation = pickle.load(file)
-        token_strs, sim_activations, tokens = process_scored_simulation(scored_simulation, tokenizer=transformer)
+        raise NotImplementedError
 
-    model: LearnedDict = torch.load(cfg.load_interpret_autoencoder)
-    model.to_device(device)
-
-    features_to_ablate = torch.zeros(model.n_feats).to(dtype=torch.bool)
-    features_to_ablate[feature_id] = 1
-
-    tensor_to_ablate = utils.make_tensor_name(cfg.layer, cfg.use_residual, cfg.model_name)
-    tensor_to_read = utils.make_tensor_name(cfg.layer+1, use_residual=True, model_name=cfg.model_name)
-    
-    print(f"num nonzero activations: {(torch.Tensor(sim_activations) > 2).sum()}")
-    breakpoint()
-
-    erasure_score, true, ablated = measure_concept_erasure(
-        transformer,
-        model,
-        tensor_to_ablate,
-        features_to_ablate,
-        tensor_to_read,
-        torch.Tensor(tokens).to(dtype=torch.int32),
-        torch.Tensor(sim_activations),
+    dataset = load_dataset(dataset_name, split="train").map(
+        lambda x: model.tokenizer(x['text']),
+        batched=True,
+    ).filter(
+        lambda x: len(x['input_ids']) > fragment_len
+    ).map(
+        lambda x: {'input_ids': x['input_ids'][:fragment_len]}
     )
 
-    activations: TensorType["_batch_size", "_activation_size"] = None
-    def copy_to_activations(tensor, hook=None):
-        global activations
-        activations = tensor.clone()
-        return tensor
+    with torch.no_grad(), dataset.formatted_as("pt"):
+        dl = DataLoader(dataset["input_ids"], batch_size=model_batch_size, shuffle=False)
+        # Calculate Original Perplexity ie no intervention/no dictionary
+        total_loss = 0
+        for i, batch in enumerate(dl):
+            loss = model(batch.to(device), return_type="loss")
+            total_loss += loss.item()
+        # Average
+        avg_neg_log_likelihood_orig = torch.tensor(total_loss / len(dl)).to(device)
+        # Exponentiate to compute perplexity
+        original_perplexity = torch.exp(avg_neg_log_likelihood_orig)
+        print("Perplexity for original model: ", original_perplexity.item())
 
-    with torch.no_grad():
-        transformer.run_with_hooks(
-            torch.Tensor(tokens).to(dtype=torch.int32),
-            fwd_hooks = [(tensor_to_read, copy_to_activations)]
-        )
+        # Compute perplexity for each dictionary
+        all_perplexities = np.zeros(num_dictionaries)
+        # Calculate Perplexity for each dictionary
+        for dict_index in range(num_dictionaries):
+            autoencoder, hparams = autoencoders[dict_index]
+            autoencoder.to_device(device)
+            total_loss = 0
+            for i, batch in enumerate(dl):
+                # Perplexity with reconstructed activations
+                loss = model.run_with_hooks(batch.to(device), 
+                    return_type="loss",
+                    fwd_hooks=[(
+                        cache_name, # intermediate activation that we intervene on
+                        partial(replace_with_reconstruction, autoencoder=autoencoder), # function to apply to cache_name
+                        )]
+                    )
+                total_loss += loss.item()
 
-    # r_sq = fraction_variance_unexplained(model, activations.reshape(-1, activations.shape[-1])).item()
+            # Average
+            avg_neg_log_likelihood_recon = torch.tensor(total_loss / len(dl)).to(device)
+            # Exponentiate to compute perplexity
+            recon_perplexity = torch.exp(avg_neg_log_likelihood_recon)
+            print(f"Perplexity for hparams {hparams}: {recon_perplexity.item():.2f}")
+            all_perplexities[dict_index] = recon_perplexity.item()
 
-    print(erasure_score, true, ablated)
+    return original_perplexity.item(), all_perplexities.tolist()
 
 if __name__ == "__main__":
-    ld_loc = "output_hoagy_dense_sweep_tied_resid_l2_r4/_38/learned_dicts.pt"
-    learned_dicts: List[Tuple[LearnedDict, Dict[str, Any]]] = torch.load(ld_loc)
-    activations_loc = "pilechunks_l2_resid/0.pt"
-    activations = torch.load(activations_loc).to(torch.float32)
+    make_one_chunk_per_layer()
 
-    for learned_dict, hparams in learned_dicts:
-        feat_activations = learned_dict.encode(activations)
-        means = calc_feature_mean(activations)
+    # ld_loc = "output_hoagy_dense_sweep_tied_resid_l2_r4/_38/learned_dicts.pt"
+    # learned_dicts: List[Tuple[LearnedDict, Dict[str, Any]]] = torch.load(ld_loc)
+    # activations_loc = "pilechunks_l2_resid/0.pt"
+    # activations = torch.load(activations_loc).to(torch.float32)
+
+    # for learned_dict, hparams in learned_dicts:
+    #     feat_activations = learned_dict.encode(activations)
+    #     means = calc_feature_mean(activations)
 
 
 
@@ -640,4 +585,3 @@ if __name__ == "__main__":
     #     neurons_per_feat = neurons_per_feature(learned_dict)
     #     l1_value = hparams["l1_alpha"]
     #     print(f"l1: {l1_value}, neurons per feat: {neurons_per_feat}")
-"""

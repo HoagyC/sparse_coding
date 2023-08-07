@@ -140,7 +140,7 @@ def generate_noise_dataset(
     noise = torch.distributions.MultivariateNormal(
         loc=torch.zeros(noise_covariance.shape[0], device=device),
         covariance_matrix=noise_covariance,
-    ).sample((dataset_size,))
+    ).sample(torch.Size([dataset_size]))
     noise *= noise_magnitude_scale
 
     return noise

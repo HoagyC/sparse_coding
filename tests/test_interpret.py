@@ -41,11 +41,9 @@ class TestMain(unittest.TestCase):
             model_name=cfg.model_name,
             model=self.model,
             layer=self.layer,
-            use_residual=False,
+            layer_loc="mlp",
             activation_fn_name="feature_dict",
             activation_fn_kwargs=activation_fn_kwargs,
-            activation_dim=2048,
-            use_baukit=False,
             device="cuda",
             n_fragments=3,
             random_fragment=False,
@@ -66,7 +64,7 @@ class TestMain(unittest.TestCase):
         self.layer = 2
         cfg.model_name = "EleutherAI/pythia-70m-deduped"
         cfg.activation_transform = "neuron_basis"
-        cfg.use_residual = True
+        cfg.layer_loc = "residual"
         activation_fn_kwargs = {}
         self.transform_folder = os.path.join("auto_interp_results", "test_transform", "residual2")
         # clear the folder
@@ -83,17 +81,15 @@ class TestMain(unittest.TestCase):
             model_name=cfg.model_name,
             model=self.model,
             layer=self.layer,
-            use_residual=cfg.use_residual,
+            layer_loc=cfg.layer_loc,
             activation_fn_name="neuron_basis",
             activation_fn_kwargs=activation_fn_kwargs,
-            activation_dim=512,
-            use_baukit=False,
             device="cuda",
             n_fragments=3,
             random_fragment=False,
         )
 
-        tensor_name = make_tensor_name(self.layer, cfg.use_residual, model_name=cfg.model_name)
+        tensor_name = make_tensor_name(self.layer, cfg.layer_loc, model_name=cfg.model_name)
         sentence = next(iter(self.sentence_dataset))["text"]
         tokens = self.model.to_tokens(sentence)[0, 1:65]
         _, cache = self.model.run_with_cache(tokens)

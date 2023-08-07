@@ -15,26 +15,12 @@ from autoencoders.residual_denoising_autoencoder import FunctionalLISTADenoising
 from autoencoders.direct_coef_search import DirectCoefOptimizer
 from autoencoders.topk_encoder import TopKEncoder
 
-from activation_dataset import setup_data
-from utils import dotdict, make_tensor_name
 from argparser import parse_args
 
 import numpy as np
-from itertools import product, chain
 
-from transformer_lens import HookedTransformer
-
-import wandb
-import datetime
-import pickle
-import json
-import os
 import shutil
-
-import standard_metrics
-from autoencoders.learned_dict import LearnedDict, UntiedSAE, TiedSAE
-
-from optimizers import adam as adam_grouped
+from itertools import product
 
 from big_sweep import sweep
 
@@ -372,7 +358,7 @@ def run_resid_denoise():
 
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.layer = 2
-    cfg.use_residual = True
+    cfg.layer_loc = "residual"
 
     cfg.use_synthetic_dataset = False
     cfg.dataset_folder = "activation_data"
@@ -447,14 +433,15 @@ def run_dense_l1_range():
     cfg.dataset_name = "EleutherAI/pile"
 
     cfg.batch_size = 2048
+    cfg.layer_loc = "attn"
     cfg.activation_width = 512
 
-    cfg.output_folder = f"output_hoagy_dense_sweep{'_tied' if cfg.tied_ae else ''}_{'resid' if cfg.use_residual else 'mlp'}_l{cfg.layer}_r{int(cfg.learned_dict_ratio)}"
-    cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{'mlp' if not cfg.use_residual else 'resid'}"
+    cfg.output_folder = f"layerloctest_{'_tied' if cfg.tied_ae else ''}_{cfg.layer_loc}_l{cfg.layer}_r{int(cfg.learned_dict_ratio)}"
+    cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{cfg.layer_loc}"
     cfg.use_synthetic_dataset = False
     cfg.dtype = torch.float32
     cfg.lr = 3e-4
-    cfg.n_chunks=38
+    cfg.n_chunks=30
 
     sweep(dense_l1_range_experiment, cfg)
 
@@ -470,16 +457,16 @@ def run_across_layers():
     cfg.n_chunks=10
     cfg.tied_ae=True
     for layer in [0, 1, 2, 3, 4, 5]:
-        for use_resid in [True, False]:
+        for layer_loc in ["residual", "mlp"]:
             for dict_ratio in [0.5, 1, 2, 4, 8, 16, 32]:
                 cfg.layer = layer
-                cfg.use_residual = use_resid
+                cfg.layer_loc = layer_loc
                 cfg.learned_dict_ratio = dict_ratio
 
-                print(f"Running layer {layer}, use_resid {use_resid}, dict_ratio {dict_ratio}")
+                print(f"Running layer {layer}, layer location {layer_loc}, dict_ratio {dict_ratio}")
 
-                cfg.output_folder = f"output_hoagy_dense_sweep{'_tied' if cfg.tied_ae else ''}_{'resid' if cfg.use_residual else 'mlp'}_l{cfg.layer}_r{int(cfg.learned_dict_ratio)}"
-                cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{'mlp' if not cfg.use_residual else 'resid'}"
+                cfg.output_folder = f"output_hoagy_dense_sweep{'_tied' if cfg.tied_ae else ''}_{layer_loc}_l{cfg.layer}_r{int(cfg.learned_dict_ratio)}"
+                cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{layer_loc}"
                 
                 print(f"Output folder: {cfg.output_folder}, dataset folder: {cfg.dataset_folder}")
                 
@@ -489,15 +476,99 @@ def run_across_layers():
 
                 sweep(dense_l1_range_experiment, cfg)
 
-            # delete the dataset
+            # delete the dataset to save space
             shutil.rmtree(cfg.dataset_folder)
+
+def run_across_layers_attn():
+    cfg = parse_args()
+    cfg.model_name = "EleutherAI/pythia-70m-deduped"
+    cfg.dataset_name = "EleutherAI/pile"
+
+    cfg.batch_size = 2048
+    cfg.use_wandb = False
+    cfg.save_every = 2
+    cfg.tied_ae=True
+    for layer in [0, 1, 2, 3, 4, 5]:
+        layer_loc = "attn"
+        for dict_ratio in [1, 2, 4, 8]:
+            cfg.layer = layer
+            cfg.layer_loc = layer_loc
+            cfg.learned_dict_ratio = dict_ratio
+
+            cfg.output_folder = f"output_attn_sweep{'_tied' if cfg.tied_ae else ''}_{cfg.layer_loc}_l{cfg.layer}_r{int(cfg.learned_dict_ratio)}"
+            cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{cfg.layer_loc}"
+            cfg.use_synthetic_dataset = False
+            cfg.dtype = torch.float32
+            cfg.lr = 3e-4
+            cfg.n_chunks=10
+
+            sweep(dense_l1_range_experiment, cfg)
+
+        # delete the dataset
+        shutil.rmtree(cfg.dataset_folder)
+
+def run_across_layers_mlp_out():
+    cfg = parse_args()
+    cfg.model_name = "EleutherAI/pythia-70m-deduped"
+    cfg.dataset_name = "EleutherAI/pile"
+
+    cfg.batch_size = 2048
+    cfg.use_wandb = False
+    cfg.save_every = 2
+    cfg.tied_ae=True
+    for layer in [0, 1, 3, 4, 5]:
+        layer_loc = "mlp_out"
+        for dict_ratio in [1, 2, 4, 8]:
+            cfg.layer = layer
+            cfg.layer_loc = layer_loc
+            cfg.learned_dict_ratio = dict_ratio
+
+            cfg.output_folder = f"output_sweep{'_tied' if cfg.tied_ae else ''}_{cfg.layer_loc}_l{cfg.layer}_r{int(cfg.learned_dict_ratio)}"
+            cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{cfg.layer_loc}"
+            cfg.use_synthetic_dataset = False
+            cfg.dtype = torch.float32
+            cfg.lr = 3e-4
+            cfg.n_chunks=10
+
+            sweep(dense_l1_range_experiment, cfg)
+
+        # delete the dataset
+        shutil.rmtree(cfg.dataset_folder)
+
+def run_across_layers_mlp_untied():
+    cfg = parse_args()
+    cfg.model_name = "EleutherAI/pythia-70m-deduped"
+    cfg.dataset_name = "EleutherAI/pile"
+
+    cfg.batch_size = 2048
+    cfg.use_wandb = False
+    cfg.save_every = 2
+    cfg.tied_ae=False
+    for layer in [0, 1, 2, 3, 4, 5]:
+        layer_loc = "mlp"
+        for dict_ratio in [1, 2, 4, 8]:
+            cfg.layer = layer
+            cfg.layer_loc = layer_loc
+            cfg.learned_dict_ratio = dict_ratio
+
+            cfg.output_folder = f"output_sweep{'_tied' if cfg.tied_ae else ''}_{cfg.layer_loc}_l{cfg.layer}_r{int(cfg.learned_dict_ratio)}"
+            cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{cfg.layer_loc}"
+            cfg.use_synthetic_dataset = False
+            cfg.dtype = torch.float32
+            cfg.lr = 3e-4
+            cfg.n_chunks=10
+
+            sweep(dense_l1_range_experiment, cfg)
+
+        # delete the dataset
+        shutil.rmtree(cfg.dataset_folder)
 
 def run_zero_l1_baseline():
     cfg = parse_args()
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.dataset_name = "EleutherAI/pile"
     cfg.layer=2
-    cfg.use_residual = True
+    cfg.layer_loc="residual"
     cfg.tied_ae = True
     cfg.dict_ratio=4
 
@@ -505,7 +576,7 @@ def run_zero_l1_baseline():
     cfg.activation_width = 512
 
     cfg.output_folder = f"output_zero_b_{cfg.dict_ratio}"
-    cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{'mlp' if not cfg.use_residual else 'resid'}"
+    cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{cfg.layer_loc}"
     cfg.use_synthetic_dataset = False
     cfg.dtype = torch.float32
     cfg.lr = 3e-4
