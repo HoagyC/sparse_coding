@@ -7,6 +7,8 @@ import standard_metrics
 
 from autoencoders.pca import BatchedPCA, PCAEncoder
 
+from autoencoders.learned_dict import AddedNoise
+
 import matplotlib.pyplot as plt
 
 import itertools
@@ -61,17 +63,19 @@ if __name__ == "__main__":
         "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r0/_9/learned_dicts.pt",
         "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r2/_9/learned_dicts.pt",
         "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r8/_9/learned_dicts.pt",
+        "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r16/_9/learned_dicts.pt",
         "output_topk/_39/learned_dicts.pt",
-        #"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r16/_9/learned_dicts.pt",
     ]
 
     file_labels = [
-        #"TopK",
+        "Linear",
         "Linear",
         "Linear",
         "Linear",
         "TopK",
     ]
+
+    d_activation = 512
 
     learned_dict_sets = {}
     for label, learned_dict_file in zip(file_labels, dict_files):
@@ -84,32 +88,27 @@ if __name__ == "__main__":
                 learned_dict_sets[name] = []
             learned_dict_sets[name].append((learned_dict, hyperparams))
     
+    # baselines
+    learned_dict_sets["Added Noise"] = [(AddedNoise(mag, 512, device="cuda:7"), {"dict_size": 512}) for mag in np.linspace(0.0, 0.5, 32)]
+    learned_dict_sets["PCA (dynamic)"] = [(pca.to_learned_dict(k), {"dict_size": 512, "k": k}) for k in range(1, d_activation // 2, 8)]
+    learned_dict_sets["PCA (static)"] = [(pca.to_rotation_dict(n), {"dict_size": 512, "n": n}) for n in range(1, d_activation // 2, 8)]
+
     scores = {}
     for label, learned_dict_set in learned_dict_sets.items():
         scores[label] = []
         for learned_dict, hyperparams in tqdm.tqdm(learned_dict_set):
             learned_dict.to_device(device)
             fvu = standard_metrics.fraction_variance_unexplained(learned_dict, sample).item()
-            perplexity = 0.0
+            perplexity = []
             for i in range(0, tokens.shape[0], 16):
                 j = min(i + 16, tokens.shape[0])
                 with torch.no_grad():
-                    perplexity += standard_metrics.perplexity_under_reconstruction(model, learned_dict, (2, "residual"), tokens[i:j]).item()
-            scores[label].append((fvu, perplexity))
+                    perplexity.append(standard_metrics.perplexity_under_reconstruction(model, learned_dict, (2, "residual"), tokens[i:j]).item())
+            scores[label].append((fvu, np.mean(perplexity)))
 
+    """
     scores["PCA (static)"] = []
     eigenvals, eigenvecs = pca.get_pca()
-
-    scores["PCA (dynamic)"] = []
-    for k in tqdm.tqdm(range(1, eigenvecs.shape[0] // 2, 8)):
-        pca_dict = pca.to_learned_dict(k)
-        fvu = standard_metrics.fraction_variance_unexplained(pca_dict, sample).item()
-        perplexity = 0.0
-        for i in range(0, tokens.shape[0], 16):
-            j = min(i + 16, tokens.shape[0])
-            with torch.no_grad():
-                perplexity += standard_metrics.perplexity_under_reconstruction(model, pca_dict, (2, "residual"), tokens[i:j]).item()
-        scores["PCA (dynamic)"].append((fvu, perplexity))
 
     # reverse order
     eigenvals = eigenvals.flip(dims=(0,))
@@ -124,21 +123,22 @@ if __name__ == "__main__":
             reconstructed = torch.einsum("ij,bli->blj", eigenvecs[:n_eig], compressed)
             return reconstructed
         
-        perplexity = 0
+        perplexity = []
         no_intervention_loss = 0
         for i in range(0, tokens.shape[0], 16):
             j = min(i + 16, tokens.shape[0])
             with torch.no_grad():
-                perplexity += model.run_with_hooks(
+                perplexity.append(model.run_with_hooks(
                     tokens[i:j],
                     fwd_hooks=[(
                         standard_metrics.get_model_tensor_name((2, "residual")),
                         intervention,
                     )],
                     return_type="loss"
-                ).item()
-        scores["PCA (static)"].append((fvus[n_eig].item(), perplexity))
-    
+                ).item())
+        scores["PCA (static)"].append((fvus[n_eig].item(), np.mean(perplexity)))
+    """
+
     colors = ["red", "blue", "green", "orange", "purple", "black"]
     markers = ["o", "x", "s", "v", "D", "P"]
 
@@ -150,6 +150,6 @@ if __name__ == "__main__":
         x, y = zip(*score)
         ax.scatter(x, y, label=label, color=color, marker=marker)
     ax.legend()
-    ax.set_xlabel("Fraction Variance Unexplained")
     ax.set_ylabel("Loss")
+    ax.set_xlabel("Fraction Variance Unexplained")
     plt.savefig("pca_perplexity.png")

@@ -232,20 +232,23 @@ def topk_experiment(cfg):
     
     return (ensembles, ["dict_size"], ["sparsity"], {"dict_size": dict_sizes, "sparsity": sparsity_levels})
 
-def topk_comparison(cfg):
-    l1_vals = np.logspace(-4, -2, 16)
-    dict_ratios = [0.5, 1, 2, 4, 0.5, 1, 2, 4]
+def synthetic_linear_range(cfg):
+    l1_vals = np.logspace(-4, -2, 32)
+    dict_ratios = [0.5, 1, 2, 4]
     dict_sizes = [int(cfg.activation_width * ratio) for ratio in dict_ratios]
+    settings = list(product([l1_vals[:16], l1_vals[16:]], dict_ratios))
+
     devices = [f"cuda:{i}" for i in range(8)]
 
     ensembles = []
     for i in tqdm.tqdm(range(8)):
-        dict_ratio = dict_ratios[i]
+        dict_ratio = settings[i][1]
         dict_size = int(cfg.activation_width * dict_ratio)
-        cfgs = l1_vals
+        l1_range = settings[i][0]
+        print(settings[i])
         models = [
             FunctionalTiedSAE.init(cfg.activation_width, dict_size, l1_alpha, dtype=cfg.dtype)
-            for l1_alpha in cfgs
+            for l1_alpha in l1_range
         ]
         device = devices.pop()
         ensemble = FunctionalEnsemble(
@@ -532,7 +535,9 @@ def topk():
 
     sweep(topk_experiment, cfg)
 
-def topk_synthetic_comparison():
+def synthetic_test():
+    import shutil
+
     cfg = parse_args()
 
     cfg.use_synthetic_dataset = True
@@ -541,11 +546,9 @@ def topk_synthetic_comparison():
 
     cfg.batch_size = 1024
     cfg.gen_batch_size = 4096
-    cfg.n_ground_truth_components = 4096
     cfg.activation_width = 512
-    cfg.noise_magnitude_scale = 0.01
+    #cfg.noise_magnitude_scale = 0.0
     cfg.feature_prob_decay = 1.0
-    cfg.feature_num_nonzero = 100
     cfg.lr = 1e-3
     cfg.n_chunks = 10
     cfg.correlated_components = False
@@ -555,14 +558,21 @@ def topk_synthetic_comparison():
 
     cfg.dtype = torch.float32
 
-    cfg.n_repetitions = 3
+    os.makedirs(cfg.dataset_folder, exist_ok=True)
 
-    cfg.output_folder = f"output_topk_synthetic"
-    sweep(topk_experiment, cfg)
+    n_ground_truth_components = [1024, 2048]
+    feature_num_nonzero = [10, 50, 100]
+    noise_magnitude = [0.1]
+    for (noise_mag, num_nz, n_ground) in product(noise_magnitude, feature_num_nonzero, n_ground_truth_components):
+        shutil.rmtree(cfg.dataset_folder)
 
-    cfg.output_folder = f"output_tied_synthetic"
-    sweep(topk_comparison, cfg)
+        cfg.noise_magnitude_scale = noise_mag
+        cfg.n_ground_truth_components = n_ground
+        cfg.feature_num_nonzero = num_nz
+        cfg.output_folder = f"output_synthetic_{noise_mag:.2E}_{n_ground}_{num_nz}"
+
+        sweep(synthetic_linear_range, cfg)
 
 if __name__ == "__main__":
     #run_across_layers()
-    topk_synthetic_comparison()
+    synthetic_test()

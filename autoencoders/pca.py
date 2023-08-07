@@ -16,7 +16,7 @@ from transformers import GPT2Tokenizer
 from transformer_lens import HookedTransformer
 import pickle
 
-from autoencoders.learned_dict import LearnedDict
+from autoencoders.learned_dict import LearnedDict, Rotation
 from autoencoders.topk_encoder import TopKLearnedDict
 
 class BatchedPCA():
@@ -58,6 +58,9 @@ class BatchedPCA():
         eigvecs = eigvecs[:, torch.argsort(eigvals, descending=True)].T
         eigvecs_ = torch.cat([eigvecs, -eigvecs], dim=0)
         return TopKLearnedDict(eigvecs_, sparsity)
+    
+    def to_rotation_dict(self, n_components):
+        return Rotation(self.get_dict()[:n_components])
 
 class PCAEncoder(LearnedDict):
     def __init__(self, pca_dict, sparsity):

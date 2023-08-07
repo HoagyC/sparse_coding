@@ -80,3 +80,37 @@ class TiedSAE(LearnedDict):
         c = c + self.encoder_bias
         c = torch.clamp(c, min=0.0)
         return c
+
+class AddedNoise(LearnedDict):
+    def __init__(self, noise_mag, activation_size, device=None):
+        self.noise_mag = noise_mag
+        self.activation_size = activation_size
+        self.device = "cpu" if device is None else device
+    
+    def get_learned_dict(self):
+        return torch.eye(self.activation_size, device=self.device)
+    
+    def to_device(self, device):
+        self.device = device
+
+    def encode(self, batch):
+        noise = torch.randn(batch.shape[0], self.activation_size, device=batch.device) * self.noise_mag
+        return batch + noise
+
+class Rotation(LearnedDict):
+    def __init__(self, matrix, device=None):
+        self.matrix = matrix
+        self.activation_size = matrix.shape[0]
+        self.device = "cpu" if device is None else device
+
+        self.matrix = self.matrix.to(self.device)
+    
+    def get_learned_dict(self):
+        return self.matrix
+    
+    def to_device(self, device):
+        self.matrix = self.matrix.to(device)
+        self.device = device
+    
+    def encode(self, batch):
+        return torch.einsum("nd,bd->bn", self.matrix, batch)
