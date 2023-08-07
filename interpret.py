@@ -26,9 +26,10 @@ from transformer_lens import HookedTransformer
 from transformers import GPT2Tokenizer, AutoTokenizer
 
 from autoencoders.learned_dict import LearnedDict
+from autoencoders.pca import BatchedPCA
 from argparser import parse_args
 from comparisons import NoCredentialsError
-from utils import dotdict, make_tensor_name, upload_to_aws
+from utils import dotdict, make_tensor_name, upload_to_aws, get_activation_size, check_use_baukit
 from nanoGPT_model import GPT
 from activation_dataset import setup_data
 
@@ -49,6 +50,7 @@ from neuron_explainer.explanations.prompt_builder import PromptFormat
 from neuron_explainer.explanations.scoring import simulate_and_score, aggregate_scored_sequence_simulations
 from neuron_explainer.explanations.simulator import ExplanationNeuronSimulator
 from neuron_explainer.fast_dataclasses import loads
+
 
 EXPLAINER_MODEL_NAME = "gpt-4" # "gpt-3.5-turbo"
 SIMULATOR_MODEL_NAME = "text-davinci-003"
@@ -80,25 +82,36 @@ def load_neuron(
         )
     return neuron_record
 
-def make_activation_dataset(cfg, model, activation_dim: int,  total_activation_size: int = 512 * 1024 * 1024):
+def make_activation_dataset(cfg, model, total_activation_size: int = 512 * 1024 * 1024):
     if cfg.model_name in ["gpt2", "nanoGPT"]:
         tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
     elif cfg.model_name == "EleutherAI/pythia-70m-deduped":
         tokenizer = AutoTokenizer.from_pretrained("EleutherAI/pythia-70m-deduped")
     else:
         raise NotImplementedError
+
     cfg.n_chunks = 1
     dataset_name = cfg.dataset_name.split("/")[-
     1] + "-" + cfg.model_name.split("/")[-1] + "-" + str(cfg.layer)
     cfg.dataset_folder = os.path.join(cfg.datasets_folder, dataset_name)
     if not os.path.exists(cfg.dataset_folder) or len(os.listdir(cfg.dataset_folder)) == 0:
         cfg.n_chunks = 1
-        cfg.activation_dim = activation_dim
-        setup_data(cfg, tokenizer, model, use_baukit=True)
+        setup_data(
+            tokenizer, 
+            model,
+            model_name=cfg.model_name,
+            dataset_name=cfg.dataset_name,
+            dataset_folder=cfg.dataset_folder,
+            layer=cfg.layer,
+            layer_loc=cfg.layer_loc,
+            n_chunks=cfg.n_chunks,
+            device=cfg.device
+        )
     chunk_loc = os.path.join(cfg.dataset_folder, f"0.pkl")
 
     elem_size = 4
-    n_activations = total_activation_size // (elem_size * cfg.activation_dim)
+    activation_dim = get_activation_size(cfg.model_name, cfg.layer_loc)
+    n_activations = total_activation_size // (elem_size * activation_dim)
 
     dataset = DataLoader(pickle.load(open(chunk_loc, "rb")), batch_size=n_activations, shuffle=True)
     return dataset, n_activations
@@ -141,24 +154,19 @@ def make_feature_activation_dataset(
         model_name: str,
         model: HookedTransformer, 
         layer: int,
-        use_residual: bool,
+        layer_loc: str,
         activation_fn: Callable,
-        activation_dim: int,
-        use_baukit: bool = False,
+        feat_dim: int,
         device: str = "cpu",
         n_fragments = OPENAI_MAX_FRAGMENTS,
         random_fragment = True, # used for debugging
-        max_features: Optional[int] = None
     ):
     """
     Takes a specified point of a model, and a dataset. 
     Returns a dataset which contains the activations of the model at that point, 
     for each fragment in the dataset, transformed into the feature space
     """
-    if max_features and max_features < activation_dim:
-        feat_dim = max_features
-    else:
-        feat_dim = activation_dim
+    use_baukit = check_use_baukit(model_name)
 
     sentence_dataset = load_dataset("openwebtext", split="train", streaming=True)
 
@@ -167,7 +175,7 @@ def make_feature_activation_dataset(
     else:
         tokenizer_model = model
     
-    tensor_name = make_tensor_name(layer, use_residual, model_name)
+    tensor_name = make_tensor_name(layer, layer_loc, model_name)
     # make list of sentence, tokenization pairs
     
     iter_dataset = iter(sentence_dataset)
@@ -230,9 +238,6 @@ def make_feature_activation_dataset(
                 feature_activation_means = torch.mean(feature_activation_data, dim=0)
                 feature_activation_maxes = torch.max(feature_activation_data, dim=0)[0]
 
-                assert feature_activation_means.shape == (activation_dim,), feature_activation_means.shape
-                assert feature_activation_maxes.shape == (activation_dim,), feature_activation_maxes.shape
-
                 activation_means_table[n_added, :] = feature_activation_means.cpu().numpy()[:feat_dim]
                 activation_maxes_table[n_added, :] = feature_activation_maxes.cpu().numpy()[:feat_dim]
 
@@ -286,10 +291,10 @@ async def main(cfg: dotdict) -> None:
         resid_width = 32
     else:
         raise ValueError("Model name not recognised")
-    if cfg.use_residual:
-        activation_width = resid_width
-    else:
+    if cfg.layer_loc == "mlp":
         activation_width = resid_width * 4
+    else:
+        activation_width = resid_width
     
     # Load feature dict
     if cfg.activation_transform in ["feature_dict", "feature_no_bias", "neuron_basis_bias", "random_bias"]:
@@ -298,16 +303,21 @@ async def main(cfg: dotdict) -> None:
         autoencoder.to_device(cfg.device)
 
     if cfg.activation_transform in ["feature_dict", "feature_no_bias"]:
-        feature_size: int = autoencoder.n_feats
+        feature_size = autoencoder.n_feats
+    elif cfg.activation_transform in ["pca_learned"]:
+        feature_size = activation_width * 2
     else:
         feature_size = activation_width
+
+    if cfg.df_n_feats and cfg.df_n_feats < feature_size:
+        feat_dim = cfg.df_n_feats
+    else:
+        feat_dim = feature_size
     
     if cfg.activation_transform in ["ica", "pca", "nmf"]:
-        activation_dataset, n_activations = make_activation_dataset(cfg, model, activation_dim=feature_size)
+        activation_dataset, n_activations = make_activation_dataset(cfg, model)
 
-
-    point_name = "resid" if cfg.use_residual else "postnonlin"
-    activations_name = f"{cfg.model_name.split('/')[-1]}_layer{cfg.layer}_{point_name}"
+    activations_name = f"{cfg.model_name.split('/')[-1]}_layer{cfg.layer}_{cfg.layer_loc}"
 
     print(f"Using activation transform {cfg.activation_transform}")
     if cfg.activation_transform == "neuron_basis":
@@ -344,6 +354,26 @@ async def main(cfg: dotdict) -> None:
             pickle.dump(pca, open(pca_path, "wb"))
         
         activation_fn = lambda x: torch.tensor(pca.transform(x.cpu()))
+
+    elif cfg.activation_transform == "pca_learned":
+        pca_path = os.path.join("auto_interp_results", activations_name, "pca_dict.pt")
+        if os.path.exists(pca_path):
+            print("Loading PCA")
+            pca = torch.load(pca_path)
+        else:
+            dataset = torch.load(f"/mnt/ssd-cluster/single_chunks/l{cfg.layer}_{cfg.layer_loc}/0.pt").to(cfg.device)
+            pca = BatchedPCA(dataset.shape[1], cfg.device)
+            print("Training PCA")
+            batch_size = 5000
+            for i in tqdm(range(0, len(dataset), batch_size)):
+                j = min(i + batch_size, len(dataset))
+                batch = dataset[i:j]
+                pca.train_batch(batch)
+            
+            torch.save(pca, pca_path)
+
+        pca_top_k = pca.to_topk_dict(cfg.top_k_pca)        
+        activation_fn = pca_top_k.encode
 
     elif cfg.activation_transform == "nmf":
         nmf_path = os.path.join("auto_interp_results", activations_name, "nmf_1gb.pkl")
@@ -398,6 +428,8 @@ async def main(cfg: dotdict) -> None:
 
     if cfg.activation_transform == "feature_dict":
         transform_name = cfg.load_interpret_autoencoder.split("/")[-1][:-3]
+    elif cfg.activation_transform == "pca_learned":
+        transform_name = f"pca_top_k_{cfg.top_k_pca}"
     else:
         transform_name = cfg.activation_transform
 
@@ -415,12 +447,10 @@ async def main(cfg: dotdict) -> None:
             cfg.model_name,
             model,
             layer=cfg.layer,
-            use_residual=cfg.use_residual,
+            layer_loc=cfg.layer_loc,
             activation_fn=activation_fn,
-            activation_dim=feature_size,
             device=cfg.device,
-            use_baukit=use_baukit,
-            max_features=cfg.df_n_feats if cfg.df_n_feats else None,
+            feat_dim=feature_size
         )
         # save the dataset, saving each column separately so that we can retrive just the columns we want later
         print(f"Saving dataset to {df_loc}")
@@ -534,6 +564,7 @@ async def main(cfg: dotdict) -> None:
     if cfg.upload_to_aws:
         upload_to_aws(transform_folder)
 
+
 def get_score(lines: List[str], mode: str):
     if mode == "top":
         return float(lines[-3].split(" ")[-1])
@@ -638,6 +669,8 @@ def read_results(activation_name: str, score_mode: str, exclude_mean: bool = Tru
     plt.grid(axis="y", color="grey", linestyle="-", linewidth=0.5, alpha=0.3)
     # first we need to get the scores into a list of lists
     scores_list = [scores[transform][1] for transform in transforms]
+    # remove any transforms that have no scores
+    scores_list = [scores for scores in scores_list if len(scores) > 0]
     violin_parts = plt.violinplot(scores_list, showmeans=False, showextrema=False)
     for i, pc in enumerate(violin_parts['bodies']):
         pc.set_facecolor(colors[i % len(colors)])
@@ -674,7 +707,7 @@ if __name__ == "__main__":
         argparser = argparse.ArgumentParser()
         argparser.add_argument("--layer", type=int, default=1)
         argparser.add_argument("--model_name", type=str, default="EleutherAI/pythia-70m-deduped")
-        argparser.add_argument("--use_residual", type=bool, default=False)
+        argparser.add_argument("--layer_loc", type=str, default="mlp")
         argparser.add_argument("--score_mode", type=str, default="top_random") # can be "top", "random", "top_random", "all"
         argparser.add_argument("--run_all", type=bool, default=False)
         argparser.add_argument("--exclude_mean", type=bool, default=True)
@@ -688,8 +721,7 @@ if __name__ == "__main__":
         if cfg.run_all:
             activation_names = [x for x in os.listdir("auto_interp_results") if os.path.isdir(os.path.join("auto_interp_results", x))]
         else:
-            point_name = "resid" if cfg.use_residual else "postnonlin"
-            activation_names = [f"{cfg.model_name.split('/')[-1]}_layer{cfg.layer}_{point_name}"]
+            activation_names = [f"{cfg.model_name.split('/')[-1]}_layer{cfg.layer}_{cfg.layer_loc}"]
         
         for activation_name in activation_names:
             for score_mode in score_modes:

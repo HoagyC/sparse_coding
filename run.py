@@ -13,9 +13,6 @@ import os
 import pickle
 from typing import Union, Tuple, List, Any, Optional, TypeVar, Dict
 
-from baukit import Trace
-from datasets import Dataset, DatasetDict, load_dataset
-from einops import rearrange
 from matplotlib import pyplot as plt
 import pandas as pd
 import numpy as np
@@ -286,7 +283,7 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
 
     if not data_generator:
         data_generator = RandomDatasetGenerator(
-            activation_dim=cfg.activation_dim,
+            activation_dim=cfg.toy_activation_dim,
             n_ground_truth_components=cfg.n_ground_truth_components,
             batch_size=cfg.batch_size,
             feature_num_nonzero=cfg.feature_num_nonzero,
@@ -296,7 +293,7 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
         )
 
     t_type = torch.float32
-    auto_encoder = AutoEncoder(cfg.activation_dim, cfg.n_components_dictionary, t_type, l1_coef=cfg.l1_alpha).to(device)
+    auto_encoder = AutoEncoder(cfg.toy_activation_dim, cfg.n_components_dictionary, t_type, l1_coef=cfg.l1_alpha).to(device)
 
     ground_truth_features = data_generator.feats
     # Train the model
@@ -474,7 +471,7 @@ def recalculate_results(auto_encoder, data_generator):
 
 def run_toy_model(cfg):
     start_time = datetime.now().strftime("%Y%m%d-%H%M%S")
-    cfg.model_name = f"toy{cfg.activation_dim}{cfg.learned_dict_ratio}"
+    cfg.model_name = f"toy{cfg.toy_activation_dim}{cfg.learned_dict_ratio}"
 
     if cfg.use_wandb:
         secrets = json.load(open("secrets.json"))
@@ -485,7 +482,7 @@ def run_toy_model(cfg):
     
     # Using a single data generator for all runs so that can compare learned dicts
     data_generator = RandomDatasetGenerator(
-        activation_dim=cfg.activation_dim,
+        activation_dim=cfg.toy_activation_dim,
         n_ground_truth_components=cfg.n_ground_truth_components,
         batch_size=cfg.batch_size,
         feature_num_nonzero=cfg.feature_num_nonzero,
@@ -757,7 +754,17 @@ def run_real_data_model(cfg: dotdict):
 
     if len(os.listdir(cfg.dataset_folder)) == 0:
         print(f"Activations in {cfg.dataset_folder} do not exist, creating them")
-        n_lines = setup_data(cfg, tokenizer, model, use_baukit=use_baukit)
+        n_lines = setup_data(
+            tokenizer, 
+            model,
+            model_name=cfg.model_name,
+            dataset_name=cfg.dataset_name,
+            dataset_folder=cfg.dataset_folder,
+            layer=cfg.layer,
+            layer_loc=cfg.layer_loc,
+            n_chunks=cfg.n_chunks,
+            device=cfg.device
+        )
     else:
         print(f"Activations in {cfg.dataset_folder} already exist, loading them")
         # get activation_dim from first file
@@ -902,8 +909,18 @@ def run_real_data_model(cfg: dotdict):
         if cfg.refresh_data:
             print("Remaking dataset")
             os.system(f"rm -rf {cfg.dataset_folder}/*") # delete the old dataset
-            n_new_lines = setup_data(cfg, tokenizer, model, use_baukit, start_line=n_lines)
-            n_lines += n_new_lines
+            n_new_lines = setup_data(
+                tokenizer, 
+                model, 
+                model_name=cfg.model_name,
+                dataset_name=cfg.dataset_name,
+                dataset_folder=cfg.dataset_folder,
+                layer=cfg.layer,
+                layer_loc=cfg.layer_loc,
+                n_chunks=cfg.n_chunks,
+                device=cfg.device,
+                start_line=n_lines
+            )
 
 
     # clamp dead_features to 0-100 for better visualisation

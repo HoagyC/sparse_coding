@@ -66,7 +66,7 @@ def unstack_dict(params, n_models, device=None):
 class FunctionalEnsemble():
     def __init__(self, models, sig: Type[DictSignature], optimizer_func, optimizer_kwargs, device=None, no_stacking=False):
         if device is None:
-            self.device = model_state_dicts[0]["device"]
+            self.device = models[0]["encoder"].device
         else:
             self.device = device
 
