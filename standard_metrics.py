@@ -1,6 +1,6 @@
 from functools import partial
 from itertools import product
-from typing import List, Tuple, Union, Optional, Dict, Literal
+from typing import List, Tuple, Union, Any, Dict, Literal
 
 from datasets import load_dataset
 from einops import rearrange
@@ -28,7 +28,6 @@ from sklearn import metrics
 matplotlib.use('Agg')
 
 _batch_size, _activation_size, _n_dict_components, _fragment_len, _n_sentences, _n_dicts = None, None, None, None, None, None
-
 
 def run_with_model_intervention(transformer: HookedTransformer, model: LearnedDict, tensor_name, tokens, other_hooks=[], **kwargs):
     def intervention(tensor, hook=None):
@@ -310,6 +309,34 @@ def neurons_per_feature(model: LearnedDict) -> float:
     c = c / c.abs().sum(dim=-1, keepdim=True)
     c = c.pow(2).sum(dim=-1)
     return (1.0 / c).mean()
+
+# calculating the capacity metric from Scherlis et al 2022 
+# https://arxiv.org/pdf/2210.01892.pdf
+def capacity_per_feature(model: LearnedDict) -> TensorType["_n_dict_components"]:
+    learned_dict: TensorType["_n_dict_components", "_activation_size"] = model.get_learned_dict()
+
+    squared_dot_products = torch.einsum("md,nd->mn", learned_dict, learned_dict).pow(2)
+    sum_of_sq_dot = squared_dot_products.sum(dim=-1)
+    capacities = torch.diag(squared_dot_products) / sum_of_sq_dot
+    return capacities
+
+def plot_capacities(dicts: List[Tuple[LearnedDict, Dict[str, Any]]], show: bool =False, save_name: str = "capacities") -> None:
+    max_capacity = dicts[0][0].activation_size
+    capacity_sums = [sum(capacity_per_feature(d[0])) for d in dicts]
+    l1_values = [d[1]["l1_alpha"] for d in dicts]
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    ax.scatter(l1_values, capacity_sums)
+    ax.set_xlabel("L1 alpha")
+    ax.set_ylabel("Sum of capacities")
+    ax.set_xscale("log")
+    ax.axhline(max_capacity, color="red", linestyle="--")
+    ax.set_ylim(0, max_capacity * 1.1)
+    ax.set_title(f"Sum of capacities vs L1 alpha - {save_name}")
+    if show:
+        plt.show()
+    plt.savefig(save_name + ".png")
 
 def plot_hist(scores: TensorType["_n_dict_components"], x_label, y_label, **kwargs):
     fig = plt.figure()
