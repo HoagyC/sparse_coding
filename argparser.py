@@ -50,6 +50,7 @@ def parse_args() -> dotdict:
 
     parser.add_argument("--refresh_data", type=bool, default=False)  # Whether to remake the dataset after each mini run
     parser.add_argument("--max_lines", type=int, default=100000)  # How many lines to read from the dataset
+
     # interpret
     parser.add_argument("--load_activation_dataset", type=bool, default=True) # path to dataset to load
     parser.add_argument("--n_feats_explain", type=int, default=10) # number of features to explain
@@ -60,6 +61,7 @@ def parse_args() -> dotdict:
     parser.add_argument("--sort_mode", type=str, default="max") # how to sort fragments, either max, mean
     parser.add_argument("--use_decoder", type=bool, default=True) # whether to use the transposed decoder instead of encoder in a non-tied ae
     parser.add_argument("--df_n_feats", type=int, default=200) # number of features to use in dataframe, if 0 then use all
+    parser.add_argument("--top_k_pca", type=int, default=50) # enforced max active pca components
 
     parser.add_argument("--device", type=str, default="cuda:0")
     args = parser.parse_args()

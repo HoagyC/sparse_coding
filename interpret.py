@@ -26,6 +26,7 @@ from transformer_lens import HookedTransformer
 from transformers import GPT2Tokenizer, AutoTokenizer
 
 from autoencoders.learned_dict import LearnedDict
+from autoencoders.pca import BatchedPCA
 from argparser import parse_args
 from comparisons import NoCredentialsError
 from utils import dotdict, make_tensor_name, upload_to_aws, get_activation_size, check_use_baukit
@@ -155,23 +156,17 @@ def make_feature_activation_dataset(
         layer: int,
         layer_loc: str,
         activation_fn: Callable,
+        feat_dim: int,
         device: str = "cpu",
         n_fragments = OPENAI_MAX_FRAGMENTS,
         random_fragment = True, # used for debugging
-        max_features: Optional[int] = None
     ):
     """
     Takes a specified point of a model, and a dataset. 
     Returns a dataset which contains the activations of the model at that point, 
     for each fragment in the dataset, transformed into the feature space
     """
-    activation_dim = get_activation_size(model_name, layer_loc)
     use_baukit = check_use_baukit(model_name)
-
-    if max_features and max_features < activation_dim:
-        feat_dim = max_features
-    else:
-        feat_dim = activation_dim
 
     sentence_dataset = load_dataset("openwebtext", split="train", streaming=True)
 
@@ -243,9 +238,6 @@ def make_feature_activation_dataset(
                 feature_activation_means = torch.mean(feature_activation_data, dim=0)
                 feature_activation_maxes = torch.max(feature_activation_data, dim=0)[0]
 
-                assert feature_activation_means.shape == (activation_dim,), feature_activation_means.shape
-                assert feature_activation_maxes.shape == (activation_dim,), feature_activation_maxes.shape
-
                 activation_means_table[n_added, :] = feature_activation_means.cpu().numpy()[:feat_dim]
                 activation_maxes_table[n_added, :] = feature_activation_maxes.cpu().numpy()[:feat_dim]
 
@@ -311,13 +303,19 @@ async def main(cfg: dotdict) -> None:
         autoencoder.to_device(cfg.device)
 
     if cfg.activation_transform in ["feature_dict", "feature_no_bias"]:
-        feature_size: int = autoencoder.n_feats
+        feature_size = autoencoder.n_feats
+    elif cfg.activation_transform in ["pca_learned"]:
+        feature_size = activation_width * 2
     else:
         feature_size = activation_width
+
+    if cfg.df_n_feats and cfg.df_n_feats < feature_size:
+        feat_dim = cfg.df_n_feats
+    else:
+        feat_dim = feature_size
     
     if cfg.activation_transform in ["ica", "pca", "nmf"]:
         activation_dataset, n_activations = make_activation_dataset(cfg, model)
-
 
     activations_name = f"{cfg.model_name.split('/')[-1]}_layer{cfg.layer}_{cfg.layer_loc}"
 
@@ -356,6 +354,26 @@ async def main(cfg: dotdict) -> None:
             pickle.dump(pca, open(pca_path, "wb"))
         
         activation_fn = lambda x: torch.tensor(pca.transform(x.cpu()))
+
+    elif cfg.activation_transform == "pca_learned":
+        pca_path = os.path.join("auto_interp_results", activations_name, "pca_dict.pt")
+        if os.path.exists(pca_path):
+            print("Loading PCA")
+            pca = torch.load(pca_path)
+        else:
+            dataset = torch.load(f"/mnt/ssd-cluster/single_chunks/l{cfg.layer}_{cfg.layer_loc}/0.pt").to(cfg.device)
+            pca = BatchedPCA(dataset.shape[1], cfg.device)
+            print("Training PCA")
+            batch_size = 5000
+            for i in tqdm(range(0, len(dataset), batch_size)):
+                j = min(i + batch_size, len(dataset))
+                batch = dataset[i:j]
+                pca.train_batch(batch)
+            
+            torch.save(pca, pca_path)
+
+        pca_top_k = pca.to_topk_dict(cfg.top_k_pca)        
+        activation_fn = pca_top_k.encode
 
     elif cfg.activation_transform == "nmf":
         nmf_path = os.path.join("auto_interp_results", activations_name, "nmf_1gb.pkl")
@@ -410,6 +428,8 @@ async def main(cfg: dotdict) -> None:
 
     if cfg.activation_transform == "feature_dict":
         transform_name = cfg.load_interpret_autoencoder.split("/")[-1][:-3]
+    elif cfg.activation_transform == "pca_learned":
+        transform_name = f"pca_top_k_{cfg.top_k_pca}"
     else:
         transform_name = cfg.activation_transform
 
@@ -430,7 +450,7 @@ async def main(cfg: dotdict) -> None:
             layer_loc=cfg.layer_loc,
             activation_fn=activation_fn,
             device=cfg.device,
-            max_features=cfg.df_n_feats if cfg.df_n_feats else None,
+            feat_dim=feature_size
         )
         # save the dataset, saving each column separately so that we can retrive just the columns we want later
         print(f"Saving dataset to {df_loc}")
@@ -649,6 +669,8 @@ def read_results(activation_name: str, score_mode: str, exclude_mean: bool = Tru
     plt.grid(axis="y", color="grey", linestyle="-", linewidth=0.5, alpha=0.3)
     # first we need to get the scores into a list of lists
     scores_list = [scores[transform][1] for transform in transforms]
+    # remove any transforms that have no scores
+    scores_list = [scores for scores in scores_list if len(scores) > 0]
     violin_parts = plt.violinplot(scores_list, showmeans=False, showextrema=False)
     for i, pc in enumerate(violin_parts['bodies']):
         pc.set_facecolor(colors[i % len(colors)])
@@ -685,7 +707,7 @@ if __name__ == "__main__":
         argparser = argparse.ArgumentParser()
         argparser.add_argument("--layer", type=int, default=1)
         argparser.add_argument("--model_name", type=str, default="EleutherAI/pythia-70m-deduped")
-        argparser.add_argument("--layer_loc", type=bool, default="mlp")
+        argparser.add_argument("--layer_loc", type=str, default="mlp")
         argparser.add_argument("--score_mode", type=str, default="top_random") # can be "top", "random", "top_random", "all"
         argparser.add_argument("--run_all", type=bool, default=False)
         argparser.add_argument("--exclude_mean", type=bool, default=True)
