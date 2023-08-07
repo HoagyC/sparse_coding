@@ -1,10 +1,12 @@
 import torch
+from typing import Dict, List, Tuple, Any
 
 from transformer_lens import HookedTransformer
 from datasets import Dataset, load_dataset
 
 import standard_metrics
 
+from autoencoders.learned_dict import LearnedDict
 from autoencoders.pca import BatchedPCA, PCAEncoder
 
 import matplotlib.pyplot as plt
@@ -54,8 +56,6 @@ if __name__ == "__main__":
     sample_idxs = np.random.choice(len(dataset), 10000, replace=False)
     sample = dataset[sample_idxs]
 
-    dictionaries = []
-
     dict_files = [
         #"output_topk/_27/learned_dicts.pt",
         "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r0/_9/learned_dicts.pt",
@@ -73,7 +73,7 @@ if __name__ == "__main__":
         "TopK",
     ]
 
-    learned_dict_sets = {}
+    learned_dict_sets: Dict[str, List[Tuple[LearnedDict, Dict[str, Any]]]] = {}
     for label, learned_dict_file in zip(file_labels, dict_files):
         learned_dicts = torch.load(learned_dict_file)
         dict_sizes = list(set([hyperparams["dict_size"] for _, hyperparams in learned_dicts]))
@@ -84,7 +84,7 @@ if __name__ == "__main__":
                 learned_dict_sets[name] = []
             learned_dict_sets[name].append((learned_dict, hyperparams))
     
-    scores = {}
+    scores: Dict[str, List[Tuple[float, float]]] = {}
     for label, learned_dict_set in learned_dict_sets.items():
         scores[label] = []
         for learned_dict, hyperparams in tqdm.tqdm(learned_dict_set):
