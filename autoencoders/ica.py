@@ -1,5 +1,6 @@
 from datetime import datetime
 
+from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import FastICA
 import torch
 from torchtyping import TensorType
@@ -15,20 +16,26 @@ class ICAEncoder(LearnedDict):
         if not n_components:
             n_components = activation_size
         self.ica = FastICA()
+        self.scaler = StandardScaler()
     
     def to_device(self, device):
         pass
     
     def encode(self, x):
-        c = self.ica.transform(x.cpu().numpy())
+        assert x.shape[1] == self.activation_size
+        x_standardized = self.scaler.transform(x.cpu().numpy())
+        c = self.ica.transform(x_standardized)
         return torch.tensor(c, device=x.device)
         
     def train(self, dataset: TensorType["_n_samples", "_activation_size"]):
         assert dataset.shape[1] == self.activation_size
         print(f"Fitting ICA on {dataset.shape[0]} activations")
+        # Scale the data
+        dataset_rescaled = self.scaler.fit_transform(dataset.cpu().numpy())
         ica_start = datetime.now()
-        self.ica.fit(dataset.cpu().numpy()) # 1GB of activations takes about 15m
+        output = self.ica.fit_transform(dataset_rescaled) # 1GB of activations takes about 15m
         print(f"ICA fit in {datetime.now() - ica_start}")
+        return output
 
 
     def get_learned_dict(self):
