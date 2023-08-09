@@ -342,6 +342,35 @@ def plot_capacities(dicts: List[Tuple[LearnedDict, Dict[str, Any]]], show: bool 
         plt.show()
     plt.savefig(save_name + ".png")
 
+def plot_capacity_scatter(dicts: list[Tuple[LearnedDict, Dict[str, Any]]], show: bool = False, save_name: str = "capacity_scatter") -> None:
+    all_capacities = []
+    for i, (dict, hparams) in enumerate(dicts):
+        capacities = capacity_per_feature(dict)
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+        ax.scatter(range(len(capacities)), capacities)
+        ax.set_xlabel("Learned feature")
+        ax.set_ylabel("Capacity")
+        ax.set_title(f"Capacity per feature - {save_name}")
+        if show:
+            plt.show()
+        plt.savefig(save_name + "_" + str(i) + ".png")
+        all_capacities.append(capacities)
+    
+    # plot histogram of capacities
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    all_capacities_flat = torch.cat(all_capacities).flatten()
+    print(all_capacities_flat.shape)
+    ax.hist(all_capacities_flat, bins=80)
+    ax.set_xlabel("Capacity")
+    ax.set_ylabel("Frequency")
+    ax.set_title(f"Capacity histogram - {save_name}")
+    if show:
+        plt.show()
+    plt.savefig(save_name + "_hist.png")
+
+
 def plot_hist(scores: TensorType["_n_dict_components"], x_label, y_label, **kwargs):
     fig = plt.figure()
     ax = fig.add_subplot(111)
@@ -671,8 +700,11 @@ def calc_all_kurtosis():
     pickle.dump(results, open("kurtosis_data.pkl", "wb"))
 
 if __name__ == "__main__":
-    mp.set_start_method('spawn')
-    calc_all_kurtosis()
+    dicts = torch.load("/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r4/_9/learned_dicts.pt")
+    plot_capacity_scatter(dicts, save_name="outputs/capacity_scatter_l2_r4")
+
+    # mp.set_start_method('spawn')
+    # calc_all_kurtosis()
 
     # ld_loc = "output_hoagy_dense_sweep_tied_resid_l2_r4/_38/learned_dicts.pt"
     # learned_dicts: List[Tuple[LearnedDict, Dict[str, Any]]] = torch.load(ld_loc)
