@@ -69,7 +69,7 @@ def load_neuron(
     layer_index: Union[str, int], neuron_index: Union[str, int],
     dataset_path: str = "https://openaipublic.blob.core.windows.net/neuron-explainer/data/collated-activations",
 ) -> NeuronRecord:
-    """Load the NeuronRecord for the specified neuron."""
+    """Load the NeuronRecord for the specified neuron from OpenAI's original work with GPT-2."""
     url = os.path.join(dataset_path, str(layer_index), f"{neuron_index}.json")
     response = requests.get(url)
     if response.status_code != 200:
@@ -117,48 +117,14 @@ def make_activation_dataset(cfg, model, total_activation_size: int = 512 * 1024 
     return dataset, n_activations
 
 
-def activation_ICA(dataset, n_activations):
-    """
-    Takes a tensor of activations and returns the ICA of the activations
-    """
-    ica = FastICA()
-    print(f"Fitting ICA on {n_activations} activations")
-    ica_start = datetime.now()
-    ica.fit(next(iter(dataset))[0].cpu().numpy()) # 1GB of activations takes about 15m
-    print(f"ICA fit in {datetime.now() - ica_start}")
-    return ica
-
-
-def activation_PCA(dataset, n_activations):
-    pca = PCA()
-    print(f"Fitting PCA on {n_activations} activations")
-    pca_start = datetime.now()
-    pca.fit(next(iter(dataset))[0].cpu().numpy()) # 1GB of activations takes about 40s
-    print(f"PCA fit in {datetime.now() - pca_start}")
-    return pca
-
-
-def activation_NMF(dataset, n_activations):
-    nmf = NMF()
-    print(f"Fitting NMF on {n_activations} activations")
-    nmf_start = datetime.now()
-    data = next(iter(dataset))[0].cpu().numpy() # 1GB of activations takes an unknown but long time
-    # NMF doesn't support negative values, so shift the data to be positive
-    data -= data.min()
-    nmf.fit(data)
-    print(f"NMF fit in {datetime.now() - nmf_start}")
-    return nmf
-
-
 def make_feature_activation_dataset(
-        model_name: str,
         model: HookedTransformer, 
+        learned_dict: LearnedDict,
         layer: int,
         layer_loc: str,
-        activation_fn: Callable,
-        feat_dim: int,
         device: str = "cpu",
         n_fragments = OPENAI_MAX_FRAGMENTS,
+        max_features: int = 0, # number of features to store activations for, 0 for all
         random_fragment = True, # used for debugging
     ):
     """
@@ -166,16 +132,21 @@ def make_feature_activation_dataset(
     Returns a dataset which contains the activations of the model at that point, 
     for each fragment in the dataset, transformed into the feature space
     """
-    use_baukit = check_use_baukit(model_name)
+    use_baukit = check_use_baukit(model.cfg["model_name"])
+
+    if max_features:
+        feat_dim = min(max_features, learned_dict.n_feats)
+    else:
+        feat_dim = learned_dict.n_feats
 
     sentence_dataset = load_dataset("openwebtext", split="train", streaming=True)
 
-    if model_name == "nanoGPT":
+    if model.cfg["model_name"] == "nanoGPT":
         tokenizer_model = HookedTransformer.from_pretrained("gpt2")
     else:
         tokenizer_model = model
-    
-    tensor_name = make_tensor_name(layer, layer_loc, model_name)
+
+    tensor_name = make_tensor_name(layer, layer_loc, model.cfg["model_name"])
     # make list of sentence, tokenization pairs
     
     iter_dataset = iter(sentence_dataset)
@@ -190,7 +161,6 @@ def make_feature_activation_dataset(
     fragment_token_ids_list = []
     fragment_token_strs_list = []
 
-    activation_means_table = np.zeros((n_fragments, feat_dim), dtype=np.float16)
     activation_maxes_table = np.zeros((n_fragments, feat_dim), dtype=np.float16)
     activation_data_table = np.zeros((n_fragments, feat_dim * OPENAI_FRAGMENT_LEN), dtype=np.float16)
     with torch.no_grad():
@@ -234,11 +204,9 @@ def make_feature_activation_dataset(
                 activation_data = mlp_activation_data[i:i+1, :].squeeze(0)
                 token_ids = fragment_tokens[0].tolist()
                     
-                feature_activation_data = activation_fn(activation_data)
-                feature_activation_means = torch.mean(feature_activation_data, dim=0)
+                feature_activation_data = learned_dict.encode(activation_data)
                 feature_activation_maxes = torch.max(feature_activation_data, dim=0)[0]
 
-                activation_means_table[n_added, :] = feature_activation_means.cpu().numpy()[:feat_dim]
                 activation_maxes_table[n_added, :] = feature_activation_maxes.cpu().numpy()[:feat_dim]
 
                 feature_activation_data = feature_activation_data.cpu().numpy()[:, :feat_dim]
@@ -259,12 +227,10 @@ def make_feature_activation_dataset(
     df = pd.DataFrame()
     df["fragment_token_ids"] = fragment_token_ids_list
     df["fragment_token_strs"] = fragment_token_strs_list
-    means_column_names = [f"feature_{i}_mean" for i in range(feat_dim)]
     maxes_column_names = [f"feature_{i}_max" for i in range(feat_dim)]
     activations_column_names = [f"feature_{i}_activation_{j}" for j in range(OPENAI_FRAGMENT_LEN) for i in range(feat_dim)] # nested for loops are read left to right
     
     assert feature_activation_data.shape == (OPENAI_FRAGMENT_LEN, feat_dim)
-    df = pd.concat([df, pd.DataFrame(activation_means_table, columns=means_column_names)], axis=1)
     df = pd.concat([df, pd.DataFrame(activation_maxes_table, columns=maxes_column_names)], axis=1)
     df = pd.concat([df, pd.DataFrame(activation_data_table, columns=activations_column_names)], axis=1)
     print(f"Threw away {n_thrown} fragments, made {len(df)} fragments")
@@ -291,166 +257,24 @@ async def main(cfg: dotdict) -> None:
         resid_width = 32
     else:
         raise ValueError("Model name not recognised")
-    if cfg.layer_loc == "mlp":
-        activation_width = resid_width * 4
-    else:
-        activation_width = resid_width
     
     # Load feature dict
-    if cfg.activation_transform in ["feature_dict", "feature_no_bias", "neuron_basis_bias", "random_bias"]:
-        assert cfg.load_interpret_autoencoder is not None
-        autoencoder: LearnedDict = torch.load(cfg.load_interpret_autoencoder)
-        autoencoder.to_device(cfg.device)
-
-    if cfg.activation_transform in ["feature_dict", "feature_no_bias"]:
-        feature_size = autoencoder.n_feats
-    elif cfg.activation_transform in ["pca_learned"]:
-        feature_size = activation_width * 2
-    else:
-        feature_size = activation_width
-
-    if cfg.df_n_feats and cfg.df_n_feats < feature_size:
-        feat_dim = cfg.df_n_feats
-    else:
-        feat_dim = feature_size
-    
-    if cfg.activation_transform in ["ica", "pca", "nmf"]:
-        activation_dataset, n_activations = make_activation_dataset(cfg, model)
-
-    activations_name = f"{cfg.model_name.split('/')[-1]}_layer{cfg.layer}_{cfg.layer_loc}"
-
-    print(f"Using activation transform {cfg.activation_transform}")
-    if cfg.activation_transform == "neuron_basis":
-        activation_fn = lambda x: x
-    elif cfg.activation_transform == "neuron_relu":
-        activation_fn = torch.relu
-    elif cfg.activation_transform == "neuron_basis_bias":
-        bias = autoencoder.encoder_bias
-        if not cfg.tied_ae:
-            norms = torch.norm(autoencoder.encoder, 2, dim=-1)
-            bias = bias / norms
-        activation_fn = lambda x: torch.relu(x + bias)
-
-    elif cfg.activation_transform == "ica":
-        ica_path = os.path.join("auto_interp_results", activations_name, "ica_1gb.pkl")
-        if os.path.exists(ica_path):
-            print("Loading ICA")
-            ica = pickle.load(open(ica_path, "rb"))
-        else:
-            ica = activation_ICA(activation_dataset, n_activations)
-            os.makedirs(os.path.dirname(ica_path), exist_ok=True)
-            pickle.dump(ica, open(ica_path, "wb"))
-        
-        activation_fn = lambda x: torch.tensor(ica.transform(x.cpu()))
-
-    elif cfg.activation_transform == "pca":
-        pca_path = os.path.join("auto_interp_results", activations_name, "pca_1gb.pkl")
-        if os.path.exists(pca_path):
-            print("Loading PCA")
-            pca = pickle.load(open(pca_path, "rb"))
-        else:
-            pca = activation_PCA(activation_dataset, n_activations)
-            os.makedirs(os.path.dirname(pca_path), exist_ok=True)
-            pickle.dump(pca, open(pca_path, "wb"))
-        
-        activation_fn = lambda x: torch.tensor(pca.transform(x.cpu()))
-
-    elif cfg.activation_transform == "pca_learned":
-        pca_path = os.path.join("auto_interp_results", activations_name, "pca_dict.pt")
-        if os.path.exists(pca_path):
-            print("Loading PCA")
-            pca = torch.load(pca_path)
-        else:
-            dataset = torch.load(f"/mnt/ssd-cluster/single_chunks/l{cfg.layer}_{cfg.layer_loc}/0.pt").to(cfg.device)
-            pca = BatchedPCA(dataset.shape[1], cfg.device)
-            print("Training PCA")
-            batch_size = 5000
-            for i in tqdm(range(0, len(dataset), batch_size)):
-                j = min(i + batch_size, len(dataset))
-                batch = dataset[i:j]
-                pca.train_batch(batch)
-            
-            torch.save(pca, pca_path)
-
-        pca_top_k = pca.to_topk_dict(cfg.top_k_pca)        
-        activation_fn = pca_top_k.encode
-
-    elif cfg.activation_transform == "nmf":
-        nmf_path = os.path.join("auto_interp_results", activations_name, "nmf_1gb.pkl")
-        if os.path.exists(nmf_path):
-            print("Loading NMF")
-            nmf = pickle.load(open(nmf_path, "rb"))
-        else:
-            nmf = activation_NMF(activation_dataset, n_activations)
-            os.makedirs(os.path.dirname(nmf_path), exist_ok=True)
-            pickle.dump(nmf, open(nmf_path, "wb"))
-
-        activation_fn = lambda x: torch.tensor(nmf.transform(x.cpu()))
-
-    elif cfg.activation_transform == "feature_dict":
-        activation_fn = autoencoder.encode
-
-    elif cfg.activation_transform == "feature_no_bias":
-        activation_fn = partial(autoencoder.encode, bias=False)
-        
-    elif cfg.activation_transform == "random":
-        random_path = os.path.join("auto_interp_results", activations_name, "random_dirs.pkl")
-        if os.path.exists(random_path):
-            print("Loading random directions")
-            random_direction_matrix = pickle.load(open(random_path, "rb"))
-        else:
-            random_direction_matrix = torch.randn(activation_width, activation_width)
-            random_direction_matrix = random_direction_matrix / torch.norm(random_direction_matrix, dim=1, keepdim=True)
-            os.makedirs(os.path.dirname(random_path), exist_ok=True)
-            pickle.dump(random_direction_matrix, open(random_path, "wb"))
-        
-        activation_fn = lambda x: torch.relu(x @ random_direction_matrix.to(cfg.device))
-
-    elif cfg.activation_transform == "random_bias":
-        random_path = os.path.join("auto_interp_results", activations_name, "random_dirs.pkl")
-        if os.path.exists(random_path):
-            print("Loading random directions")
-            random_direction_matrix = pickle.load(open(random_path, "rb"))
-        else:
-            random_direction_matrix = torch.randn(activation_width, activation_width)
-            os.makedirs(os.path.dirname(random_path), exist_ok=True)
-            pickle.dump(random_direction_matrix, open(random_path, "wb"))
-        
-        bias = autoencoder.encoder_bias
-        if not cfg.tied_ae:
-            norms = torch.norm(autoencoder.encoder, 2, dim=-1)
-            bias = bias / norms
-
-        activation_fn = lambda x: torch.relu(x @ random_direction_matrix.to(cfg.device) + bias)
-
-    else:
-        raise ValueError(f"Activation transform {cfg.activation_transform} not recognised")
-
-    if cfg.activation_transform == "feature_dict":
-        transform_name = cfg.load_interpret_autoencoder.split("/")[-1][:-3]
-    elif cfg.activation_transform == "pca_learned":
-        transform_name = f"pca_top_k_{cfg.top_k_pca}"
-    else:
-        transform_name = cfg.activation_transform
-
-    if cfg.sort_mode == "mean":
-        transform_name += "_mean"
+    feature_dict = torch.load(cfg.feature_dict_loc, map_location="cpu")
 
     if cfg.interp_name:
-        transform_folder = os.path.join("auto_interp_results", activations_name, cfg.interp_name)
+        transform_folder = os.path.join("auto_interp_results", cfg.activations_name, cfg.interp_name)
     else:
-        transform_folder = os.path.join("auto_interp_results", activations_name, transform_name)
+        transform_folder = os.path.join("auto_interp_results", cfg.activations_name, cfg.feature_dict_loc.split("/")[-1])
+
     df_loc = os.path.join(transform_folder, f"activation_df.hdf")
 
     if not (cfg.load_activation_dataset and os.path.exists(df_loc)) or cfg.refresh_data:
         base_df = make_feature_activation_dataset(
-            cfg.model_name,
             model,
+            learned_dict=feature_dict,
             layer=cfg.layer,
             layer_loc=cfg.layer_loc,
-            activation_fn=activation_fn,
             device=cfg.device,
-            feat_dim=feature_size
         )
         # save the dataset, saving each column separately so that we can retrive just the columns we want later
         print(f"Saving dataset to {df_loc}")
@@ -464,8 +288,7 @@ async def main(cfg: dotdict) -> None:
 
     # save the autoencoder being investigated
     os.makedirs(transform_folder, exist_ok=True)
-    if cfg.activation_transform == "feature_dict":
-        torch.save(autoencoder, os.path.join(transform_folder, "autoencoder.pt"))
+    torch.save(feature_dict, os.path.join(transform_folder, "autoencoder.pt"))
         
     for feat_n in range(0, cfg.n_feats_explain):
         if os.path.exists(os.path.join(transform_folder, f"feature_{feat_n}")):
@@ -473,16 +296,13 @@ async def main(cfg: dotdict) -> None:
             continue
 
         activation_col_names = [f"feature_{feat_n}_activation_{i}" for i in range(OPENAI_FRAGMENT_LEN)]
-        read_fields = ["fragment_token_strs", f"feature_{feat_n}_mean", f"feature_{feat_n}_max", *activation_col_names]
+        read_fields = ["fragment_token_strs", f"feature_{feat_n}_max", *activation_col_names]
         # check that the dataset has the required columns
         if not all([field in base_df.columns for field in read_fields]):
             print(f"Dataset does not have all required columns for feature {feat_n}, skipping")
             continue
         df = base_df[read_fields].copy()
-        if cfg.sort_mode == "mean":
-            sorted_df = df.sort_values(by=f"feature_{feat_n}_mean", ascending=False)
-        else:
-            sorted_df = df.sort_values(by=f"feature_{feat_n}_max", ascending=False)
+        sorted_df = df.sort_values(by=f"feature_{feat_n}_max", ascending=False)
         sorted_df = sorted_df.head(TOTAL_EXAMPLES)
         top_activation_records = []
         for i, row in sorted_df.iterrows():
@@ -504,7 +324,7 @@ async def main(cfg: dotdict) -> None:
                 skip_feature = True
                 break
             # if there are no activations for this fragment, skip it
-            if df.iloc[i][f"feature_{feat_n}_mean"] == 0:
+            if df.iloc[i][f"feature_{feat_n}_max"] == 0:
                 continue
             random_activation_records.append(ActivationRecord(df.iloc[i]["fragment_token_strs"], [df.iloc[i][f"feature_{feat_n}_activation_{j}"] for j in range(OPENAI_FRAGMENT_LEN)]))
         if skip_feature:
@@ -651,7 +471,7 @@ def read_scores(results_folder: str, score_mode: str = "top") -> Dict[str, Tuple
     return scores
 
 
-def read_results(activation_name: str, score_mode: str, exclude_mean: bool = True) -> None:
+def read_results(activation_name: str, score_mode: str) -> None:
     results_folder = os.path.join("auto_interp_results", activation_name)
 
     scores = read_scores(results_folder, score_mode) # Dict[str, Tuple[List[int], List[float]]], where the tuple is (feature_ndxs, scores)
@@ -710,7 +530,6 @@ if __name__ == "__main__":
         argparser.add_argument("--layer_loc", type=str, default="mlp")
         argparser.add_argument("--score_mode", type=str, default="top_random") # can be "top", "random", "top_random", "all"
         argparser.add_argument("--run_all", type=bool, default=False)
-        argparser.add_argument("--exclude_mean", type=bool, default=True)
         cfg = argparser.parse_args(sys.argv[2:])
 
         if cfg.score_mode == "all":
@@ -725,7 +544,7 @@ if __name__ == "__main__":
         
         for activation_name in activation_names:
             for score_mode in score_modes:
-                read_results(activation_name, score_mode, cfg.exclude_mean)
+                read_results(activation_name, score_mode)
             
     elif len(sys.argv) > 1 and sys.argv[1] == "run_group":
         sys.argv.pop(1)
