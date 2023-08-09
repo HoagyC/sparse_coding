@@ -10,10 +10,10 @@ from autoencoders.topk_encoder import TopKLearnedDict
 _n_samples, _activation_size = None, None
 
 class ICAEncoder(LearnedDict):
-    def __init__(self, n_components, sparsity):
-        self.activation_size = n_components
-        self.n_feats = n_components
-        self.sparsity = sparsity
+    def __init__(self, activation_size, n_components: int = 0):
+        self.activation_size = activation_size
+        if not n_components:
+            n_components = activation_size
         self.ica = FastICA()
     
     def to_device(self, device):
@@ -33,3 +33,6 @@ class ICAEncoder(LearnedDict):
 
     def get_learned_dict(self):
         return self.ica.components_
+    
+    def to_topk_dict(self, sparsity):
+        return TopKLearnedDict(self.get_learned_dict(), sparsity)

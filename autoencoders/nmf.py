@@ -22,10 +22,10 @@ from autoencoders.topk_encoder import TopKLearnedDict
 _n_samples, _activation_size = None, None
 
 class NMFEncoder(LearnedDict):
-    def __init__(self, n_components, sparsity, shift=0.0):
-        self.activation_size = n_components
-        self.n_feats = n_components
-        self.sparsity = sparsity
+    def __init__(self, activation_size, n_components=0, shift=0.0):
+        self.activation_size = activation_size
+        if not n_components:
+            n_components = activation_size
         self.nmf = NMF()
         self.shift = shift
     
@@ -52,3 +52,6 @@ class NMFEncoder(LearnedDict):
 
     def get_learned_dict(self):
         return self.nmf.components_
+
+    def to_topk_dict(self, sparsity):
+        return TopKLearnedDict(self.get_learned_dict(), sparsity)
