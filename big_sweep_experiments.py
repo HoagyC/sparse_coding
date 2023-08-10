@@ -9,7 +9,7 @@ import torchopt
 from cluster_runs import dispatch_job_on_chunk
 
 from autoencoders.ensemble import FunctionalEnsemble
-from autoencoders.sae_ensemble import FunctionalSAE, FunctionalTiedSAE
+from autoencoders.sae_ensemble import FunctionalSAE, FunctionalTiedSAE, FunctionalMaskedTiedSAE
 from autoencoders.semilinear_autoencoder import SemiLinearSAE
 from autoencoders.residual_denoising_autoencoder import FunctionalLISTADenoisingSAE, FunctionalResidualDenoisingSAE
 from autoencoders.direct_coef_search import DirectCoefOptimizer
@@ -23,6 +23,9 @@ import shutil
 from itertools import product
 
 from big_sweep import sweep
+
+import shutil
+import os
 
 # an example function that builds a list of ensembles to run
 # you could this as a template for other experiments
@@ -426,6 +429,74 @@ def zero_l1_baseline(cfg):
 
     return (ensembles, ["dict_size"], ["l1_alpha"], {"dict_size": [dict_size], "l1_alpha": l1_values})
 
+def dict_ratio_experiment(cfg):
+    #l1_values = np.logspace(-4, -2, 12)
+    dict_sizes = [int(512 * x) for x in np.linspace(1, 5, 8)]
+    max_size = max(dict_sizes)
+
+    l1_value = 1e-3
+
+    devices = [f"cuda:{i}" for i in [1, 2, 3, 4, 6, 7]]
+
+    ensembles = []
+    for i in range(6):
+        #l1_range = l1_values[i*2:(i+1)*2]
+        models = [
+            FunctionalMaskedTiedSAE.init(cfg.activation_width, dict_size, max_size, l1_value, dtype=cfg.dtype)
+            for _ in range(12) for dict_size in dict_sizes
+        ]
+        device = devices.pop()
+        ensemble = FunctionalEnsemble(
+            models, FunctionalMaskedTiedSAE,
+            torchopt.adam, {
+                "lr": cfg.lr
+            },
+            device=device
+        )
+        args = {"batch_size": cfg.batch_size, "device": device, "dict_size": max_size}
+        name = f"l1_{i}"
+        ensembles.append((ensemble, args, name))
+    
+    return (ensembles, [], ["l1_alpha", "dict_size"], {"dict_size": dict_sizes, "l1_alpha": [l1_value]})
+
+def run_dict_ratio():
+    cfg = parse_args()
+
+    cfg.model_name = "EleutherAI/pythia-70m-deduped"
+    cfg.dataset_name = "NeelNanda/pile-10k"
+
+    cfg.layer = 4
+    cfg.layer_loc = "residual"
+
+    cfg.use_synthetic_dataset = True
+
+    cfg.feature_num_nonzero = 100
+    cfg.gen_batch_size = 4096
+    cfg.activation_width = 512
+    cfg.noise_magnitude_scale = 0.0
+    cfg.n_ground_truth_components = 2048
+    cfg.feature_prob_decay = 0.996
+    cfg.lr = 1e-3
+    cfg.n_chunks = 10
+    cfg.correlated_components = False
+    cfg.chunk_size_gb = 2
+
+    cfg.batch_size = 1024
+
+    cfg.lr = 1e-3
+    cfg.use_wandb = False
+    cfg.wandb_images = False
+    cfg.dtype = torch.float32
+
+    cfg.n_repetitions = 1
+
+    cfg.dataset_folder = "activation_data"
+    cfg.output_folder = "output_dict_ratio"
+
+    #shutil.rmtree(cfg.dataset_folder, ignore_errors=True)
+    #os.makedirs(cfg.dataset_folder, exist_ok=True)
+
+    sweep(dict_ratio_experiment, cfg)
 
 def run_dense_l1_range():
     cfg = parse_args()
@@ -608,6 +679,7 @@ def topk():
 
 def synthetic_test():
     import shutil
+    import os
 
     cfg = parse_args()
 
@@ -645,5 +717,4 @@ def synthetic_test():
         sweep(synthetic_linear_range, cfg)
 
 if __name__ == "__main__":
-    #run_across_layers()
-    synthetic_test()
+    run_dict_ratio()

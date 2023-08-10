@@ -9,11 +9,6 @@ from autoencoders.ensemble import DictSignature
 _n_dict_components, _activation_size, _batch_size = None, None, None
 
 class LearnedDict(ABC):
-    n_feats: int
-    activation_size: int
-    encoder: TensorType["_n_dict_components", "_activation_size"]
-    encoder_bias: TensorType["_n_dict_components"]
-
     @abstractmethod
     def get_learned_dict(self) -> TensorType["_n_dict_components", "_activation_size"]:
         pass
@@ -26,11 +21,18 @@ class LearnedDict(ABC):
     def to_device(self, device):
         pass
     
+    def decode(self, code: TensorType["_batch_size", "_n_dict_components"]) -> TensorType["_batch_size", "_activation_size"]:
+        learned_dict = self.get_learned_dict()
+        x_hat = torch.einsum("nd,bn->bd", learned_dict, code)
+        return x_hat
+
     def predict(self, batch: TensorType["_batch_size", "_activation_size"]) -> TensorType["_batch_size", "_activation_size"]:
         c = self.encode(batch)
-        learned_dict = self.get_learned_dict()
-        x_hat = torch.einsum("nd,bn->bd", learned_dict, c)
+        x_hat = self.decode(c)
         return x_hat
+    
+    def n_dict_components(self):
+        return self.get_learned_dict().shape[0]
 
 class UntiedSAE(LearnedDict):
     def __init__(self, encoder, decoder, encoder_bias):

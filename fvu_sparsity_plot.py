@@ -17,6 +17,8 @@ import tqdm
 
 import itertools
 
+import tqdm
+
 def score_dict(score, label, hyperparams, learned_dict, dataset, ground_truth=None):
     if score == "mcs":
         return standard_metrics.mmcs_to_fixed(learned_dict, ground_truth).item()
@@ -28,8 +30,72 @@ def score_dict(score, label, hyperparams, learned_dict, dataset, ground_truth=No
         return hyperparams["l1_alpha"]
     elif score == "neg_log_l1":
         return -np.log(hyperparams["l1_alpha"])
+    elif score == "dict_size":
+        return hyperparams["dict_size"]
 
-def generate_scores(learned_dict_files, dataset_file=None, generator_file=None, x_score="sparsity", y_score="fvu", c_score="mcs", group_by="dict_size", other_dicts=[], device="cuda:7"):
+def area_under_fvu_sparsity_curve(learned_dict_files, dataset_file=None, generator_file=None, device="cuda:7"):
+    if generator_file is not None:
+        generator = torch.load(generator_file)
+        ground_truth = generator.sparse_component_dict.to(device)
+    else:
+        generator, ground_truth = None, None
+
+    if dataset_file is None and generator is not None:
+        dataset = torch.cat([next(generator) for _ in tqdm.tqdm(range(512))]).to(dtype=torch.float32, device=device)
+    else:
+        dataset = torch.load(dataset_file).to(dtype=torch.float32, device=device)
+
+    activation_width = dataset.shape[1]
+
+    sample_idxs = np.random.choice(len(dataset), 50000, replace=False)
+    sample = dataset[sample_idxs].to(device)
+
+    del dataset
+
+    score_series = {}
+    for label, learned_dict_file in tqdm.tqdm(learned_dict_files):
+        learned_dicts = torch.load(learned_dict_file)
+        #groups = list(set([hyperparams[group_by] for _, hyperparams in learned_dicts]))
+        for learned_dict, hyperparams in learned_dicts:
+            learned_dict.to_device(device)
+
+            dict_size = hyperparams["dict_size"]
+            if dict_size not in score_series:
+                score_series[dict_size] = [(1, 0), (0, activation_width)]
+            fvu = standard_metrics.fraction_variance_unexplained(learned_dict, sample).item()
+            fvu = np.clip(fvu, 0, 1)
+            sparsity = standard_metrics.mean_nonzero_activations(learned_dict, sample).sum().item()
+            score_series[dict_size].append((fvu, sparsity))
+    
+    areas = []
+    for dict_size, score_series_ in score_series.items():
+        score_series_ = sorted(score_series_, key=lambda x: x[0])
+        x, y = zip(*score_series_)
+        areas.append((dict_size, np.trapz(y, x)))
+    
+    return areas
+
+def score_representedness(learned_dict_files, generator_file, label_fmt="{dict_size}" device="cuda:7"):
+    generator = torch.load(generator_file)
+    ground_truth = generator.sparse_component_dict.to(device)
+
+    scores = {}
+    for _, learned_dict_file in learned_dict_files:
+        learned_dicts = torch.load(learned_dict_file)
+        for learned_dict, hyperparams in learned_dicts:
+            learned_dict.to_device(device)
+
+            if hyperparams not in scores:
+                scores[hyperparams] = []
+            scores[hyperparams].append(standard_metrics.representedness(ground_truth, learned_dict))
+    
+    mean_integrals = {}
+    for hyperparams, score in scores.items():
+        mean_integrals[hyperparams] = np.trapz(np.mean(score))
+    
+    return mean_integrals
+
+def generate_scores(learned_dict_files, dataset_file=None, generator_file=None, x_score="sparsity", y_score="fvu", c_score=None, group_by="dict_size", label_format="{name} {val:.2E}", other_dicts=[], device="cuda:7"):
     if generator_file is not None:
         generator = torch.load(generator_file)
         ground_truth = generator.sparse_component_dict.to(device)
@@ -47,7 +113,7 @@ def generate_scores(learned_dict_files, dataset_file=None, generator_file=None, 
         learned_dicts = torch.load(learned_dict_file)
         #groups = list(set([hyperparams[group_by] for _, hyperparams in learned_dicts]))
         for learned_dict, hyperparams in learned_dicts:
-            name = label + " " + str(hyperparams[group_by])
+            name = label_format.format(name=label, val=hyperparams[group_by])
 
             if name not in learned_dict_sets:
                 learned_dict_sets[name] = []
@@ -79,7 +145,7 @@ def generate_scores(learned_dict_files, dataset_file=None, generator_file=None, 
     del dataset
 
     scores = {}
-    for label, learned_dict_set in learned_dict_sets.items():
+    for label, learned_dict_set in tqdm.tqdm(learned_dict_sets.items()):
         #points = []
         scores[label] = []
         for learned_dict, hyperparams in learned_dict_set:
@@ -111,6 +177,16 @@ def scores_derivative(scores):
         scores_[label] = list(zip(x_, dydx, c_))
 
     return scores_
+
+def scores_derivative_(scores):
+    sorted_series = sorted(scores, key=lambda x: x[0])
+    sorted_series = [sorted_series[0]] + [sorted_series[i] for i in range(1, len(sorted_series)) if sorted_series[i][0] != sorted_series[i - 1][0]]
+    x, y = zip(*sorted_series)
+
+    dydx = np.gradient(y, x)
+    x_ = (np.array(x)[:-1] + np.array(x)[1:]) / 2
+
+    return list(zip(x_, dydx))
 
 def scores_logx(scores):
     scores_ = {}
@@ -155,17 +231,28 @@ def plot_scores(scores, settings, xlabel, ylabel, xrange, yrange, title, filenam
 
         cs = 0.5 * (c[:-1] + c[1:])
         norm = matplotlib.colors.Normalize(vmin=0, vmax=1)
-        lc = matplotlib.collections.LineCollection(segments, cmap=cmap, norm=norm, linestyle=style)
-        lc.set_array(cs)
-        lc.set_linewidth(2)
-        line = ax.add_collection(lc)
+        
+        mc = c.mean()
 
-        legend_lines.append(Line2D([0], [0], color=cmap(0.5), linestyle=style, linewidth=2))
-        legend_names.append(label)
+        if settings[label]["points"]:
+            ax.scatter(x, y, c=c, cmap=cmap, norm=norm, marker=style, s=10)
+
+            legend_lines.append(Line2D([0], [0], color=cmap(mc), marker=style, linestyle="None", markersize=10))
+            legend_names.append(label)
+        else:
+            lc = matplotlib.collections.LineCollection(segments, cmap=cmap, norm=norm, linestyle=style)
+            lc.set_array(cs)
+            lc.set_linewidth(2)
+            line = ax.add_collection(lc)
+
+            legend_lines.append(Line2D([0], [0], color=cmap(mc), linestyle=style, linewidth=2))
+            legend_names.append(label)
 
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_title(title)
+
+    #ax.set_xscale("log")
 
     ax.set_xlim(*xrange)
     ax.set_ylim(*yrange)
@@ -196,31 +283,108 @@ if __name__ == "__main__":
     shutil.rmtree("graphs", ignore_errors=True)
     os.makedirs("graphs", exist_ok=True)
 
-    colors = ["Purples", "Blues", "Greens", "Oranges"]
-    markers = ["o", "x", "s", "P", "v"]
-    styles = ["dotted", "dashdot", "solid", "dashdot"]
+    colors = ["Purples", "Blues", "Greens", "Oranges", "Reds"]
+    #styles = ["x", "+", ".", "*"]
+    styles = ["solid", "dashed", "dashdot", "dotted"]
 
-    settings = {
-        "Linear 256": {"color": "Purples", "style": "dashdot"},
-        "Linear 512": {"color": "Blues", "style": "dashdot"},
-        "Linear 1024": {"color": "Greens", "style": "dashdot"},
-        "Linear 2048": {"color": "Oranges", "style": "dashdot"},
-        "PCA (Static)": {"color": "Reds", "style": "dotted"},
-        "PCA (TopK)": {"color": "Reds", "style": "dashed"},
-    }
+    #labels = ["Linear " + str(256*i) for i in range(16)]
 
-    plots = [
-        (
-            f"{n_ground} features, {n_nz} active, {noise_mag:.2E} noise mag",
-            f"plot_{noise_mag:.2E}_{n_ground}_{n_nz}",
-            f"output_synthetic_{noise_mag:.2E}_{n_ground}_{n_nz}/generator.pt",
-            [
-                ("Linear", f"output_synthetic_{noise_mag:.2E}_{n_ground}_{n_nz}/_9/learned_dicts.pt"),
-            ]
-        )
-        for noise_mag, n_ground, n_nz in itertools.product([0.05], [1024], [200])
-    ]
+    #ratio_names = [0, 1, 2, 4, 8, 16, 32]
+    #path_fmt = "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l3_r{ratio}/_{chunk}/learned_dicts.pt"
 
-    for title, filename, generator, learned_dict_files in plots:
-        scores = generate_scores(learned_dict_files, generator_file=generator)
-        plot_scores(scores, settings, "Sparsity", "FVU", (0, 512), (0, 1), title, f"graphs/{filename}.png")
+    for layer in range(1):
+        #files = [
+        #    ("Linear", f"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l{layer}_r0/_9/learned_dicts.pt"),
+        #    ("Linear", f"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l{layer}_r1/_9/learned_dicts.pt"),
+        #    ("Linear", f"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l{layer}_r2/_9/learned_dicts.pt"),
+        #    ("Linear", f"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l{layer}_r4/_9/learned_dicts.pt"),
+        #    ("Linear", f"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l{layer}_r8/_9/learned_dicts.pt"),
+        #    ("Linear", f"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l{layer}_r16/_9/learned_dicts.pt"),
+        #    ("Linear", f"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l{layer}_r32/_9/learned_dicts.pt"),
+        #]
+
+        title = "Area Under FVU-Sparsity Curve"
+        filename = "sparsity_fvu_area_layer_4"
+
+        #dataset_file = "activation_data/0.pt"
+        generator_file = "output_dict_ratio/generator.pt"
+
+        #area_scores = {}
+        #deriv_scores = {}
+
+        scores = {}
+
+        for chunk in range(0, 10):
+            file = "output_dict_ratio/_" + str(chunk) + "/learned_dicts.pt"
+            #areas = area_under_fvu_sparsity_curve([("Chunk " + str(chunk), file)], dataset_file=dataset_file)
+            #derivs = scores_derivative_(areas)
+            scores = score_representedness([("Chunk " + str(chunk), file)], generator_file, device="cuda:7")
+            scores["Chunk " + str(chunk)] = [(hyperparams["dict_size"], score, -np.log(hyperparams["l1_alpha"])) for hyperparams, score in scores.items()]
+
+            #area_scores[f"Chunk {chunk}"] = [(dict_size, area, chunk / 28) for dict_size, area in areas]
+            #deriv_scores[f"Chunk {chunk}"] = [(dict_size, deriv, chunk / 28) for dict_size, deriv in derivs]
+
+        settings = {
+            label: {"style": "dashdot", "color": "viridis", "points": False} for (style, color), label in zip(itertools.product(styles, colors), scores.keys())
+        }
+
+        xlim, ylim = get_limits(area_scores)
+        plot_scores(scores, settings, "dict_size", "mean no. features learned", xlim, ylim, "Representedness", f"graphs/representedness.png")
+
+        #settings = {f"Layer {layer}": {"style": "solid", "color": "Blues", "points": False}}
+
+        #x_lim, y_lim = get_limits(area_scores)
+        #plot_scores(area_scores, settings, "dict_size", "area", x_lim, y_lim, title, f"graphs/{filename}.png")
+        
+        #title = "Derivative of Area Under FVU-Sparsity Curve"
+
+        #x_lim, y_lim = get_limits(deriv_scores)
+        #plot_scores(deriv_scores, settings, "dict_size", "d(area)/d(dict_size)", x_lim, y_lim, title, f"graphs/{filename}_deriv.png")
+
+    #file = "output_dict_ratio/_27/learned_dicts.pt"
+    #fuv_sparsity = generate_scores([("Linear", file)], dataset_file=dataset_file)
+
+    #settings = {
+    #    label: {"style": style, "color": color, "points": False} for (style, color), label in zip(itertools.product(styles, colors), fuv_sparsity.keys())
+    #}
+
+    #plot_scores(fuv_sparsity, settings, "sparsity", "fvu", (0, 512), (0, 1), "FVU vs Sparsity", f"graphs/fvu_sparsity_layer_4.png")
+
+    #file_sets = [
+    #    (chunk, [("Linear", f"output_dict_ratio/_{chunk}/learned_dicts.pt")]) for chunk in range(8)
+    #]
+
+    #files = [
+    #    ("Linear", "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l3_r0/_9/learned_dicts.pt"),
+    #    ("Linear", "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l3_r1/_9/learned_dicts.pt"),
+    #    ("Linear", "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l3_r2/_9/learned_dicts.pt"),
+    #    ("Linear", "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l3_r4/_9/learned_dicts.pt"),
+    #    ("Linear", "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l3_r8/_9/learned_dicts.pt"),
+    #    ("Linear", "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l3_r16/_9/learned_dicts.pt"),
+    #    ("Linear", "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l3_r32/_9/learned_dicts.pt"),
+    #]
+
+    #title = "Area Under FVU-Sparsity Curve"
+    #filename = "sparsity_fvu_area"
+
+    #dataset_file = "activation_data/0.pt"
+    #generator_file = "output_synthetic_1024_100/generator.pt"
+
+    #area_scores = {}
+    #for chunk, files in file_sets:
+    #    areas = area_under_fvu_sparsity_curve(files, dataset_file=dataset_file)
+        #areas = scores_derivative_(areas)
+    #    area_scores["Chunk " + str(chunk)] = [(dict_size, area, 0.5) for dict_size, area in areas]
+        #area_scores = {"Areas": [(dict_size, area, 0.5) for dict_size, area in areas]}
+    
+    #area_settings = {
+    #    label: {"style": style, "color": color, "points": False} for (style, color), label in zip(itertools.product(styles, colors), area_scores.keys())
+    #}
+    #xlim, ylim = get_limits(area_scores)
+    #plot_scores(area_scores, area_settings, "dict_size", "area under curve", xlim, ylim, title, f"graphs/sparsity_fvu_area.png")
+
+    #scores = generate_scores(files, dataset_file=dataset_file)
+    #settings = {
+    #    label: {"style": style, "color": color, "points": False} for (style, color), label in zip(itertools.product(styles, colors), scores.keys())
+    #}
+    #plot_scores(scores, settings, "sparsity", "fvu", (0, 512), (0, 1), title, f"graphs/sparsity_fvu.png")
