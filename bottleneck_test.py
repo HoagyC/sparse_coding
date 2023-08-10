@@ -305,7 +305,7 @@ def acdc_test(
     if base_logits is None:
         base_logits = reconstruction_logits
 
-    prev_divergence = logit_metric(reconstruction_logits, base_logits).item()
+    prev_divergence = logit_metric(reconstruction_logits, base_logits)
 
     idxs = np.arange(lens.n_dict_components())
     np.random.shuffle(idxs)
@@ -323,7 +323,7 @@ def acdc_test(
             handicap=handicap,
         )
 
-        divergence = logit_metric(logits, base_logits).item()
+        divergence = logit_metric(logits, base_logits)
 
         if divergence - prev_divergence < threshold:
             prev_divergence = divergence
@@ -333,6 +333,58 @@ def acdc_test(
     distance = distance_metric(clean_activation, corrupted_activation, activation)
 
     return remaining_directions, prev_divergence, distance.mean().item()
+
+def diff_mean_activation_editing(
+    model: HookedTransformer,
+    location: standard_metrics.Location,
+    clean_tokens: TensorType["batch", "sequence"],
+    corrupted_tokens: TensorType["batch", "sequence"],
+    logit_metric: Callable[[TensorType["batch", "sequence", "vocab_size"], TensorType["batch", "sequence", "vocab_size"]], float],
+    scale_range: Tuple[float, float] = (0.0, 1.0),
+    n_points: int = 10,
+    distance_metric: Callable[[TensorType["batch", "sequence", "d_activation"], TensorType["batch", "sequence", "d_activation"], TensorType["batch", "sequence", "d_activation"]], TensorType["batch"]] = scaled_distance_to_clean,
+) -> List[Tuple[float, float, float]]:
+    clean_logits, activation_cache = model.run_with_cache(
+        clean_tokens,
+        #names_filter=[standard_metrics.get_model_tensor_name(location)],
+        return_type="logits",
+    )
+    clean_activation = activation_cache[standard_metrics.get_model_tensor_name(location)]
+
+    _, activation_cache = model.run_with_cache(
+        corrupted_tokens,
+        #names_filter=[standard_metrics.get_model_tensor_name(location)],
+        return_type="logits",
+    )
+    corrupted_activation = activation_cache[standard_metrics.get_model_tensor_name(location)]
+
+    diff_means_vector = clean_activation.mean(dim=0) - corrupted_activation.mean(dim=0)
+
+    scales = torch.linspace(*scale_range, n_points)
+
+    scores = []
+    for scale in tqdm.tqdm(scales):
+        activation = None
+
+        def intervention(tensor, hook):
+            nonlocal activation
+            activation = tensor + scale * diff_means_vector
+            return activation
+
+        logits = model.run_with_hooks(
+            corrupted_tokens,
+            fwd_hooks=[(
+                standard_metrics.get_model_tensor_name(location),
+                intervention,
+            )],
+            return_type="logits",
+        )
+
+        distance = distance_metric(clean_activation, corrupted_activation, activation).mean().item()
+        logit_score = logit_metric(logits, clean_logits)
+        scores.append((scale, distance, logit_score))
+    
+    return scores
 
 if __name__ == "__main__":
     torch.autograd.set_grad_enabled(False)
@@ -357,17 +409,27 @@ if __name__ == "__main__":
         B, L, V = base_logits.shape
         new_logprobs = F.log_softmax(new_logits[:, -1], dim=-1)
         base_logprobs = F.log_softmax(base_logits[:, -1], dim=-1)
-        return F.kl_div(new_logprobs, base_logprobs, log_target=True, reduction="none").sum(dim=-1).mean()
+        return F.kl_div(new_logprobs, base_logprobs, log_target=True, reduction="none").sum(dim=-1).mean().item()
 
     def logit_diff(new_logits, base_logits):
         B, L, V = base_logits.shape
         correct = new_logits[:, -1, ioi_correct]
         incorrect = new_logits[:, -1, ioi_incorrect]
-        return -(correct - incorrect).mean()
+        return -(correct - incorrect).mean().item()
 
     layer = 2
     activation_dataset = torch.load(f"activation_data_layers/layer_{layer}/0.pt")
     activation_dataset = activation_dataset.to(device, dtype=torch.float32)
+
+    #diff_mean_scores = diff_mean_activation_editing(
+    #    model,
+    #    (layer, "residual"),
+    #    ioi_clean,
+    #    ioi_corrupted,
+    #    divergence_metric,
+    #    n_points=100,
+    #    scale_range=(-10.0, 100.0),
+    #)
 
     pca = BatchedPCA(n_dims=activation_dataset.shape[-1], device=device)
     batch_size = 4096
@@ -424,10 +486,12 @@ if __name__ == "__main__":
                 ablation_type="ablation",
                 base_logits=base_logits,
                 ablation_handicap=True,
-                distance_metric=dot_difference_metric,
+                distance_metric=scaled_distance_to_clean,
             )
             scores[name].append((tau, graph, div, corruption))
             print(f"tau: {tau:.3e} ({i+1}/{len(tau_values)}), graph size: {len(graph)}, div: {div:.3e}, corruption: {corruption:.2f}")
 
     torch.save(scores, f"dict_scores_layer_{layer}.pt")
     torch.save(dictionaries, f"dictionaries_layer_{layer}.pt")
+
+    #torch.save(diff_mean_scores, f"diff_mean_scores_layer_{layer}.pt")
