@@ -495,13 +495,12 @@ def make_one_chunk_per_layer() -> None:
     model = HookedTransformer.from_pretrained(model_name, device=device)
     tokenizer = model.tokenizer
 
-    for layer_loc in ["residual", "mlp", "mlp_out", "attn"]:
+    for layer_loc in ["residual", "mlp", "mlpout", "attn"]:
         activation_width = 2048 if layer_loc == "mlp" else 512
         for layer in range(6):
             setup_data(
                 tokenizer,
                 model,
-                model_name=model_name,
                 dataset_name="EleutherAI/pile",
                 dataset_folder=f"single_chunks/l{layer}_{layer_loc}",
                 layer=layer,

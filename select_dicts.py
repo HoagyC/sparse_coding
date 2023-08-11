@@ -4,6 +4,7 @@ import standard_metrics
 from activation_dataset import setup_data
 from argparser import parse_args
 
+from transformers import GPT2Tokenizer
 from transformer_lens import HookedTransformer
 
 import shutil
@@ -75,7 +76,7 @@ init_test_data(cfg, 6)
 
 for layer, l_dicts in tqdm.tqdm(enumerate(dicts)):
     best_score = None
-    best_idx = None
+    best_idx = -1
     scores = []
 
     chunk = torch.load(f"activation_data/layer_{layer}/0.pt").to(device, dtype=torch.float32)[:100000]
@@ -87,7 +88,7 @@ for layer, l_dicts in tqdm.tqdm(enumerate(dicts)):
         scores.append((hyperparams["l1_alpha"], sparsity, fvu))
 
         score = (sparsity - TARGET_SPARSITY) ** 2
-        if best_score is None or score < best_score:
+        if best_score == -1 or score < best_score:
             best_score = score
             best_idx = idx
 

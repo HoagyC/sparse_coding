@@ -514,7 +514,7 @@ def run_across_layers_mlp_out():
     cfg.save_every = 2
     cfg.tied_ae=True
     for layer in [0, 1, 3, 4, 5]:
-        layer_loc = "mlp_out"
+        layer_loc = "mlpout"
         for dict_ratio in [1, 2, 4, 8]:
             cfg.layer = layer
             cfg.layer_loc = layer_loc

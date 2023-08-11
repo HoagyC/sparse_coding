@@ -107,16 +107,16 @@ class dotdict(dict):
 def check_use_baukit(model_name):
     if model_name in ["nanoGPT"]:
         return True
-    elif model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]:
+    elif model_name in ["gpt2", "pythia-70m-deduped"]:
         return False
     else:
         raise NotImplementedError(f"Unknown if model {model_name} uses baukit")
 
 
 def get_activation_size(model_name: str, layer_loc: str):
-    if model_name == "EleutherAI/pythia-70m-deduped":
+    if model_name == "pythia-70m-deduped":
         residual_dim = 512
-    elif model_name in ["EleutherAI/pythia-160m-deduped", "gpt2"]:
+    elif model_name in ["pythia-160m-deduped", "gpt2"]:
         residual_dim = 768
     elif model_name == "nanoGPT":
         residual_dim = 32
@@ -129,26 +129,26 @@ def get_activation_size(model_name: str, layer_loc: str):
 
 def make_tensor_name(layer: int, layer_loc: str, model_name: str) -> str:
     """Make the tensor name for a given layer and model."""
-    assert layer_loc in ["residual", "mlp", "attn", "mlp_out"], f"Layer location {layer_loc} not supported"
+    assert layer_loc in ["residual", "mlp", "attn", "mlpout"], f"Layer location {layer_loc} not supported"
     if layer_loc == "residual":
-        if model_name in ["gpt2", "EleutherAI/pythia-70m-deduped", "EleutherAI/pythia-160m-deduped"]:
+        if model_name in ["gpt2", "pythia-70m-deduped", "pythia-160m-deduped"]:
             tensor_name = f"blocks.{layer}.hook_resid_post"
         else:
             raise NotImplementedError(f"Model {model_name} not supported for residual stream")
     elif layer_loc == "mlp":
-        if model_name in ["gpt2", "EleutherAI/pythia-70m-deduped", "EleutherAI/pythia-160m-deduped"]:
+        if model_name in ["gpt2", "pythia-70m-deduped", "pythia-160m-deduped"]:
             tensor_name = f"blocks.{layer}.mlp.hook_post"
         elif model_name == "nanoGPT":
             tensor_name = f"transformer.h.{layer}.mlp.c_fc"
         else:
             raise NotImplementedError(f"Model {model_name} not supported for MLP")
     elif layer_loc == "attn":
-        if model_name in ["gpt2", "EleutherAI/pythia-70m-deduped", "EleutherAI/pythia-160m-deduped"]:
+        if model_name in ["gpt2", "pythia-70m-deduped", "pythia-160m-deduped"]:
             tensor_name = f"blocks.{layer}.hook_resid_post"
         else:
             raise NotImplementedError(f"Model {model_name} not supported for attention stream")
-    elif layer_loc == "mlp_out":
-        if model_name in ["gpt2", "EleutherAI/pythia-70m-deduped", "EleutherAI/pythia-160m-deduped"]:
+    elif layer_loc == "mlpout":
+        if model_name in ["gpt2", "pythia-70m-deduped", "pythia-160m-deduped"]:
             tensor_name = f"blocks.{layer}.hook_mlp_out"
         else:
             raise NotImplementedError(f"Model {model_name} not supported for MLP")

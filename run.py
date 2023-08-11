@@ -757,7 +757,6 @@ def run_real_data_model(cfg: dotdict):
         n_lines = setup_data(
             tokenizer, 
             model,
-            model_name=cfg.model_name,
             dataset_name=cfg.dataset_name,
             dataset_folder=cfg.dataset_folder,
             layer=cfg.layer,
@@ -912,7 +911,6 @@ def run_real_data_model(cfg: dotdict):
             n_new_lines = setup_data(
                 tokenizer, 
                 model, 
-                model_name=cfg.model_name,
                 dataset_name=cfg.dataset_name,
                 dataset_folder=cfg.dataset_folder,
                 layer=cfg.layer,

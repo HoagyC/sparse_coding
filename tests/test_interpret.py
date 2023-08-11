@@ -7,7 +7,7 @@ import os
 import pickle
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
-from interpret import make_activation_dataset, make_feature_activation_dataset
+from interpret import make_feature_activation_dataset
 from argparser import parse_args
 from utils import dotdict, make_tensor_name
 
@@ -89,7 +89,7 @@ class TestMain(unittest.TestCase):
             random_fragment=False,
         )
 
-        tensor_name = make_tensor_name(self.layer, cfg.layer_loc, model_name=cfg.model_name)
+        tensor_name = make_tensor_name(self.layer, cfg.layer_loc, model_name=self.model.cfg.model_name)
         sentence = next(iter(self.sentence_dataset))["text"]
         tokens = self.model.to_tokens(sentence)[0, 1:65]
         _, cache = self.model.run_with_cache(tokens)

@@ -25,9 +25,9 @@ def plot_by_group() -> None:
 
     resid_dicts = [f for f in learned_dict_files if "resid" in f]
     mlp_dicts = [f for f in learned_dict_files if "mlp" in f]
-    mlp_dicts = [f for f in mlp_dicts if "mlp_out" not in f]
+    mlp_dicts = [f for f in mlp_dicts if "mlpout" not in f]
     attn_dicts = [f for f in learned_dict_files if "attn" in f]
-    mlp_out_dicts = [f for f in learned_dict_files if "mlp_out" in f]
+    mlp_out_dicts = [f for f in learned_dict_files if "mlpout" in f]
 
     layer_0_dicts = [f for f in learned_dict_files if "l0" in f]
     layer_1_dicts = [f for f in learned_dict_files if "l1" in f]
