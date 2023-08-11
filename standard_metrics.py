@@ -274,12 +274,12 @@ def mcs_duplicates(ground: LearnedDict, model: LearnedDict) -> TensorType["_n_di
 def mmcs(model: LearnedDict, model2: LearnedDict):
     return mcs_duplicates(model, model2).mean()
 
-def mcs_to_fixed(model: LearnedDict, truth: TensorType["_n_dict_components", "_d_activation"]):
+def mcs_to_fixed(model: LearnedDict, truth: TensorType["_n_dict_components", "_activation_size"]):
     cosine_sim = torch.einsum("md,gd->mg", model.get_learned_dict(), truth)
     max_cosine_sim = cosine_sim.max(dim=-1).values
     return max_cosine_sim
 
-def mmcs_to_fixed(model: LearnedDict, truth: TensorType["_n_dict_components", "_d_activation"]):
+def mmcs_to_fixed(model: LearnedDict, truth: TensorType["_n_dict_components", "_activation_size"]):
     return mcs_to_fixed(model, truth).mean()
 
 def mmcs_from_list(ld_list: List[LearnedDict]) -> TensorType["_n_dicts", "_n_dicts"]:
@@ -294,7 +294,7 @@ def mmcs_from_list(ld_list: List[LearnedDict]) -> TensorType["_n_dicts", "_n_dic
             mmcs_t[j, i] = mmcs_t[i, j]
     return mmcs_t
 
-def representedness(features: TensorType["_n_dict_components", "_d_activation"], model: LearnedDict):
+def representedness(features: TensorType["_n_dict_components", "_activation_size"], model: LearnedDict):
     # mmcs but other way around
     cosine_sim = torch.einsum("gd,md->gm", features, model.get_learned_dict())
     max_cosine_sim = cosine_sim.max(dim=-1).values

@@ -11,6 +11,9 @@ from autoencoders.ensemble import DictSignature
 _n_dict_components, _activation_size, _batch_size = None, None, None
 
 class LearnedDict(ABC):
+    n_feats: int
+    activation_size: int
+    
     @abstractmethod
     def get_learned_dict(self) -> TensorType["_n_dict_components", "_activation_size"]:
         pass

@@ -30,14 +30,16 @@ import copy
 
 from test_datasets.ioi import generate_ioi_dataset
 
+_batch, _sequence, _n_dict_components, _activation_size, _vocab_size = None, None, None, None, None
+
 def logits_under_ablation(
     model: HookedTransformer,
     lens: LearnedDict,
     location: standard_metrics.Location,
     ablated_directions: List[int],
-    tokens: TensorType["batch", "sequence"],
+    tokens: TensorType["_batch", "_sequence"],
     calc_fvu: bool = False,
-) -> Tuple[TensorType["batch", "sequence"], Optional[TensorType["batch", "sequence"]]]:
+) -> Tuple[TensorType["_batch", "_sequence"], Optional[TensorType["_batch", "_sequence"]]]:
     
     fvu = None
 
@@ -70,10 +72,10 @@ def logits_under_reconstruction(
     lens: LearnedDict,
     location: standard_metrics.Location,
     ablated_directions: List[int],
-    tokens: TensorType["batch", "sequence"],
+    tokens: TensorType["_batch", "_sequence"],
     calc_fvu: bool = False,
-    resample: Optional[TensorType["batch", "sequence", "n_dict_components"]] = None,
-) -> Tuple[TensorType["batch", "sequence"], Optional[TensorType["batch", "sequence"]]]:
+    resample: Optional[TensorType["_batch", "_sequence", "_n_dict_components"]] = None,
+) -> Tuple[TensorType["_batch", "_sequence"], Optional[TensorType["_batch", "_sequence"]]]:
     fvu = None
 
     def intervention(tensor, hook=None):
@@ -107,8 +109,8 @@ def bottleneck_test(
     model: HookedTransformer,
     lens: LearnedDict,
     location: standard_metrics.Location,
-    tokens: TensorType["batch", "sequence"],
-    logit_metric: Callable[[TensorType["batch", "sequence"]], TensorType["batch"]],
+    tokens: TensorType["_batch", "_sequence"],
+    logit_metric: Callable[[TensorType["_batch", "_sequence"]], TensorType["_batch"]],
     calc_fvu: bool = False,
     ablation_type: Literal["ablation", "reconstruction"] = "ablation",
     feature_sample_size: Optional[int] = None,
@@ -118,18 +120,18 @@ def bottleneck_test(
     remaining_directions = list(range(lens.n_dict_components()))
 
     results = []
-    ablated_directions = []
+    ablated_directions: List[int] = []
 
     for i in tqdm.tqdm(range(lens.n_dict_components())):
         min_score = None
-        min_direction = None
+        min_direction = -1
         min_fvu = None
 
-        features_to_test = None
+        features_to_test: List[int] = []
 
         if feature_sample_size is not None:
             if feature_sample_size < len(remaining_directions):
-                features_to_test = np.random.choice(remaining_directions, size=feature_sample_size, replace=False)
+                features_to_test = list(np.random.choice(remaining_directions, size=feature_sample_size, replace=False))
             else:
                 features_to_test = remaining_directions
         else:
@@ -144,13 +146,18 @@ def bottleneck_test(
                 raise ValueError(f"Unknown ablation type '{ablation_type}'")
 
             score = logit_metric(logits).item()
-            fvu = fvu.item()
+
+            if calc_fvu:
+                assert fvu is not None
+                fvu_item: float = fvu.item()
 
             if min_score is None or score < min_score:
                 min_score = score
                 min_direction = direction
-                min_fvu = fvu
+                min_fvu = fvu_item
 
+        assert min_direction != -1
+        assert min_score is not None
         results.append((min_direction, min_fvu, min_score))
         ablated_directions.append(min_direction)
         remaining_directions.remove(min_direction)
@@ -161,13 +168,13 @@ def resample_ablation(
     model: HookedTransformer,
     lens: LearnedDict,
     location: standard_metrics.Location,
-    clean_tokens: TensorType["batch", "sequence"],
-    corrupted_codes: TensorType["batch", "sequence", "n_dict_components"],
+    clean_tokens: TensorType["_batch", "_sequence"],
+    corrupted_codes: TensorType["_batch", "_sequence", "_n_dict_components"],
     features_to_ablate: List[int],
     ablation_type: Literal["ablation", "reconstruction"] = "ablation",
-    handicap: Optional[TensorType["batch", "sequence", "d_activation"]] = None,
+    handicap: Optional[TensorType["_batch", "_sequence", "_activation_size"]] = None,
     **kwargs,
-) -> Tuple[Any, TensorType["batch", "sequence", "d_activation"]]:
+) -> Tuple[Any, TensorType["_batch", "_sequence", "_activation_size"]]:
     corrupted_codes_ = corrupted_codes.reshape(-1, corrupted_codes.shape[-1])
     ablated_activation = None
 
@@ -218,10 +225,10 @@ def activation_info(
     model: HookedTransformer,
     lens: LearnedDict,
     location: standard_metrics.Location,
-    tokens: TensorType["batch", "sequence"],
+    tokens: TensorType["_batch", "_sequence"],
     ablation_type: Literal["ablation", "reconstruction"] = "ablation",
-    replacement_residuals: Optional[TensorType["batch", "sequence", "d_activation"]] = None,
-) -> Tuple[TensorType["batch", "sequence", "d_activation"], TensorType["batch", "sequence", "n_dict_components"], TensorType["batch", "sequence", "d_activation"], TensorType["batch", "sequence", "vocab_size"]]:
+    replacement_residuals: Optional[TensorType["_batch", "_sequence", "_activation_size"]] = None,
+) -> Tuple[TensorType["_batch", "_sequence", "_activation_size"], TensorType["_batch", "_sequence", "_n_dict_components"], TensorType["_batch", "_sequence", "_activation_size"], TensorType["_batch", "_sequence", "_vocab_size"]]:
     residuals = None
     codes = None
     activations = None
@@ -269,17 +276,17 @@ def acdc_test(
     model: HookedTransformer,
     lens: LearnedDict,
     location: standard_metrics.Location,
-    clean_tokens: TensorType["batch", "sequence"],
-    corrupted_tokens: TensorType["batch", "sequence"],
-    logit_metric: Callable[[TensorType["batch", "sequence", "vocab_size"], TensorType["batch", "sequence", "vocab_size"]], float],
+    clean_tokens: TensorType["_batch", "_sequence"],
+    corrupted_tokens: TensorType["_batch", "_sequence"],
+    logit_metric: Callable[[TensorType["_batch", "_sequence", "_vocab_size"], TensorType["_batch", "_sequence", "_vocab_size"]], float],
     threshold: float = 0.05,
-    base_logits: Optional[TensorType["batch", "sequence", "vocab_size"]] = None,
+    base_logits: Optional[TensorType["_batch", "_sequence", "_vocab_size"]] = None,
     ablation_type: Literal["ablation", "reconstruction"] = "reconstruction",
     ablation_handicap: bool = False,
-    distance_metric: Callable[[TensorType["batch", "sequence", "d_activation"], TensorType["batch", "sequence", "d_activation"], TensorType["batch", "sequence", "d_activation"]], TensorType["batch"]] = scaled_distance_to_clean,
-) -> Tuple[List[int], float]:
+    distance_metric: Callable[[TensorType["_batch", "_sequence", "_activation_size"], TensorType["_batch", "_sequence", "_activation_size"], TensorType["_batch", "_sequence", "_activation_size"]], TensorType["_batch"]] = scaled_distance_to_clean,
+) -> Tuple[List[int], float, float]:
     remaining_directions = list(range(lens.n_dict_components()))
-    ablated_directions = []
+    ablated_directions: List[int] = []
 
     corrupted_residuals, corrupted_codes, corrupted_activation, _ = activation_info(
         model,
@@ -337,12 +344,12 @@ def acdc_test(
 def diff_mean_activation_editing(
     model: HookedTransformer,
     location: standard_metrics.Location,
-    clean_tokens: TensorType["batch", "sequence"],
-    corrupted_tokens: TensorType["batch", "sequence"],
-    logit_metric: Callable[[TensorType["batch", "sequence", "vocab_size"], TensorType["batch", "sequence", "vocab_size"]], float],
+    clean_tokens: TensorType["_batch", "_sequence"],
+    corrupted_tokens: TensorType["_batch", "_sequence"],
+    logit_metric: Callable[[TensorType["_batch", "_sequence", "_vocab_size"], TensorType["_batch", "_sequence", "_vocab_size"]], float],
     scale_range: Tuple[float, float] = (0.0, 1.0),
     n_points: int = 10,
-    distance_metric: Callable[[TensorType["batch", "sequence", "d_activation"], TensorType["batch", "sequence", "d_activation"], TensorType["batch", "sequence", "d_activation"]], TensorType["batch"]] = scaled_distance_to_clean,
+    distance_metric: Callable[[TensorType["_batch", "_sequence", "_activation_size"], TensorType["_batch", "_sequence", "_activation_size"], TensorType["_batch", "_sequence", "_activation_size"]], TensorType["_batch"]] = scaled_distance_to_clean,
 ) -> List[Tuple[float, float, float]]:
     clean_logits, activation_cache = model.run_with_cache(
         clean_tokens,
@@ -470,7 +477,7 @@ if __name__ == "__main__":
 
     tau_values = np.logspace(-6.5, -1.5, 10)
 
-    scores = {}
+    scores: Dict[str, List] = {}
 
     for name, (dict, _) in dictionaries.items():
         scores[name] = []

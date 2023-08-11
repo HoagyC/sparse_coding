@@ -95,7 +95,7 @@ if __name__ == "__main__":
     learned_dict_sets["PCA (dynamic)"] = [(pca.to_learned_dict(k), {"dict_size": 512, "k": k}) for k in range(1, d_activation // 2, 8)]
     learned_dict_sets["PCA (static)"] = [(pca.to_rotation_dict(n), {"dict_size": 512, "n": n}) for n in range(1, d_activation // 2, 8)]
 
-    scores = {}
+    scores: Dict[str, List[Tuple[float, float]]] = {}
     for label, learned_dict_set in learned_dict_sets.items():
         scores[label] = []
         for learned_dict, hyperparams in tqdm.tqdm(learned_dict_set):

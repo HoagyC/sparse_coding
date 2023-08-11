@@ -75,7 +75,7 @@ def area_under_fvu_sparsity_curve(learned_dict_files, dataset_file=None, generat
     
     return areas
 
-def score_representedness(learned_dict_files, generator_file, label_fmt="{dict_size}" device="cuda:7"):
+def score_representedness(learned_dict_files, generator_file, label_fmt="{dict_size}", device="cuda:7"):
     generator = torch.load(generator_file)
     ground_truth = generator.sparse_component_dict.to(device)
 
@@ -328,7 +328,7 @@ if __name__ == "__main__":
             label: {"style": "dashdot", "color": "viridis", "points": False} for (style, color), label in zip(itertools.product(styles, colors), scores.keys())
         }
 
-        xlim, ylim = get_limits(area_scores)
+        xlim, ylim = get_limits(scores)
         plot_scores(scores, settings, "dict_size", "mean no. features learned", xlim, ylim, "Representedness", f"graphs/representedness.png")
 
         #settings = {f"Layer {layer}": {"style": "solid", "color": "Blues", "points": False}}
