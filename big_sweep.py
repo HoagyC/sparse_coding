@@ -231,7 +231,6 @@ def init_model_dataset(cfg):
         setup_data(
             tokenizer,
             transformer,
-            model_name=cfg.model_name,
             dataset_name=cfg.dataset_name,
             dataset_folder=cfg.dataset_folder,
             layer=cfg.layer,

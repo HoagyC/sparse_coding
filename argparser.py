@@ -37,7 +37,7 @@ def parse_args() -> dotdict:
     parser.add_argument("--dataset_name", type=str, default="NeelNanda/pile-10k") # EleutherAI/pile
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--layer", type=int, default=2)  # layer to extract mlp-post-non-lin features from, only if using real model
-    parser.add_argument("--layer_loc", type=str, default="residual")  # which part of the layer to extract features from, ["resid", "attn", "mlp", "mlp_out"]
+    parser.add_argument("--layer_loc", type=str, default="residual")  # which part of the layer to extract features from, ["resid", "attn", "mlp", "mlpout"]
     parser.add_argument("--outputs_folder", type=str, default="outputs")
     parser.add_argument("--datasets_folder", type=str, default="activation_data")
     parser.add_argument("--n_chunks", type=int, default=30)
@@ -57,7 +57,7 @@ def parse_args() -> dotdict:
     parser.add_argument("--activation_transform", type=str, default="feature_dict") # way of transforming neuron activations into features
     parser.add_argument("--load_interpret_autoencoder", type=str, default="") # path to autoencoder to load
     parser.add_argument("--tied_ae", type=bool, default=False) # whether to load pickle as a tied autoencoder
-    parser.add_argument("--interp_name", type=str, default="") # name of run, otherwise will be feature_transform
+    parser.add_argument("--interp_name", type=str, default="") # name of run
     parser.add_argument("--sort_mode", type=str, default="max") # how to sort fragments, either max, mean
     parser.add_argument("--use_decoder", type=bool, default=True) # whether to use the transposed decoder instead of encoder in a non-tied ae
     parser.add_argument("--df_n_feats", type=int, default=200) # number of features to use in dataframe, if 0 then use all

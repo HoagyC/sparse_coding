@@ -190,7 +190,7 @@ def measure_ablation_score() -> None:
 
     cfg.layer = 1
     cfg.layer_loc = "mlp"
-    cfg.model_name = "EleutherAI/pythia-70m-deduped"
+    cfg.model_name = "pythia-70m-deduped"
     cfg.fresh_synth_data = False
 
     device = "cuda:0"
