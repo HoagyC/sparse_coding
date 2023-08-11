@@ -19,6 +19,7 @@ saved_autoencoders
 testing
 auto_interp_results
 
+*.csv
 *.png
 
 # ideally would load autointerp as a module but can't get it working so just cloning and ignoring

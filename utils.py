@@ -31,6 +31,11 @@ def sync():
     command = f'rsync -rv --filter ":- .gitignore" --exclude ".git" -e "ssh -p {PORT}" . {DEST_ADDR}:{SSH_DIRECTORY}'
     subprocess.call(command, shell=True)
 
+def datasets_sync():
+    """Sync .csv files with the remote host."""
+    command = f'rsync -am --include "*.csv" --exclude "*" -e "ssh -p {PORT}" . {DEST_ADDR}:{SSH_DIRECTORY}'
+    subprocess.call(command, shell=True)
+
 def autointerp_sync():
     """Sync the local directory with the remote host's auto interp results, excluding hdf files."""
     command = f'rsync -r --exclude "*.hdf" --exclude "*.pkl" -e ssh {DEST_ADDR}:{SSH_DIRECTORY}/auto_interp_results . '
@@ -250,5 +255,7 @@ if __name__ == "__main__":
         autointerp_sync()
     elif sys.argv[1] == "dotfiles":
         copy_dotfiles()
+    elif sys.argv[1] == "datasets":
+        datasets_sync()
     else:
         raise NotImplementedError(f"Command {sys.argv[1]} not recognised")
