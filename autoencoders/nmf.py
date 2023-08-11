@@ -33,15 +33,15 @@ class NMFEncoder(LearnedDict):
         pass
     
     def encode(self, x):
-        if min(x) < self.shift:
+        if torch.min(x) < self.shift:
             print("Warning: data has values below expected minumum for NMF. This may cause errors.")
         x -= self.shift
         c = self.nmf.transform(x.cpu().numpy())
         return torch.tensor(c, device=x.device)
         
     def train(self, dataset: TensorType["_n_samples", "_activation_size"]):
-        if min(dataset) < self.shift:
-            self.shift = min(dataset)
+        if torch.min(dataset) < self.shift:
+            self.shift = torch.min(dataset)
         dataset -= self.shift
         assert dataset.shape[1] == self.activation_size
         print(f"Fitting NMF on {dataset.shape[0]} activations")
