@@ -242,7 +242,6 @@ def save_activation_chunk(dataset, n_saved_chunks, dataset_folder):
 def setup_data(
         tokenizer,
         model,
-        model_name: str,
         dataset_name: str, # Name of dataset to load
         dataset_folder: str, # Folder to save activations to
         layer: int = 2,
@@ -252,13 +251,13 @@ def setup_data(
         device: torch.device = torch.device("cuda:0")
     ):
     sentence_len_lower = 1000
-    activation_width = get_activation_size(model_name, layer_loc)
-    baukit = check_use_baukit(model_name)
+    activation_width = get_activation_size(model.cfg.model_name, layer_loc)
+    baukit = check_use_baukit(model.cfg.model_name)
     max_lines = int((CHUNK_SIZE_GB * 1e9  * n_chunks)/ (activation_width * sentence_len_lower * 2))
     print(f"Setting max_lines to {max_lines} to minimize sentences processed")
 
     sentence_dataset = make_sentence_dataset(dataset_name, max_lines=max_lines, start_line=start_line)
-    tensor_name = make_tensor_name(layer, layer_loc, model_name)
+    tensor_name = make_tensor_name(layer, layer_loc, model.cfg.model_name)
     tokenized_sentence_dataset, bits_per_byte = chunk_and_tokenize(sentence_dataset, tokenizer, max_length=MAX_SENTENCE_LEN)
     token_loader = DataLoader(tokenized_sentence_dataset, batch_size=MODEL_BATCH_SIZE, shuffle=True)
     make_activation_dataset(

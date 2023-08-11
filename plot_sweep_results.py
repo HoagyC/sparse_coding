@@ -17,7 +17,7 @@ from autoencoders.learned_dict import LearnedDict
 import standard_metrics
 
 
-def plot_by_group():
+def plot_by_group() -> None:
     chunk_range = [9]
     learned_dict_files = [os.path.join("/mnt/ssd-cluster/bigrun0308", x) for x in os.listdir("/mnt/ssd-cluster/bigrun0308")]
     learned_dict_files += [f for f in os.listdir(".") if f.startswith("output_attn")]
@@ -25,9 +25,9 @@ def plot_by_group():
 
     resid_dicts = [f for f in learned_dict_files if "resid" in f]
     mlp_dicts = [f for f in learned_dict_files if "mlp" in f]
-    mlp_dicts = [f for f in mlp_dicts if "mlp_out" not in f]
+    mlp_dicts = [f for f in mlp_dicts if "mlpout" not in f]
     attn_dicts = [f for f in learned_dict_files if "attn" in f]
-    mlp_out_dicts = [f for f in learned_dict_files if "mlp_out" in f]
+    mlp_out_dicts = [f for f in learned_dict_files if "mlpout" in f]
 
     layer_0_dicts = [f for f in learned_dict_files if "l0" in f]
     layer_1_dicts = [f for f in learned_dict_files if "l1" in f]
@@ -62,16 +62,12 @@ def plot_by_group():
     #     ("l5_mlp", [layer_5_dicts, mlp_dicts]),
     # ]
     experiments = [
-        ("l0_resid", [[layer_0_dicts, resid_dicts]]),
-        # ("l0_mlp", [[layer_0_dicts, mlp_dicts, tied_dicts], [layer_0_dicts, mlp_dicts, untied_dicts]]),
-        ("l0_attn", [[layer_0_dicts, attn_dicts]]),
-        ("l1_attn", [[layer_1_dicts, attn_dicts]]),
-        ("l2_attn", [[layer_2_dicts, attn_dicts]]),
-        ("l3_attn", [[layer_3_dicts, attn_dicts]]),
-        ("l4_attn", [[layer_4_dicts, attn_dicts]]),
-        ("l5_attn", [[layer_5_dicts, attn_dicts]]),
         ("l0_mlp_out", [[layer_0_dicts, mlp_out_dicts]]),
+        ("l1_mlp_out", [[layer_1_dicts, mlp_out_dicts]]),
         ("l2_mlp_out", [[layer_2_dicts, mlp_out_dicts]]),
+        ("l3_mlp_out", [[layer_3_dicts, mlp_out_dicts]]),
+        ("l4_mlp_out", [[layer_4_dicts, mlp_out_dicts]]),
+        ("l5_mlp_out", [[layer_5_dicts, mlp_out_dicts]]),
     ]
 
     for graph_name, categories in experiments:
@@ -79,7 +75,7 @@ def plot_by_group():
         for subcategory in categories:
             learned_dict_loc_list = list(set.intersection(*[set(x) for x in subcategory]))
             learned_dict_loc_list.sort(key=lambda x: int(x.split("_")[-1][1:])) # sort by ratio
-            learned_dict_lists = [(x.split("sweep_")[-1], torch.load(os.path.join(x, "_9", "learned_dicts.pt"))) for x in learned_dict_loc_list]
+            learned_dict_lists = [(x.split("sweep_")[-1], torch.load(os.path.join(x, "_4", "learned_dicts.pt"))) for x in learned_dict_loc_list]
             learned_dicts_nested.append(learned_dict_lists)
 
         print(f"Found {sum(len(x) for x in learned_dicts_nested)} lists of dicts for experiment {graph_name}")
@@ -130,7 +126,7 @@ def plot_by_group():
         ax.set_xlabel("Mean no. features active")
         ax.set_ylabel("Unexplained Variance")
         ax.legend()
-        plt.savefig(f"freq_plot_compare_{graph_name}.png")
+        plt.savefig(f"freq_plot_compare_{graph_name}_5.png")
         print(f"Saved plot for {graph_name}")
 
 
@@ -364,4 +360,4 @@ def plot_fuv_sparsity():
 
 
 if __name__ == "__main__":
-    plot_fuv_sparsity()
+    plot_by_group()

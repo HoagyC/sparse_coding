@@ -3,8 +3,6 @@ import torch.nn.functional as F
 
 from autoencoders.learned_dict import LearnedDict
 
-import optree
-
 class TopKEncoder:
     def init(d_activation, n_features, sparsity, dtype=torch.float32):
         params = {}

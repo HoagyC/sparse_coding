@@ -1,5 +1,9 @@
+import asyncio
 from functools import partial
 from itertools import product
+import multiprocessing as mp
+import os
+import pickle
 from typing import List, Tuple, Union, Any, Dict, Literal
 
 from datasets import load_dataset
@@ -344,6 +348,35 @@ def plot_capacities(dicts: List[Tuple[LearnedDict, Dict[str, Any]]], show: bool 
         plt.show()
     plt.savefig(save_name + ".png")
 
+def plot_capacity_scatter(dicts: list[Tuple[LearnedDict, Dict[str, Any]]], show: bool = False, save_name: str = "capacity_scatter") -> None:
+    all_capacities = []
+    for i, (dict, hparams) in enumerate(dicts):
+        capacities = capacity_per_feature(dict)
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+        ax.scatter(range(len(capacities)), capacities)
+        ax.set_xlabel("Learned feature")
+        ax.set_ylabel("Capacity")
+        ax.set_title(f"Capacity per feature - {save_name}")
+        if show:
+            plt.show()
+        plt.savefig(save_name + "_" + str(i) + ".png")
+        all_capacities.append(capacities)
+    
+    # plot histogram of capacities
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    all_capacities_flat = torch.cat(all_capacities).flatten()
+    print(all_capacities_flat.shape)
+    ax.hist(all_capacities_flat, bins=80)
+    ax.set_xlabel("Capacity")
+    ax.set_ylabel("Frequency")
+    ax.set_title(f"Capacity histogram - {save_name}")
+    if show:
+        plt.show()
+    plt.savefig(save_name + "_hist.png")
+
+
 def plot_hist(scores: TensorType["_n_dict_components"], x_label, y_label, **kwargs):
     fig = plt.figure()
     ax = fig.add_subplot(111)
@@ -468,13 +501,12 @@ def make_one_chunk_per_layer() -> None:
     model = HookedTransformer.from_pretrained(model_name, device=device)
     tokenizer = model.tokenizer
 
-    for layer_loc in ["residual", "mlp", "mlp_out", "attn"]:
+    for layer_loc in ["residual", "mlp", "mlpout", "attn"]:
         activation_width = 2048 if layer_loc == "mlp" else 512
         for layer in range(6):
             setup_data(
                 tokenizer,
                 model,
-                model_name=model_name,
                 dataset_name="EleutherAI/pile",
                 dataset_folder=f"single_chunks/l{layer}_{layer_loc}",
                 layer=layer,
@@ -573,8 +605,111 @@ def calculate_perplexity(
 
     return original_perplexity.item(), all_perplexities.tolist()
 
+def calc_for_layer(args) -> Tuple[int, List[Tuple[int, List[Tuple[float, float]]]]]:
+    layer: int
+    layer_loc: str
+    ratios: List[int]
+    device: torch.device
+    base_dir: str
+    layer, layer_loc, ratios, device, base_dir = args
+
+    chunk_loc = f"/mnt/ssd-cluster/single_chunks/l{layer}_{'residual' if layer_loc == 'resid' else 'mlp'}/0.pt"
+    activations = torch.load(chunk_loc, map_location=device).to(torch.float32)
+    dead_feats_data: List[Tuple[int, List[Tuple[float, float]]]] = []
+    with torch.no_grad():
+        for ratio in ratios:
+            dicts_loc = f"output_hoagy_dense_sweep_tied_{layer_loc}_l{layer}_r{ratio}"
+            all_dicts = torch.load(os.path.join(base_dir, dicts_loc, "_9", "learned_dicts.pt"))
+            dead_feats_data_series: List[Tuple[float, float]] = []
+            batch_size = int(1e6 // (ratio + 1))
+            for learned_dict, hparams in all_dicts:
+                learned_dict.to_device(device)
+                n_active = torch.zeros(learned_dict.n_feats, dtype=torch.int64, device=device)
+                for i in range(0, activations.shape[0], batch_size):
+                    feat_activations = learned_dict.encode(activations[i:i+batch_size])
+                    n_active += calc_feature_n_active(feat_activations)
+                
+                active_feats = (n_active > 10).sum().item()
+                print(layer, layer_loc, ratio, hparams["l1_alpha"], active_feats, active_feats / learned_dict.n_feats)
+                dead_feats_data_series.append((hparams["l1_alpha"], active_feats / learned_dict.n_feats))
+            dead_feats_data.append((ratio, dead_feats_data_series))
+
+    return layer, dead_feats_data
+
+def calc_all_activities():
+    base_dir = "/home/mchorse/sparse_coding_hoagy"
+    layer_loc = "resid"
+    layers = [0,1,2,3,4,5]
+    ratios = [0, 1, 2, 4, 8, 16, 32]
+
+    assert torch.cuda.is_available()
+
+    devices = [torch.device(f"cuda:{i}") for i in [0,1,2,3,4,6]] # 5 is busy
+    tasks = [(layer, layer_loc, ratios, devices[i], base_dir) for i, layer in enumerate(layers)]
+    
+    with mp.Pool(6) as p:
+        results = p.map(calc_for_layer, tasks)
+
+    pickle.dump(results, open("n_active_data.pkl", "wb"))
+
+def calc_kurtosis_for_layer(args) -> Tuple[int, List[Tuple[int, List[Tuple[float, float, float]]]]]:
+    layer: int
+    layer_loc: str
+    ratios: List[int]
+    device: torch.device
+    base_dir: str
+    layer, layer_loc, ratios, device, base_dir = args
+
+    chunk_loc = f"/mnt/ssd-cluster/single_chunks/l{layer}_{'residual' if layer_loc == 'resid' else 'mlp'}/0.pt"
+    activations = torch.load(chunk_loc, map_location=device).to(torch.float32)
+    dead_feats_data: List[Tuple[int, List[Tuple[float, float, float]]]] = []
+    with torch.no_grad():
+        for ratio in ratios:
+            dicts_loc = f"output_hoagy_dense_sweep_tied_{layer_loc}_l{layer}_r{ratio}"
+            all_dicts = torch.load(os.path.join(base_dir, dicts_loc, "_9", "learned_dicts.pt"))
+            dead_feats_data_series: List[Tuple[float, float, float]] = []
+            batch_size = int(1e6 // (ratio + 1))
+            for learned_dict, hparams in all_dicts:
+                learned_dict.to_device(device)
+                n_active = torch.zeros(learned_dict.n_feats, dtype=torch.int64, device=device)
+                kurtoses = torch.zeros(learned_dict.n_feats, dtype=torch.float32, device=device)
+                for i in range(0, activations.shape[0], batch_size):
+                    feat_activations = learned_dict.encode(activations[i:i+batch_size])
+                    n_active += calc_feature_n_active(feat_activations)
+                    kurtoses += calc_feature_kurtosis(feat_activations)
+                
+                active_feats = (n_active > 10)
+                kurtoses = kurtoses / (activations.shape[0] // batch_size)
+                av_kurtosis_all = kurtoses.mean().item()
+                av_kurtosis_active = kurtoses[active_feats].mean().item()
+                print(layer, layer_loc, ratio, hparams["l1_alpha"], av_kurtosis_all, av_kurtosis_active)
+                dead_feats_data_series.append((hparams["l1_alpha"], av_kurtosis_all, av_kurtosis_active))
+            dead_feats_data.append((ratio, dead_feats_data_series))
+
+    return layer, dead_feats_data
+
+def calc_all_kurtosis():
+    base_dir = "/home/mchorse/sparse_coding_hoagy"
+    layer_loc = "resid"
+    layers = [0,1,2,3,4,5]
+    ratios = [0, 1, 2, 4, 8, 16, 32]
+
+    assert torch.cuda.is_available()
+
+    devices = [torch.device(f"cuda:{i}") for i in [0,1,2,3,4,6]] # 5 is busy
+    tasks = [(layer, layer_loc, ratios, devices[i], base_dir) for i, layer in enumerate(layers)]
+    
+    with mp.Pool(6) as p:
+        results = p.map(calc_kurtosis_for_layer, tasks)
+
+    pickle.dump(results, open("kurtosis_data.pkl", "wb"))
+
 if __name__ == "__main__":
-    make_one_chunk_per_layer()
+    dicts = torch.load("/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r4/_9/learned_dicts.pt")
+    plot_capacity_scatter(dicts, save_name="outputs/capacity_scatter_l2_r4")
+
+    # mp.set_start_method('spawn')
+    # calc_all_kurtosis()
 
     # ld_loc = "output_hoagy_dense_sweep_tied_resid_l2_r4/_38/learned_dicts.pt"
     # learned_dicts: List[Tuple[LearnedDict, Dict[str, Any]]] = torch.load(ld_loc)
