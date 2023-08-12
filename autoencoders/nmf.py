@@ -12,6 +12,7 @@
 
 from datetime import datetime
 
+import numpy as np
 from sklearn.decomposition import NMF
 import torch
 from torchtyping import TensorType
@@ -25,7 +26,9 @@ class NMFEncoder(LearnedDict):
     def __init__(self, activation_size, n_components=0, shift=0.0):
         self.activation_size = activation_size
         if not n_components:
-            n_components = activation_size
+            self.n_feats = activation_size
+        else:
+            self.n_feats = n_components
         self.nmf = NMF()
         self.shift = shift
     
@@ -36,7 +39,7 @@ class NMFEncoder(LearnedDict):
         if torch.min(x) < self.shift:
             print("Warning: data has values below expected minumum for NMF. This may cause errors.")
         x -= self.shift
-        c = self.nmf.transform(x.cpu().numpy())
+        c = self.nmf.transform(x.cpu().numpy().astype(np.float64))
         return torch.tensor(c, device=x.device)
         
     def train(self, dataset: TensorType["_n_samples", "_activation_size"]):
@@ -49,9 +52,9 @@ class NMFEncoder(LearnedDict):
         self.nmf.fit(dataset.cpu().numpy()) # 1GB of activations takes about 15m
         print(f"NMF fit in {datetime.now() - nmf_start}")
 
-
+    # WARNING, you can't get the proper coefficient matrix H just by multiplying by the learned dictionary W
     def get_learned_dict(self):
-        return self.nmf.components_
+        return torch.tensor(self.nmf.components_, dtype=torch.float32)
 
     def to_topk_dict(self, sparsity):
         return TopKLearnedDict(self.get_learned_dict(), sparsity)

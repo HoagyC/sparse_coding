@@ -21,18 +21,12 @@ import pandas as pd
 from sklearn.decomposition import FastICA, PCA, NMF
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
-from tqdm import tqdm
 from transformer_lens import HookedTransformer
-from transformers import GPT2Tokenizer, AutoTokenizer
 
 from autoencoders.learned_dict import LearnedDict
-from autoencoders.pca import BatchedPCA
 from argparser import parse_args
-from comparisons import NoCredentialsError
-from utils import dotdict, make_tensor_name, upload_to_aws, get_activation_size, check_use_baukit
+from utils import dotdict, make_tensor_name, upload_to_aws, check_use_baukit
 from nanoGPT_model import GPT
-from activation_dataset import setup_data
 
 
 # set OPENAI_API_KEY environment variable from secrets.json['openai_key']
@@ -64,6 +58,7 @@ TOTAL_EXAMPLES = OPENAI_EXAMPLES_PER_SPLIT * N_SPLITS
 REPLACEMENT_CHAR = "�"
 MAX_CONCURRENT = None
 
+BASE_FOLDER = "/mnt/ssd-cluster/sweep_interp"
 
 # Replaces the load_neuron function in neuron_explainer.activations.activations because couldn't get blobfile to work
 def load_neuron(
@@ -206,69 +201,60 @@ def make_feature_activation_dataset(
     print(f"Threw away {n_thrown} fragments, made {len(df)} fragments")
     return df
 
-async def main(cfg: dotdict) -> None:
-    # Load model
-    if cfg.model_name in ["gpt2", "EleutherAI/pythia-70m-deduped"]:
-        model = HookedTransformer.from_pretrained(cfg.model_name, device=cfg.device)
-        use_baukit = False
-        if cfg.model_name == "gpt2":
-            resid_width = 768
-        elif cfg.model_name == "EleutherAI/pythia-70m-deduped":
-            resid_width = 512
-    elif cfg.model_name == "nanoGPT":
-        model_dict = torch.load(open(cfg.model_path, "rb"), map_location="cpu")["model"]
-        model_dict = {k.replace("_orig_mod.", ""): v for k, v in model_dict.items()}
-        cfg_loc = cfg.model_path[:-3] + "cfg"  # cfg loc is same as model_loc but with .pt replaced with cfg.py
-        cfg_loc = cfg_loc.replace("/", ".")
-        model_cfg = importlib.import_module(cfg_loc).model_cfg
-        model = GPT(model_cfg).to(cfg.device)
-        model.load_state_dict(model_dict)
-        use_baukit = True
-        resid_width = 32
-    else:
-        raise ValueError("Model name not recognised")
-    
+
+def get_df(
+        feature_dict: LearnedDict, 
+        model_name: str,
+        layer: int,
+        layer_loc: str,
+        n_feats: int, 
+        save_loc: str, 
+        device: str,
+        force_refresh: bool = False
+        ) -> pd.DataFrame:
     # Load feature dict
-    feature_dict = torch.load(cfg.load_interpret_autoencoder, map_location="cpu")
+    feature_dict.to_device(torch.device("cpu"))
 
-    df_loc = os.path.join(cfg.transform_folder, f"activation_df.hdf")
-
-    if cfg.n_feats_explain > cfg.df_n_feats:
-        print(f"Warning: n feats to explain ({cfg.n_feats_explain}) is greater than number to be saved ({cfg.df_n_feats}), setting n_feats_explain to df_n_feats")
-        cfg.n_feats_explain = cfg.df_n_feats
+    df_loc = os.path.join(save_loc, f"activation_df.hdf")
 
     reload_data = True
-    if cfg.load_activation_dataset and os.path.exists(df_loc) and not cfg.refresh_data:
+    if os.path.exists(df_loc) and not force_refresh:
         start_time = datetime.now()
         base_df = pd.read_hdf(df_loc)
         print(f"Loaded dataset in {datetime.now() - start_time}")
 
         # Check that the dataset has enough features saved
-        if f"feature_{cfg.n_feats_explain}_activation_0" in base_df.keys():
+        if f"feature_{n_feats - 1}_activation_0" in base_df.keys():
             reload_data = False
         else:
             print("Dataset does not have enough features, remaking")
 
     if reload_data:
+        model = HookedTransformer.from_pretrained(model_name)
+
         base_df = make_feature_activation_dataset(
             model,
             learned_dict=feature_dict,
-            layer=cfg.layer,
-            layer_loc=cfg.layer_loc,
-            device=cfg.device,
-            max_features=cfg.df_n_feats
+            layer=layer,
+            layer_loc=layer_loc,
+            device=device,
+            max_features=n_feats,
         )
         # save the dataset, saving each column separately so that we can retrive just the columns we want later
         print(f"Saving dataset to {df_loc}")
-        os.makedirs(cfg.transform_folder, exist_ok=True)
+        os.makedirs(save_loc, exist_ok=True)
         base_df.to_hdf(df_loc, key="df", mode="w")
 
     # save the autoencoder being investigated
-    os.makedirs(cfg.transform_folder, exist_ok=True)
-    torch.save(feature_dict, os.path.join(cfg.transform_folder, "autoencoder.pt"))
-        
-    for feat_n in range(0, cfg.n_feats_explain):
-        if os.path.exists(os.path.join(cfg.transform_folder, f"feature_{feat_n}")):
+    os.makedirs(save_loc, exist_ok=True)
+    torch.save(feature_dict, os.path.join(save_loc, "autoencoder.pt"))
+
+    return base_df
+
+
+async def interpret(base_df: pd.DataFrame, save_folder: str, n_feats_to_explain: int) -> None:
+    for feat_n in range(0, n_feats_to_explain):
+        if os.path.exists(os.path.join(save_folder, f"feature_{feat_n}")):
             print(f"Feature {feat_n} already exists, skipping")
             continue
 
@@ -347,7 +333,7 @@ async def main(cfg: dotdict) -> None:
         print(f"Feature {feat_n}, score={score:.2f}, top_only_score={top_only_score:.2f}, random_only_score={random_only_score:.2f}")
 
         feature_name = f"feature_{feat_n}"
-        feature_folder = os.path.join(cfg.transform_folder, feature_name)
+        feature_folder = os.path.join(save_folder, feature_name)
         os.makedirs(feature_folder, exist_ok=True)
         pickle.dump(scored_simulation, open(os.path.join(feature_folder, "scored_simulation.pkl"), "wb"))
         pickle.dump(neuron_record, open(os.path.join(feature_folder, "neuron_record.pkl"), "wb"))
@@ -356,9 +342,20 @@ async def main(cfg: dotdict) -> None:
             f.write(f"{explanation}\nScore: {score:.2f}\nExplainer model: {EXPLAINER_MODEL_NAME}\nSimulator model: {SIMULATOR_MODEL_NAME}\n")
             f.write(f"Top only score: {top_only_score:.2f}\n")
             f.write(f"Random only score: {random_only_score:.2f}\n")
-    
-    if cfg.upload_to_aws:
-        upload_to_aws(cfg.transform_folder)
+
+
+def run(dict: LearnedDict, cfg: dotdict):
+    assert cfg.df_n_feats >= cfg.n_feats_explain
+    df = get_df(
+        feature_dict=dict,
+        model_name=cfg.model_name,
+        layer=cfg.layer,
+        layer_loc=cfg.layer_loc,
+        n_feats=cfg.df_n_feats,
+        save_loc=cfg.save_loc,
+        device=cfg.device,
+    )
+    asyncio.run(interpret(df, cfg.save_loc, n_feats_to_explain=cfg.n_feats_explain))
 
 
 def get_score(lines: List[str], mode: str):
@@ -379,8 +376,9 @@ def run_folder(cfg: dotdict):
     print(f"Found {len(all_encoders)} encoders in {cfg.load_interpret_autoencoder}")
     for i, encoder in enumerate(all_encoders):
         print(f"Running encoder {i} of {len(all_encoders)}: {encoder}")
-        cfg.load_interpret_autoencoder = os.path.join(base_folder, encoder)
-        asyncio.run(main(cfg))
+        learned_dict = torch.load(os.path.join(base_folder, encoder), map_location=torch.device(cfg.device))
+        cfg.save_loc = os.path.join(BASE_FOLDER, encoder)
+        run(learned_dict, cfg)
     
 
 def make_tag_name(hparams: Dict) -> str:
@@ -458,12 +456,44 @@ def parse_folder_name(folder_name: str) -> Tuple[str, str, int, float]:
         ratio = 0.5
 
     return tied, layer_loc, layer, ratio
-    
+
+def run_list_of_learned_dicts(dicts: List[Tuple[str, LearnedDict]], cfg):
+    """
+    Run autointerpretation across a folder of learned dicts as outputted by big_sweep.py or similar, where the layer/layer_loc are the same.
+    """
+    for name, dict in dicts:
+        print(f"Running {name}")
+        run(dict, cfg)
+
+
+def interpret_across_baselines():
+    baselines_dir = "/mnt/ssd-cluster/baselines"
+    save_dir = "/mnt/ssd-cluster/auto_interp_results/baselines"
+    os.makedirs(save_dir, exist_ok=True)
+    base_cfg = parse_args()
+
+    all_folders = os.listdir(baselines_dir)
+    for folder in all_folders:
+        layer_str, layer_loc = folder.split("_")
+        layer = int(layer_str[1:])
+        layer_baselines = os.listdir(os.path.join(baselines_dir, folder))
+        for baseline_file in layer_baselines:
+            print(f"{baseline_file=}")
+            cfg = copy.deepcopy(base_cfg)
+            cfg.layer = layer
+            cfg.layer_loc = layer_loc
+            cfg.save_loc = os.path.join(save_dir, folder, baseline_file)
+            if layer_loc == "residual" and "nmf" in baseline_file:
+                continue
+            learned_dict = torch.load(os.path.join(baselines_dir, folder, baseline_file), map_location=cfg.device)
+            print(f"{layer=}, {layer_loc=}, {baseline_file=}")
+            run(learned_dict, cfg)
+
 
 def interpret_across_big_sweep(l1_val: float):
     base_cfg = parse_args()
     base_dir = "/mnt/ssd-cluster/bigrun0308"
-    save_dir = "auto_interp_results/sweep_results"
+    save_dir = "/mnt/ssd-cluster/auto_interp_results/sweep_results"
     os.makedirs(save_dir, exist_ok=True)
 
     all_folders = os.listdir(base_dir)
@@ -474,7 +504,7 @@ def interpret_across_big_sweep(l1_val: float):
             continue
 
         cfg = copy.deepcopy(base_cfg)
-        autoencoders = torch.load(os.path.join(base_dir, folder, "_9", "learned_dicts.pt"))
+        autoencoders = torch.load(os.path.join(base_dir, folder, "_9", "learned_dicts.pt"), map_location=cfg.device)
         # find ae with matching l1_val
         matching_encoders = [ae for ae in autoencoders if abs(ae[1]["l1_alpha"] - l1_val) < 1e-5]
         assert len(matching_encoders) == 1
@@ -489,9 +519,8 @@ def interpret_across_big_sweep(l1_val: float):
         cfg.load_interpret_autoencoder = os.path.join(save_dir, save_str, "learned_dict.pt")
         cfg.layer = layer
         cfg.layer_loc = layer_loc
-        cfg.transform_folder = os.path.join(save_dir, save_str)
 
-        asyncio.run(main(cfg))
+        
 
 
 
@@ -579,6 +608,10 @@ if __name__ == "__main__":
         sys.argv.pop(1)
         l1_val = 0.0008577
         interpret_across_big_sweep(l1_val)
+    
+    elif len(sys.argv) > 1 and sys.argv[1] == "all_baselines":
+        sys.argv.pop(1)
+        interpret_across_baselines()
 
     else:
         default_cfg = parse_args()
@@ -587,4 +620,5 @@ if __name__ == "__main__":
             run_folder(default_cfg)
 
         else:
-            asyncio.run(main(default_cfg))
+            learned_dict = torch.load(default_cfg.load_interpret_autoencoder, map_location=default_cfg.device)
+            run(learned_dict, default_cfg)

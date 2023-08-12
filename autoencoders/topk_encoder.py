@@ -43,6 +43,7 @@ class TopKLearnedDict(LearnedDict):
     def __init__(self, dict, sparsity):
         self.dict = dict
         self.sparsity = sparsity
+        self.n_feats, self.activation_size = self.dict.shape
     
     def to_device(self, device):
         self.dict = self.dict.to(device)

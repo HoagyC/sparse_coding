@@ -1,5 +1,6 @@
 from datetime import datetime
 
+import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import FastICA
 import torch
@@ -14,7 +15,9 @@ class ICAEncoder(LearnedDict):
     def __init__(self, activation_size, n_components: int = 0):
         self.activation_size = activation_size
         if not n_components:
-            n_components = activation_size
+            self.n_feats = activation_size
+        else:
+            self.n_feats = n_components
         self.ica = FastICA()
         self.scaler = StandardScaler()
     
@@ -23,7 +26,7 @@ class ICAEncoder(LearnedDict):
     
     def encode(self, x):
         assert x.shape[1] == self.activation_size
-        x_standardized = self.scaler.transform(x.cpu().numpy())
+        x_standardized = self.scaler.transform(x.cpu().numpy().astype(np.float64))
         c = self.ica.transform(x_standardized)
         return torch.tensor(c, device=x.device)
         
@@ -31,7 +34,7 @@ class ICAEncoder(LearnedDict):
         assert dataset.shape[1] == self.activation_size
         print(f"Fitting ICA on {dataset.shape[0]} activations")
         # Scale the data
-        dataset_rescaled = self.scaler.fit_transform(dataset.cpu().numpy())
+        dataset_rescaled = self.scaler.fit_transform(dataset.cpu().numpy().astype(np.float64))
         ica_start = datetime.now()
         output = self.ica.fit_transform(dataset_rescaled) # 1GB of activations takes about 15m
         print(f"ICA fit in {datetime.now() - ica_start}")
@@ -39,7 +42,7 @@ class ICAEncoder(LearnedDict):
 
 
     def get_learned_dict(self):
-        return self.ica.components_
+        return torch.tensor(self.ica.components_, dtype=torch.float32)
     
     def to_topk_dict(self, sparsity):
         return TopKLearnedDict(self.get_learned_dict(), sparsity)

@@ -52,7 +52,6 @@ def parse_args() -> dotdict:
     parser.add_argument("--max_lines", type=int, default=100000)  # How many lines to read from the dataset
 
     # interpret
-    parser.add_argument("--load_activation_dataset", type=bool, default=True) # path to dataset to load
     parser.add_argument("--n_feats_explain", type=int, default=10) # number of features to explain
     parser.add_argument("--activation_transform", type=str, default="feature_dict") # way of transforming neuron activations into features
     parser.add_argument("--load_interpret_autoencoder", type=str, default="") # path to autoencoder to load
