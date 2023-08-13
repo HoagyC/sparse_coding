@@ -39,6 +39,7 @@ class NMFEncoder(LearnedDict):
         if torch.min(x) < self.shift:
             print("Warning: data has values below expected minumum for NMF. This may cause errors.")
         x -= self.shift
+        x.clamp_(min=0.0)
         c = self.nmf.transform(x.cpu().numpy().astype(np.float64))
         return torch.tensor(c, device=x.device)
         

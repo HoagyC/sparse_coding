@@ -51,6 +51,7 @@ class PCAEncoder(LearnedDict):
         normed_dict = pca_dict / torch.norm(pca_dict, dim=-1)[:, None]
         self.pca_dict = normed_dict
         self.sparsity = sparsity
+        self.n_feats, self.activation_size = self.pca_dict.shape
     
     def to_device(self, device):
         self.pca_dict = self.pca_dict.to(device)
