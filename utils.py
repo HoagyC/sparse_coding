@@ -124,13 +124,13 @@ def get_activation_size(model_name: str, layer_loc: str):
     assert layer_loc in ["residual", "mlp", "attn", "mlpout"], f"Layer location {layer_loc} not supported"
     model_cfg = convert_hf_model_config(model_name)
     if layer_loc == "residual":
-        return model_cfg.d_model
+        return model_cfg["d_model"]
     elif layer_loc == "mlp":
-        return model_cfg.d_mlp
+        return model_cfg["d_mlp"]
     elif layer_loc == "attn":
-        return model_cfg.d_head * model_cfg.n_heads
+        return model_cfg["d_head"] * model_cfg["n_heads"]
     elif layer_loc == "mlpout":
-        return model_cfg.d_model
+        return model_cfg["d_model"]
 
 def check_transformerlens_model(model_name: str):
     try:

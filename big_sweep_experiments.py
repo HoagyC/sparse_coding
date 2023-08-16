@@ -805,20 +805,26 @@ def run_pythia_1_4_b_sweep():
     cfg = parse_args()
 
     cfg.model_name = "EleutherAI/pythia-1.4B-deduped"
-    cfg.dataset_name = "EleutherAI/pile"
+    cfg.dataset_name = "NeelNanda/pile-10k"
 
     cfg.batch_size = 1024
     cfg.lr = 1e-3
+    cfg.dtype = torch.float32
 
     cfg.use_wandb = False
     cfg.wandb_images = False
+    cfg.use_synthetic_dataset = False
 
     cfg.activation_width = 512
     cfg.n_chunks = 30
 
+    cfg.layer = 6
+    cfg.layer_loc = "residual"
+
     cfg.dataset_folder = "activation_data_1_4_b"
+    cfg.output_folder = "output_1_4_b"
 
     sweep(pythia_1_4_b_dict, cfg)
 
 if __name__ == "__main__":
-    run_zero_l1_baseline()
+    run_pythia_1_4_b_sweep()
