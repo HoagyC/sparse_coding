@@ -8,6 +8,9 @@ import tqdm
 
 # dataset: https://archive.ics.uci.edu/dataset/591/gender+by+name
 
+max_tok_len = 3
+name_fmt = " {name}"
+
 if __name__ == "__main__":
     model = "EleutherAI/pythia-70m-deduped"
     if len(sys.argv) > 1:
@@ -23,13 +26,13 @@ if __name__ == "__main__":
         for entry in tqdm.tqdm(reader):
             name = entry[0]
 
-            t = tokenizer(name)
+            t = tokenizer(name_fmt.format(name=name))
             
             # filter names that are more than one token
-            if len(t["input_ids"]) == 1:
+            if len(t["input_ids"]) <= max_tok_len:
                 entries.append(entry)
 
     print(f"Found {len(entries)} entries")
 
     with open("gender_dataset.pkl", "wb") as f:
-        pickle.dump(entries, f)
+        pickle.dump((max_tok_len, entries), f)
