@@ -502,17 +502,17 @@ def make_one_chunk_per_layer() -> None:
     tokenizer = model.tokenizer
 
     for layer_loc in ["residual", "mlp", "mlpout", "attn"]:
-        activation_width = 2048 if layer_loc == "mlp" else 512
         for layer in range(6):
             setup_data(
                 tokenizer,
                 model,
                 dataset_name="EleutherAI/pile",
-                dataset_folder=f"single_chunks/l{layer}_{layer_loc}",
+                dataset_folder=f"/mnt/ssd-cluster/single_chunks_1m/l{layer}_{layer_loc}",
                 layer=layer,
                 layer_loc=layer_loc,
                 n_chunks=1,
                 device=device,
+                start_line=1_000_000,
             )
 
 def calculate_perplexity(
@@ -705,8 +705,10 @@ def calc_all_kurtosis():
     pickle.dump(results, open("kurtosis_data.pkl", "wb"))
 
 if __name__ == "__main__":
-    dicts = torch.load("/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r4/_9/learned_dicts.pt")
-    plot_capacity_scatter(dicts, save_name="outputs/capacity_scatter_l2_r4")
+    make_one_chunk_per_layer()
+
+    # dicts = torch.load("/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r4/_9/learned_dicts.pt")
+    # plot_capacity_scatter(dicts, save_name="outputs/capacity_scatter_l2_r4")
 
     # mp.set_start_method('spawn')
     # calc_all_kurtosis()

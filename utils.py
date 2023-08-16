@@ -38,7 +38,7 @@ def datasets_sync():
 
 def autointerp_sync():
     """Sync the local directory with the remote host's auto interp results, excluding hdf files."""
-    command = f'rsync -r --exclude "*.hdf" --exclude "*.pkl" -e ssh {DEST_ADDR}:{SSH_DIRECTORY}/auto_interp_results . '
+    command = f'rsync -r --exclude "*.hdf" --exclude "*.pkl" -e ssh {DEST_ADDR}:/mnt/ssd-cluster/auto_interp_results/ ./auto_interp_results'
     print(command)
     subprocess.call(command, shell=True)
 

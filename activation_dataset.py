@@ -201,7 +201,7 @@ def make_activation_dataset(
     with torch.no_grad():
         chunk_size = chunk_size_gb * (2**30)  # 2GB
         activation_size = activation_width * 2 * model_batch_size * max_length  # 3072 mlp activations, 2 bytes per half, 1024 context window
-        max_chunks = chunk_size // activation_size
+        actives_per_chunk = chunk_size // activation_size
         dataset = []
         n_saved_chunks = 0
         for batch_idx, batch in tqdm(enumerate(sentence_dataset)):
@@ -219,7 +219,7 @@ def make_activation_dataset(
                 mlp_activation_data = rearrange(mlp_activation_data, "b s n -> (b s) n")
 
             dataset.append(mlp_activation_data)
-            if len(dataset) >= max_chunks:
+            if len(dataset) >= actives_per_chunk:
                 # Need to save, restart the list
                 save_activation_chunk(dataset, n_saved_chunks, dataset_folder)
                 n_saved_chunks += 1
@@ -248,7 +248,7 @@ def setup_data(
         layer_loc: str = "residual",
         start_line: int = 0, 
         n_chunks: int = 1,
-        device: torch.device = torch.device("cuda:0")
+        device: torch.device = torch.device("cuda:0"),
     ):
     sentence_len_lower = 1000
     activation_width = get_activation_size(model.cfg.model_name, layer_loc)
