@@ -14,7 +14,6 @@ tl_simple.py
 scratchpad.py
 secrets.json
 setup.sh
-plotting
 wandb/
 saved_autoencoders
 testing

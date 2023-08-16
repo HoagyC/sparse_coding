@@ -1,6 +1,7 @@
 import itertools
 import math
 import os
+import pickle
 import shutil
 from typing import List, Tuple, Dict, Any
 
@@ -16,10 +17,12 @@ from autoencoders.pca import BatchedPCA, PCAEncoder
 from autoencoders.learned_dict import LearnedDict
 import standard_metrics
 
+load_dir = "/mnt/ssd-cluster/bigrun0308"
+plot_data_dir = "/mnt/ssd-cluster/plot_data"
 
 def plot_by_group() -> None:
     chunk_range = [9]
-    learned_dict_files = [os.path.join("/mnt/ssd-cluster/bigrun0308", x) for x in os.listdir("/mnt/ssd-cluster/bigrun0308")]
+    learned_dict_files = [os.path.join(load_dir, x) for x in os.listdir(load_dir)]
     learned_dict_files += [f for f in os.listdir(".") if f.startswith("output_attn")]
     learned_dict_files += [f for f in os.listdir(".") if f.startswith("output_sweep")]
 
@@ -99,6 +102,9 @@ def plot_by_group() -> None:
                     datapoints.append((r_sq, sparsity, hyperparams["l1_alpha"]))
                 datapoint_series.append((run_name, datapoints))
             all_data.append(datapoint_series)
+
+        
+        pickle.dump(all_data, open(f"all_data_{graph_name}.pkl", "wb"))
 
         colors = ["Purples", "Blues", "Greens", "Oranges", "Reds", "Greys", "YlOrBr", "YlOrRd", "OrRd"]
         markers = ["o", "v", "s", "P", "X"]
