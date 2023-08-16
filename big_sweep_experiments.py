@@ -774,5 +774,51 @@ def synthetic_test():
 
         sweep(synthetic_linear_range, cfg)
 
+def pythia_1_4_b_dict(cfg):
+    dict_ratio = 6
+    l1_values = np.logspace(-4, -2, 5)
+    dict_size = int(cfg.activation_width * dict_ratio)
+    devices = ["cuda:1"]
+
+    ensembles = []
+    for i in range(1):
+        #l1_range = l1_values[i*2:(i+1)*2]
+        models = [
+            FunctionalTiedSAE.init(cfg.activation_width, dict_size, l1_value, dtype=cfg.dtype)
+            for l1_value in l1_values
+        ]
+        device = devices.pop()
+        ensemble = FunctionalEnsemble(
+            models, FunctionalTiedSAE,
+            torchopt.adam, {
+                "lr": cfg.lr
+            },
+            device=device
+        )
+        args = {"batch_size": cfg.batch_size, "device": device, "dict_size": max_size}
+        name = f"l1_{i}"
+        ensembles.append((ensemble, args, name))
+    
+    return (ensembles, [], ["l1_alpha", "dict_size"], {"dict_size": dict_sizes, "l1_alpha": [l1_value]})
+
+def run_pythia_1_4_b_sweep():
+    cfg = parse_args()
+
+    cfg.model_name = "EleutherAI/pythia-1.4B-deduped"
+    cfg.dataset_name = "EleutherAI/pile"
+
+    cfg.batch_size = 1024
+    cfg.lr = 1e-3
+
+    cfg.use_wandb = False
+    cfg.wandb_images = False
+
+    cfg.activation_width = 512
+    cfg.n_chunks = 30
+
+    cfg.dataset_folder = "activation_data_1_4_b"
+
+    sweep(pythia_1_4_b_dict, cfg)
+
 if __name__ == "__main__":
     run_zero_l1_baseline()

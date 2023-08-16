@@ -88,10 +88,7 @@ def eval_hook(model, hook_func, token_dataset, location, base_logits, device, ba
             )
             sum_kl += kl_div(base_logits[i].to(logits.device), logits)
 
-            if max_batches is not None and i >= max_batches:
-                sum_kl /= i
-
-    return sum_kl
+    return sum_kl / (i + 1)
 
 if __name__ == "__main__":
     torch.autograd.set_grad_enabled(False)
