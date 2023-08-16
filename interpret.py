@@ -213,7 +213,7 @@ def get_df(
         force_refresh: bool = False
         ) -> pd.DataFrame:
     # Load feature dict
-    feature_dict.to_device(torch.device("cpu"))
+    feature_dict.to_device(device)
 
     df_loc = os.path.join(save_loc, f"activation_df.hdf")
 
@@ -424,6 +424,8 @@ def read_scores(results_folder: str, score_mode: str = "top") -> Dict[str, Tuple
         transform_ndxs = []
         # list all the features by looking for folders
         feat_folders = [x for x in os.listdir(os.path.join(results_folder, transform)) if x.startswith("feature_")]
+        if len(feat_folders) == 0:
+            continue
         print(f"{transform=}, {len(feat_folders)=}")
         for feature_folder in feat_folders:
             feature_ndx = int(feature_folder.split("_")[1])
@@ -466,11 +468,14 @@ def run_list_of_learned_dicts(dicts: List[Tuple[str, LearnedDict]], cfg):
         run(dict, cfg)
 
 
-def interpret_across_baselines():
+def interpret_across_baselines(n_gpus: int = 3):
     baselines_dir = "/mnt/ssd-cluster/baselines"
-    save_dir = "/mnt/ssd-cluster/auto_interp_results/baselines"
+    save_dir = "/mnt/ssd-cluster/auto_interp_results/"
     os.makedirs(save_dir, exist_ok=True)
     base_cfg = parse_args()
+
+    if n_gpus > 1:
+        job_queue: List[Tuple[LearnedDict, dotdict]] = []
 
     all_folders = os.listdir(baselines_dir)
     for folder in all_folders:
@@ -482,25 +487,40 @@ def interpret_across_baselines():
             cfg = copy.deepcopy(base_cfg)
             cfg.layer = layer
             cfg.layer_loc = layer_loc
-            cfg.save_loc = os.path.join(save_dir, folder, baseline_file)
-            if layer_loc == "residual" and "nmf" in baseline_file:
+            cfg.save_loc = os.path.join(save_dir, folder, baseline_file[:-3])
+            cfg.n_feats_explain = 50
+            if "nmf" in baseline_file:
                 continue
             learned_dict = torch.load(os.path.join(baselines_dir, folder, baseline_file), map_location=cfg.device)
             print(f"{layer=}, {layer_loc=}, {baseline_file=}")
-            run(learned_dict, cfg)
+            if n_gpus == 1:
+                run(learned_dict, cfg)
+            else:
+                job_queue.append((learned_dict, cfg))
+    
+    with mp.Pool(n_gpus) as p:
+        p.starmap(run, job_queue) 
 
 
-def interpret_across_big_sweep(l1_val: float):
+def interpret_across_big_sweep(l1_val: float, n_gpus: int = 1):
     base_cfg = parse_args()
     base_dir = "/mnt/ssd-cluster/bigrun0308"
-    save_dir = "/mnt/ssd-cluster/auto_interp_results/sweep_results"
+    save_dir = "/mnt/ssd-cluster/auto_interp_results/"
     os.makedirs(save_dir, exist_ok=True)
 
     all_folders = os.listdir(base_dir)
+    if n_gpus != 1:
+        job_queue: List[Tuple[Callable, dotdict]] = []
+
     for folder in all_folders:
-        tied, layer_loc, layer, ratio = parse_folder_name(folder)
+        try:
+            tied, layer_loc, layer, ratio = parse_folder_name(folder)
+        except:
+            continue
         print(f"{tied}, {layer_loc=}, {layer=}, {ratio=}")
-        if layer_loc != "residual":
+        if layer_loc != "mlp":
+            continue
+        if ratio > 2:
             continue
 
         cfg = copy.deepcopy(base_cfg)
@@ -508,26 +528,38 @@ def interpret_across_big_sweep(l1_val: float):
         # find ae with matching l1_val
         matching_encoders = [ae for ae in autoencoders if abs(ae[1]["l1_alpha"] - l1_val) < 1e-5]
         assert len(matching_encoders) == 1
-        matching_encoder = matching_encoders[0]
+        matching_encoder = matching_encoders[0][0]
     
         # save the learned dict
-        save_str = f"{layer_loc}_l{layer}_{tied}_r{ratio}_l1a{l1_val:.2}"
+        save_str = f"l{layer}_{layer_loc}/{tied}_r{ratio}_l1a{l1_val:.2}"
         os.makedirs(os.path.join(save_dir, save_str), exist_ok=True)
-        torch.save(matching_encoder[0], os.path.join(save_dir, save_str, "learned_dict.pt"))
+        torch.save(matching_encoder, os.path.join(save_dir, save_str, "learned_dict.pt"))
 
         # run the interpretation
         cfg.load_interpret_autoencoder = os.path.join(save_dir, save_str, "learned_dict.pt")
         cfg.layer = layer
         cfg.layer_loc = layer_loc
+        cfg.save_loc = os.path.join(save_dir, save_str)
+        cfg.n_feats_explain = 50
+        if n_gpus == 1:
+            run(matching_encoder, cfg)
+        else:
+            cfg.device = f"cuda:{len(job_queue) % n_gpus}"
+            job_queue.append((LearnedDict, cfg))
+    
+    if n_gpus > 1:
+        with mp.Pool(n_gpus) as p:
+            p.starmap(run, job_queue) 
 
-        
-
-
+    
 
 def read_results(activation_name: str, score_mode: str) -> None:
-    results_folder = os.path.join("auto_interp_results", activation_name)
+    results_folder = os.path.join("/mnt/ssd-cluster/auto_interp_results", activation_name)
 
     scores = read_scores(results_folder, score_mode) # Dict[str, Tuple[List[int], List[float]]], where the tuple is (feature_ndxs, scores)
+    if len(scores) == 0:
+        print(f"No scores found for {activation_name}")
+        return
     transforms = scores.keys()
 
     plt.clf() # clear the plot                
@@ -581,17 +613,19 @@ if __name__ == "__main__":
         argparser.add_argument("--layer", type=int, default=1)
         argparser.add_argument("--model_name", type=str, default="EleutherAI/pythia-70m-deduped")
         argparser.add_argument("--layer_loc", type=str, default="mlp")
-        argparser.add_argument("--score_mode", type=str, default="top_random") # can be "top", "random", "top_random", "all"
+        argparser.add_argument("--score_mode", type=str, default="all") # can be "top", "random", "top_random", "all"
         argparser.add_argument("--run_all", type=bool, default=False)
         cfg = argparser.parse_args(sys.argv[2:])
 
         if cfg.score_mode == "all":
             score_modes = ["top", "random", "top_random"]
         else:
-            score_modes = [cfg.score_mode]      
+            score_modes = [cfg.score_mode]  
+
+        base_path = "/mnt/ssd-cluster/auto_interp_results"    
 
         if cfg.run_all:
-            activation_names = [x for x in os.listdir("auto_interp_results") if os.path.isdir(os.path.join("auto_interp_results", x))]
+            activation_names = [x for x in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, x))]
         else:
             activation_names = [f"{cfg.model_name.split('/')[-1]}_layer{cfg.layer}_{cfg.layer_loc}"]
         
@@ -606,7 +640,9 @@ if __name__ == "__main__":
 
     elif len(sys.argv) > 1 and sys.argv[1] == "big_sweep":
         sys.argv.pop(1)
-        l1_val = 0.0008577
+        # l1_val = 0.00018478
+        # l1_val = 0.0008577
+        l1_val = 0.00083768
         interpret_across_big_sweep(l1_val)
     
     elif len(sys.argv) > 1 and sys.argv[1] == "all_baselines":

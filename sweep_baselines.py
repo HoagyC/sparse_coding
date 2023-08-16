@@ -10,6 +10,8 @@ import tqdm
 from autoencoders.pca import BatchedPCA
 from autoencoders.ica import ICAEncoder
 from autoencoders.nmf import NMFEncoder
+from autoencoders.learned_dict import IdentityReLU, RandomDict
+
 from standard_metrics import mean_nonzero_activations
 
 def run_layer_baselines(args) -> None:
@@ -19,6 +21,7 @@ def run_layer_baselines(args) -> None:
     output_folder: str 
     sparsity: int
     device: torch.device
+    remake: bool = False
     layer, layer_locs, chunks_folder, output_folder, sparsity, device = args
 
     for layer_loc in layer_locs:
@@ -41,39 +44,63 @@ def run_layer_baselines(args) -> None:
             print(f"new sparsity for layer {layer}:", sparsity)
 
 
-        # Run batched PCA on the layer
-        pca = BatchedPCA(n_dims=activation_dim, device=device)
-        print("Training PCA")
-        pca_batch_size = 500
-        with torch.no_grad():
-            for i in tqdm.tqdm(range(0, len(full_chunk), pca_batch_size)):
-                j = min(i + pca_batch_size, len(full_chunk))
-                batch = full_chunk[i:j]
-                pca.train_batch(batch)
-        
-        pca_ld = pca.to_learned_dict(sparsity=activation_dim) # No sparsity, use topK for that
-        torch.save(pca_ld, os.path.join(output_folder, folder_name, "pca.pt"))
+        if os.path.exists(os.path.join(output_folder, folder_name, "pca.pt")) and not remake:
+            print("Skipping PCA")
+        else:
+            # Run batched PCA on the layer
+            pca = BatchedPCA(n_dims=activation_dim, device=device)
+            print("Training PCA")
+            pca_batch_size = 500
+            with torch.no_grad():
+                for i in tqdm.tqdm(range(0, len(full_chunk), pca_batch_size)):
+                    j = min(i + pca_batch_size, len(full_chunk))
+                    batch = full_chunk[i:j]
+                    pca.train_batch(batch)
+            
+            pca_ld = pca.to_learned_dict(sparsity=activation_dim) # No sparsity, use topK for that
+            torch.save(pca_ld, os.path.join(output_folder, folder_name, "pca.pt"))
 
-        pca_top_k = pca.to_topk_dict(sparsity)
-        torch.save(pca_top_k, os.path.join(output_folder, folder_name, "pca_topk.pt"))
+            pca_top_k = pca.to_topk_dict(sparsity)
+            torch.save(pca_top_k, os.path.join(output_folder, folder_name, "pca_topk.pt"))
 
-        # Run ICA
-        ica = ICAEncoder(activation_size=activation_dim)
-        print("Training ICA")
-        ica.train(full_chunk)
-        torch.save(ica, os.path.join(output_folder, folder_name, "ica.pt"))
+        if os.path.exists(os.path.join(output_folder, folder_name, "ica.pt")) and not remake:
+            print("Skipping ICA")
+        else:
+            # Run ICA
+            ica = ICAEncoder(activation_size=activation_dim)
+            print("Training ICA")
+            ica.train(full_chunk)
+            torch.save(ica, os.path.join(output_folder, folder_name, "ica.pt"))
 
-        ica_top_k = ica.to_topk_dict(sparsity)
-        torch.save(ica_top_k, os.path.join(output_folder, folder_name, "ica_topk.pt"))
+            ica_top_k = ica.to_topk_dict(sparsity)
+            torch.save(ica_top_k, os.path.join(output_folder, folder_name, "ica_topk.pt"))
 
-        # Run NMF
-        nmf = NMFEncoder(activation_size=activation_dim)
-        print("Training NMF")
-        nmf.train(full_chunk)
-        torch.save(nmf, os.path.join(output_folder, folder_name, "nmf.pt"))
+        if os.path.exists(os.path.join(output_folder, folder_name, "nmf.pt")) and not remake:
+            print("Skipping NMF")
+        else:
+            # Run NMF
+            nmf = NMFEncoder(activation_size=activation_dim)
+            print("Training NMF")
+            nmf.train(full_chunk)
+            torch.save(nmf, os.path.join(output_folder, folder_name, "nmf.pt"))
 
-        nmf_top_k = nmf.to_topk_dict(sparsity)
-        torch.save(nmf_top_k, os.path.join(output_folder, folder_name, "nmf_topk.pt"))
+            nmf_top_k = nmf.to_topk_dict(sparsity)
+            torch.save(nmf_top_k, os.path.join(output_folder, folder_name, "nmf_topk.pt"))
+
+        if os.path.exists(os.path.join(output_folder, folder_name, "random.pt")) and not remake:
+            print("Skipping random")
+        else:
+            # Run random dict
+            random_dict = RandomDict(activation_size=activation_dim)
+            torch.save(random_dict, os.path.join(output_folder, folder_name, "random.pt"))
+
+        if os.path.exists(os.path.join(output_folder, folder_name, "identity_relu.pt")) and not remake:
+            print("Skipping identity relu")
+        else:
+            # Run identity relu
+            identity_relu = IdentityReLU(activation_size=activation_dim)
+            torch.save(identity_relu, os.path.join(output_folder, folder_name, "identity_relu.pt"))
+
 
 def resave_change_sparsity() -> None:
     layer_loc = "residual"
@@ -133,4 +160,4 @@ def run_all() -> None:
 
 
 if __name__ == "__main__":
-    resave_change_sparsity()
+    run_all()
