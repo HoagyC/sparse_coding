@@ -3,6 +3,7 @@ import math
 import os
 import pickle
 import shutil
+import sys
 from typing import List, Tuple, Dict, Any
 
 import matplotlib
@@ -12,6 +13,8 @@ from matplotlib.lines import Line2D
 import numpy as np
 import torch
 import tqdm
+
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 from autoencoders.pca import BatchedPCA, PCAEncoder
 from autoencoders.learned_dict import LearnedDict
@@ -25,6 +28,7 @@ def plot_by_group() -> None:
     learned_dict_files = [os.path.join(load_dir, x) for x in os.listdir(load_dir)]
     learned_dict_files += [f for f in os.listdir(".") if f.startswith("output_attn")]
     learned_dict_files += [f for f in os.listdir(".") if f.startswith("output_sweep")]
+    # learned_dict_files = [f for f in os.listdir(".") if f.startswith("lr1e-3")]
 
     resid_dicts = [f for f in learned_dict_files if "resid" in f]
     mlp_dicts = [f for f in learned_dict_files if "mlp" in f]
@@ -65,12 +69,12 @@ def plot_by_group() -> None:
     #     ("l5_mlp", [layer_5_dicts, mlp_dicts]),
     # ]
     experiments = [
-        ("l0_mlp_out", [[layer_0_dicts, mlp_out_dicts]]),
-        ("l1_mlp_out", [[layer_1_dicts, mlp_out_dicts]]),
-        ("l2_mlp_out", [[layer_2_dicts, mlp_out_dicts]]),
-        ("l3_mlp_out", [[layer_3_dicts, mlp_out_dicts]]),
-        ("l4_mlp_out", [[layer_4_dicts, mlp_out_dicts]]),
-        ("l5_mlp_out", [[layer_5_dicts, mlp_out_dicts]]),
+        # ("l0_mlp_out", [[layer_0_dicts, mlp_out_dicts]]),
+        ("l1_mlp", [[layer_1_dicts, mlp_dicts]]),
+        # ("l2_mlp_out", [[layer_2_dicts, mlp_out_dicts]]),
+        # ("l3_mlp_out", [[layer_3_dicts, mlp_out_dicts]]),
+        # ("l4_mlp_out", [[layer_4_dicts, mlp_out_dicts]]),
+        # ("l5_mlp_out", [[layer_5_dicts, mlp_out_dicts]]),
     ]
 
     for graph_name, categories in experiments:
@@ -78,7 +82,9 @@ def plot_by_group() -> None:
         for subcategory in categories:
             learned_dict_loc_list = list(set.intersection(*[set(x) for x in subcategory]))
             learned_dict_loc_list.sort(key=lambda x: int(x.split("_")[-1][1:])) # sort by ratio
-            learned_dict_lists = [(x.split("sweep_")[-1], torch.load(os.path.join(x, "_4", "learned_dicts.pt"))) for x in learned_dict_loc_list]
+            learned_dict_lists = []
+            for i in range(0, 120, 10):
+                learned_dict_lists.extend([(x.split("sweep_")[-1], torch.load(os.path.join(x, f"_{i}", "learned_dicts.pt"))) for x in learned_dict_loc_list])
             learned_dicts_nested.append(learned_dict_lists)
 
         print(f"Found {sum(len(x) for x in learned_dicts_nested)} lists of dicts for experiment {graph_name}")
@@ -161,8 +167,9 @@ def plot_fuv_sparsity():
         #"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r2/_9/learned_dicts.pt",
         #"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r8/_9/learned_dicts.pt",
         #"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r16/_9/learned_dicts.pt",
-        "output_topk_synthetic/_49/learned_dicts.pt",
-        "output_tied_synthetic/_49/learned_dicts.pt",
+        # "output_topk_synthetic/_49/learned_dicts.pt",
+        # "output_tied_synthetic/_49/learned_dicts.pt",
+        "lr1e-3__mlp_l1_r1/_110/learned_dicts.pt"
     ]
 
     ground_truth_file = "output_topk_synthetic/generator.pt"

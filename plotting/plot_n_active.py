@@ -7,7 +7,7 @@ import multiprocessing as mp
 import matplotlib.pyplot as plt
 import torch
 
-local_dir = "/home/mchorse/sparse_coding_hoagy"
+local_dir = os.path.join(os.path.dirname(__file__), "..")
 load_dir = "/mnt/ssd-cluster/bigrun0308"
 plot_data_dir = "/mnt/ssd-cluster/plot_data"
 plots_dir = "/mnt/ssd-cluster/plots"
