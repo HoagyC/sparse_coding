@@ -4,10 +4,8 @@ import torch.nn.functional as F
 import torch.multiprocessing as mp
 import torch.utils.data as data
 
-from utils import check_transformerlens_model, get_activation_size
-
 from cluster_runs import dispatch_job_on_chunk
-from activation_dataset import setup_data
+from activation_dataset import setup_data, check_transformerlens_model, get_activation_size
 from sc_datasets.random_dataset import SparseMixDataset
 
 import numpy as np

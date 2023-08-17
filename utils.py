@@ -111,62 +111,6 @@ class dotdict(dict):
         del self[name]
 
 
-def check_use_baukit(model_name):
-    if model_name in ["nanoGPT"]:
-        return True
-    elif check_transformerlens_model(model_name):
-        return False
-    else:
-        raise NotImplementedError(f"Unknown if model {model_name} uses baukit")
-
-def get_activation_size(model_name: str, layer_loc: str):
-    assert check_transformerlens_model(model_name) or model_name == "nanoGPT", f"Model {model_name} not supported"
-    assert layer_loc in ["residual", "mlp", "attn", "mlpout"], f"Layer location {layer_loc} not supported"
-    model_cfg = convert_hf_model_config(model_name)
-    if layer_loc == "residual":
-        return model_cfg["d_model"]
-    elif layer_loc == "mlp":
-        return model_cfg["d_mlp"]
-    elif layer_loc == "attn":
-        return model_cfg["d_head"] * model_cfg["n_heads"]
-    elif layer_loc == "mlpout":
-        return model_cfg["d_model"]
-
-def check_transformerlens_model(model_name: str):
-    try:
-        get_official_model_name(model_name)
-        return True
-    except ValueError:
-        return False
-
-def make_tensor_name(layer: int, layer_loc: str, model_name: str) -> str:
-    """Make the tensor name for a given layer and model."""
-    assert layer_loc in ["residual", "mlp", "attn", "mlpout"], f"Layer location {layer_loc} not supported"
-    if layer_loc == "residual":
-        if check_transformerlens_model(model_name):
-            tensor_name = f"blocks.{layer}.hook_resid_post"
-        else:
-            raise NotImplementedError(f"Model {model_name} not supported for residual stream")
-    elif layer_loc == "mlp":
-        if check_transformerlens_model(model_name):
-            tensor_name = f"blocks.{layer}.mlp.hook_post"
-        elif model_name == "nanoGPT":
-            tensor_name = f"transformer.h.{layer}.mlp.c_fc"
-        else:
-            raise NotImplementedError(f"Model {model_name} not supported for MLP")
-    elif layer_loc == "attn":
-        if check_transformerlens_model(model_name):
-            tensor_name = f"blocks.{layer}.hook_resid_post"
-        else:
-            raise NotImplementedError(f"Model {model_name} not supported for attention stream")
-    elif layer_loc == "mlpout":
-        if check_transformerlens_model(model_name):
-            tensor_name = f"blocks.{layer}.hook_mlp_out"
-        else:
-            raise NotImplementedError(f"Model {model_name} not supported for MLP")
-
-    return tensor_name
-
 def upload_to_aws(local_file_name) -> bool:
     """"
     Upload a file to an S3 bucket

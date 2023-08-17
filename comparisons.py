@@ -1,4 +1,5 @@
 #import run
+from activation_dataset import get_activation_size
 from utils import *
 
 import os

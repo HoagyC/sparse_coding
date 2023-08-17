@@ -2,7 +2,8 @@ from run import run_mmcs_with_larger, AutoEncoder, plot_hist
 
 import torch
 
-from utils import dotdict, get_activation_size
+from activation_dataset import get_activation_size
+from utils import dotdict
 
 import os
 
