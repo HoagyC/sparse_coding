@@ -268,11 +268,7 @@ def init_synthetic_dataset(cfg):
     else:
         print(f"Activations in {cfg.dataset_folder} already exist, loading them")
 
-def sweep(ensemble_init_func, cfg):
-    if not sys.warnoptions:
-        import warnings
-        warnings.simplefilter('ignore')
-    
+def sweep(ensemble_init_func, cfg):    
     torch.set_grad_enabled(False)
     with torch.no_grad():
         torch.cuda.empty_cache()
@@ -339,7 +335,7 @@ def sweep(ensemble_init_func, cfg):
             log_standard_metrics(learned_dicts, chunk, i, hyperparam_ranges, cfg)
 
         del chunk
-        if i == n_chunks - 1 or i % cfg.save_every == 0:
+        if i == len(chunk_order) - 1 or i % cfg.save_every == 0:
             torch.save(learned_dicts, os.path.join(cfg.iter_folder, "learned_dicts.pt"))
 
         print("\n")
