@@ -1,3 +1,5 @@
+import sys
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -14,6 +16,10 @@ import time
 import itertools
 
 def job_wrapper(job, ensemble_state_dict, cfg, args, tag, dataset, done_flag, progress_counter):
+    if not sys.warnoptions:
+        import warnings
+        warnings.filterwarnings('ignore')
+        
     ensemble = FunctionalEnsemble.from_state(ensemble_state_dict)
 
     batch_size = args["batch_size"]
