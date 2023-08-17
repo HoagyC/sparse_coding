@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import torch.multiprocessing as mp
 import torch.utils.data as data
 
+from utils import check_transformerlens_model, get_activation_size
 
 from cluster_runs import dispatch_job_on_chunk
 from activation_dataset import setup_data
@@ -28,7 +29,7 @@ import standard_metrics
 from autoencoders.learned_dict import LearnedDict, UntiedSAE, TiedSAE
 
 def get_model(cfg):
-    if cfg.model_name in ["gpt2", "EleutherAI/pythia-70m-deduped", "EleutherAI/pythia-160m-deduped"]:
+    if check_transformerlens_model(cfg.model_name):
         model = HookedTransformer.from_pretrained(cfg.model_name, device=cfg.device)
     else:
         raise ValueError("Model name not recognised")
@@ -217,13 +218,7 @@ def generate_synthetic_dataset(cfg, generator, chunk_size, n_chunks):
         torch.save(chunk, os.path.join(cfg.dataset_folder, f"{i}.pt"))
 
 def init_model_dataset(cfg):
-    if cfg.layer_loc =="mlp":
-        cfg.activation_width = 2048
-    else:
-        if cfg.model_name == "EleutherAI/pythia-160m-deduped":
-            cfg.activation_width = 768
-        else:
-            cfg.activation_width = 512
+    cfg.activation_width = get_activation_size(cfg.model_name, cfg.layer_loc)
 
     if len(os.listdir(cfg.dataset_folder)) == 0:
         print(f"Activations in {cfg.dataset_folder} do not exist, creating them")

@@ -117,6 +117,78 @@ class FunctionalTiedSAE:
 
         return l_reconstruction + l_l1 + l_bias_decay, (loss_data, aux_data)
 
+class FunctionalThresholdingSAE:
+    @staticmethod
+    def init(activation_size, n_dict_components, l1_alpha, device=None, dtype=None):
+        params = {}
+        buffers = {}
+
+        params["encoder"] = torch.empty((n_dict_components, activation_size), device=device, dtype=dtype)
+        nn.init.xavier_uniform_(params["encoder"])
+
+        params["activation_scale"] = torch.empty((n_dict_components,), device=device, dtype=dtype)
+        params["activation_gain"] = torch.empty((n_dict_components,), device=device, dtype=dtype)
+        nn.init.ones_(params["activation_scale"])
+        nn.init.zeros_(params["activation_gain"])
+
+        buffers["l1_alpha"] = torch.tensor(l1_alpha, device=device, dtype=dtype)
+
+        return params, buffers
+    
+    @staticmethod
+    def encode(params, batch, learned_dict):
+        c = torch.einsum("nd,bd->bn", learned_dict, batch)
+
+        a_sq = params["activation_scale"].pow(2)
+        c = (c + params["activation_gain"]) / torch.clamp(a_sq, 1e-8)
+        c = F.relu6(60 * (c - 0.9)) / 6 + F.relu(c-1)
+        c = c * a_sq
+
+        return c
+    
+    @staticmethod
+    def loss(params, buffers, batch):
+        dict_norms = torch.norm(params["encoder"], 2, dim=-1)
+        learned_dict = params["encoder"] / torch.clamp(dict_norms, 1e-8)[:, None]
+
+        c = FunctionalThresholdingSAE.encode(params, batch, learned_dict)
+
+        x_hat = torch.einsum("nd,bn->bd", learned_dict, c)
+
+        l_reconstruction = (x_hat - batch).pow(2).mean()
+        l_l1 = buffers["l1_alpha"] * torch.norm(c, 1, dim=-1).mean()
+
+        loss_data = {
+            "loss": l_reconstruction + l_l1,
+            "l_reconstruction": l_reconstruction,
+            "l_l1": l_l1,
+        }
+
+        aux_data = {
+            "c": c,
+        }
+
+        return l_reconstruction + l_l1, (loss_data, aux_data)
+    
+    @staticmethod
+    def to_learned_dict(params, buffers):
+        return ThresholdingSAE(params)
+
+class ThresholdingSAE(LearnedDict):
+    def __init__(self, params):
+        self.params = params
+    
+    def get_learned_dict(self):
+        dict_norms = torch.norm(self.params["encoder"], 2, dim=-1)
+        return self.params["encoder"] / torch.clamp(dict_norms, 1e-8)[:, None]
+
+    def encode(self, batch):
+        c = FunctionalThresholdingSAE.encode(self.params, batch, self.get_learned_dict())
+        return c
+    
+    def to_device(self, device):
+        self.params = {k: v.to(device) for k, v in self.params.items()}
+
 # allows stacking between different dict sizes
 class FunctionalMaskedTiedSAE:
     @staticmethod

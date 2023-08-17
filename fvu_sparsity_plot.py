@@ -283,53 +283,64 @@ if __name__ == "__main__":
     shutil.rmtree("graphs", ignore_errors=True)
     os.makedirs("graphs", exist_ok=True)
 
-    colors = ["Purples", "Blues", "Greens", "Oranges", "Reds"]
-    #styles = ["x", "+", ".", "*"]
-    styles = ["solid", "dashed", "dashdot", "dotted"]
+    colors = ["Purples", "Blues", "Greens", "Oranges"]
+    styles = ["x", "+", ".", "*"]
+    #styles = ["solid", "dashed", "dashdot", "dotted"]
+
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     #labels = ["Linear " + str(256*i) for i in range(16)]
 
     #ratio_names = [0, 1, 2, 4, 8, 16, 32]
     #path_fmt = "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l3_r{ratio}/_{chunk}/learned_dicts.pt"
 
-    for layer in range(1):
-        #files = [
-        #    ("Linear", f"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l{layer}_r0/_9/learned_dicts.pt"),
-        #    ("Linear", f"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l{layer}_r1/_9/learned_dicts.pt"),
-        #    ("Linear", f"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l{layer}_r2/_9/learned_dicts.pt"),
-        #    ("Linear", f"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l{layer}_r4/_9/learned_dicts.pt"),
-        #    ("Linear", f"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l{layer}_r8/_9/learned_dicts.pt"),
-        #    ("Linear", f"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l{layer}_r16/_9/learned_dicts.pt"),
-        #    ("Linear", f"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l{layer}_r32/_9/learned_dicts.pt"),
-        #]
+    for _ in range(1):
+        layer = 2
+        files = [
+            #("Linear L2", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r0/_9/learned_dicts.pt"),
+            #("Linear L2", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r1/_9/learned_dicts.pt"),
+            ("Linear L2", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r2/_9/learned_dicts.pt"),
+            ("Linear L2", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r4/_9/learned_dicts.pt"),
+            ("Linear L2", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r8/_9/learned_dicts.pt"),
+            ("Linear L2", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r16/_9/learned_dicts.pt"),
+            #("Linear L2", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r32/_9/learned_dicts.pt"),
+            #("Better", f"output_thresholding/_7/learned_dicts.pt"),
+        ]
+
+        layer = 3
+        files += [
+            #("Linear L3", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r0/_9/learned_dicts.pt"),
+            #("Linear L3", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r1/_9/learned_dicts.pt"),
+            ("Linear L3", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r2/_9/learned_dicts.pt"),
+            ("Linear L3", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r4/_9/learned_dicts.pt"),
+            ("Linear L3", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r8/_9/learned_dicts.pt"),
+            ("Linear L3", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r16/_9/learned_dicts.pt"),
+            #("Linear L3", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r32/_9/learned_dicts.pt"),
+        ]
 
         title = "Area Under FVU-Sparsity Curve"
-        filename = "sparsity_fvu_area_layer_4"
+        filename = "sparsity_fvu_layer_2_to_3_comparison"
 
-        #dataset_file = "activation_data/0.pt"
-        generator_file = "output_dict_ratio/generator.pt"
+        dataset_file = "activation_data/0.pt"
 
-        #area_scores = {}
-        #deriv_scores = {}
+        scores = generate_scores(files, dataset_file, group_by="dict_size", device=device)
 
-        scores = {}
-
-        for chunk in range(0, 10):
-            file = "output_dict_ratio/_" + str(chunk) + "/learned_dicts.pt"
+        #for chunk in range(0, 10):
+        #    file = "output_dict_ratio/_" + str(chunk) + "/learned_dicts.pt"
             #areas = area_under_fvu_sparsity_curve([("Chunk " + str(chunk), file)], dataset_file=dataset_file)
             #derivs = scores_derivative_(areas)
-            scores = score_representedness([("Chunk " + str(chunk), file)], generator_file, device="cuda:7")
-            scores["Chunk " + str(chunk)] = [(hyperparams["dict_size"], score, -np.log(hyperparams["l1_alpha"])) for hyperparams, score in scores.items()]
+        #    scores = score_representedness([("Chunk " + str(chunk), file)], generator_file, device="cuda:7")
+        #    scores["Chunk " + str(chunk)] = [(hyperparams["dict_size"], score, -np.log(hyperparams["l1_alpha"])) for hyperparams, score in scores.items()]
 
             #area_scores[f"Chunk {chunk}"] = [(dict_size, area, chunk / 28) for dict_size, area in areas]
             #deriv_scores[f"Chunk {chunk}"] = [(dict_size, deriv, chunk / 28) for dict_size, deriv in derivs]
 
         settings = {
-            label: {"style": "dashdot", "color": "viridis", "points": False} for (style, color), label in zip(itertools.product(styles, colors), scores.keys())
+            label: {"style": style, "color": color, "points": True} for (style, color), label in zip(itertools.product(styles, colors), scores.keys())
         }
 
-        xlim, ylim = get_limits(scores)
-        plot_scores(scores, settings, "dict_size", "mean no. features learned", xlim, ylim, "Representedness", f"graphs/representedness.png")
+        #xlim, ylim = get_limits(scores)
+        plot_scores(scores, settings, "sparsity", "fvu", (0, 512), (0, 1), "Threshold Activation Perf.", f"graphs/{filename}.png")
 
         #settings = {f"Layer {layer}": {"style": "solid", "color": "Blues", "points": False}}
 
