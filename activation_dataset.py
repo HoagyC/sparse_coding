@@ -248,7 +248,7 @@ def setup_data(
         layer_loc: str = "residual",
         start_line: int = 0, 
         n_chunks: int = 1,
-        device: torch.device = torch.device("cuda:0"),
+        device: torch.device = torch.device("cuda:0")
     ):
     sentence_len_lower = 1000
     activation_width = get_activation_size(model.cfg.model_name, layer_loc)

@@ -254,12 +254,12 @@ def synthetic_linear_range(cfg):
     return (ensembles, ["dict_size"], ["l1_alpha"], {"dict_size": dict_sizes, "l1_alpha": l1_vals})
 
 def dense_l1_range_experiment(cfg):
-    l1_values = np.logspace(-4, -2, 16)
+    l1_values = np.logspace(-4, -2, 8)
     devices = [f"cuda:{i}" for i in range(8)]
 
     ensembles = []
     for i in range(8):
-        cfgs = l1_values[i*2:(i+1)*2]
+        cfgs = l1_values[i:i+1]
         dict_size = int(cfg.activation_width * cfg.learned_dict_ratio)
         if cfg.tied_ae:
             models = [
@@ -634,6 +634,38 @@ def run_across_layers_mlp_untied():
         # delete the dataset
         shutil.rmtree(cfg.dataset_folder)
 
+
+def run_across_layers_mlp_long():
+    cfg = parse_args()
+    cfg.model_name = "EleutherAI/pythia-70m-deduped"
+    cfg.dataset_name = "EleutherAI/pile"
+
+    cfg.batch_size = 2048
+    cfg.use_wandb = False
+    cfg.wandb_images = False
+    cfg.save_every = 10
+    cfg.tied_ae = True
+    for layer in [3,4,5]:
+        layer_loc = "residual"
+        for dict_ratio in [1, 2, 4]:
+            cfg.layer = layer
+            cfg.layer_loc = layer_loc
+            cfg.learned_dict_ratio = dict_ratio
+
+            cfg.output_folder = f"tiedlong_{'tied' if cfg.tied_ae else ''}_{cfg.layer_loc}_l{cfg.layer}_r{int(cfg.learned_dict_ratio)}"
+            cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{cfg.layer_loc}"
+            cfg.use_synthetic_dataset = False
+            cfg.dtype = torch.float32
+            cfg.lr = 1e-3
+            cfg.n_chunks=30
+            cfg.n_repetitions = 3
+
+            sweep(dense_l1_range_experiment, cfg)
+
+        # delete the dataset
+        shutil.rmtree(cfg.dataset_folder)
+
+
 def run_zero_l1_baseline():
     cfg = parse_args()
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
@@ -717,4 +749,4 @@ def synthetic_test():
         sweep(synthetic_linear_range, cfg)
 
 if __name__ == "__main__":
-    run_dict_ratio()
+    run_across_layers_mlp_untied()

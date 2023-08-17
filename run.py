@@ -574,10 +574,11 @@ def run_with_real_data(cfg, auto_encoder: AutoEncoder, completed_batches: int = 
     breakout = False
     auto_encoder = auto_encoder.to(cfg.device)
     for epoch in range(cfg.epochs):
+        
         chunk_order = np.random.permutation(n_chunks_in_folder)
         for chunk_ndx, chunk_id in enumerate(chunk_order):
-            chunk_loc = os.path.join(cfg.dataset_folder, f"{chunk_id}.pkl")
-            dataset = DataLoader(pickle.load(open(chunk_loc, "rb")), batch_size=cfg.batch_size, shuffle=True)
+            chunk_loc = os.path.join(cfg.dataset_folder, f"{chunk_id}.pt")
+            dataset = DataLoader(torch.load(chunk_loc), batch_size=cfg.batch_size, shuffle=True)
             for batch_idx, batch in enumerate(dataset):
                 n_batches += 1
                 batch = batch[0].to(cfg.device).to(torch.float32)
@@ -766,12 +767,9 @@ def run_real_data_model(cfg: dotdict):
         )
     else:
         print(f"Activations in {cfg.dataset_folder} already exist, loading them")
-        # get activation_dim from first file
-        with open(os.path.join(cfg.dataset_folder, "0.pkl"), "rb") as f:
-            dataset = pickle.load(f)
-        cfg.activation_dim = dataset.tensors[0][0].shape[-1]
         n_lines = cfg.max_lines
-        del dataset
+
+    cfg.activation_dim = model.cfg.d_mlp
 
     l1_range = [cfg.l1_exp_base**exp for exp in range(cfg.l1_exp_low, cfg.l1_exp_high)]
     dict_ratios = [cfg.dict_ratio_exp_base**exp for exp in range(cfg.dict_ratio_exp_low, cfg.dict_ratio_exp_high)]

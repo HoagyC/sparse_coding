@@ -446,18 +446,20 @@ def read_scores(results_folder: str, score_mode: str = "top") -> Dict[str, Tuple
         
     return scores
 
-def parse_folder_name(folder_name: str) -> Tuple[str, str, int, float]:
+def parse_folder_name(folder_name: str) -> Tuple[str, str, int, float, str]:
     """
     Parse the folder name to get the hparams
     """
     # examples: tied_mlpout_l1_r2, tied_residual_l5_r8
-    tied, layer_loc, layer_str, ratio_str = folder_name.split("_")
+    tied, layer_loc, layer_str, ratio_str, *extras = folder_name.split("_")
+    if extras:
+        extra_str = "_".join(extras)
     layer = int(layer_str[1:])
     ratio = float(ratio_str[1:])
     if ratio == 0:
         ratio = 0.5
 
-    return tied, layer_loc, layer, ratio
+    return tied, layer_loc, layer, ratio, extra_str
 
 def run_list_of_learned_dicts(dicts: List[Tuple[str, LearnedDict]], cfg):
     """
@@ -514,20 +516,24 @@ def interpret_across_big_sweep(l1_val: float, n_gpus: int = 1):
 
     for folder in all_folders:
         try:
-            tied, layer_loc, layer, ratio = parse_folder_name(folder)
+            tied, layer_loc, layer, ratio, extra_str = parse_folder_name(folder)
         except:
             continue
         print(f"{tied}, {layer_loc=}, {layer=}, {ratio=}")
-        if layer_loc != "mlp":
-            continue
-        if ratio > 2:
-            continue
+        # if layer_loc != "residual":
+        #     continue
+        # if ratio > 2:
+        #     continue
+        # if layer != 4:
+        #     continue
+        # if extra_str != "long":
+        #     continue
 
         cfg = copy.deepcopy(base_cfg)
-        autoencoders = torch.load(os.path.join(base_dir, folder, "_9", "learned_dicts.pt"), map_location=cfg.device)
+        autoencoders = torch.load(os.path.join(base_dir, folder, "_80", "learned_dicts.pt"), map_location=cfg.device)
         # find ae with matching l1_val
-        matching_encoders = [ae for ae in autoencoders if abs(ae[1]["l1_alpha"] - l1_val) < 1e-5]
-        assert len(matching_encoders) == 1
+        matching_encoders = [ae for ae in autoencoders if abs(ae[1]["l1_alpha"] - l1_val) < 1e-4]
+        if not len(matching_encoders) == 1:            print(f"Found {len(matching_encoders)} matching encoders for {folder}")
         matching_encoder = matching_encoders[0][0]
     
         # save the learned dict
@@ -641,8 +647,9 @@ if __name__ == "__main__":
     elif len(sys.argv) > 1 and sys.argv[1] == "big_sweep":
         sys.argv.pop(1)
         # l1_val = 0.00018478
-        # l1_val = 0.0008577
-        l1_val = 0.00083768
+        # l1_val = 0.0008577 # 8e-4 in logspace(-4, -2, 16)
+        # l1_val = 0.00083768 # 8e-4 in logspace(-4, -2, 14)
+        l1_val = 0.0007197 # 8e-4 in logspace(-4, -2, 8)
         interpret_across_big_sweep(l1_val)
     
     elif len(sys.argv) > 1 and sys.argv[1] == "all_baselines":
