@@ -5,6 +5,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
+base_path = "/mnt/ssd-cluster/auto_interp_results"
+plots_folder = "/mnt/ssd-cluster/plots"
+
 def get_score(lines: List[str], mode: str):
     if mode == "top":
         return float(lines[-3].split(" ")[-1])
@@ -102,14 +105,12 @@ def read_results(activation_name: str, score_mode: str, plots_folder: str) -> No
     print(f"Saving means and violin graph to {save_path}")
     plt.savefig(save_path)
 
+    
 if __name__ == "__main__":
     score_modes = ["top", "random", "top_random"]
-    base_path = "/mnt/ssd-cluster/auto_interp_results"
-    plots_folder = "/mnt/ssd-cluster/plots" 
 
     activation_names = [x for x in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, x))]
         
     for activation_name in activation_names:
         for score_mode in score_modes:
             read_results(activation_name, score_mode, plots_folder)
-            
