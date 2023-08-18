@@ -690,38 +690,6 @@ def run_across_layers_mlp_untied():
         # delete the dataset
         shutil.rmtree(cfg.dataset_folder)
 
-
-def run_across_layers_mlp_long():
-    cfg = parse_args()
-    cfg.model_name = "EleutherAI/pythia-70m-deduped"
-    cfg.dataset_name = "EleutherAI/pile"
-
-    cfg.batch_size = 2048
-    cfg.use_wandb = False
-    cfg.wandb_images = False
-    cfg.save_every = 10
-    cfg.tied_ae = True
-    for layer in [3,4,5]:
-        layer_loc = "residual"
-        for dict_ratio in [1, 2, 4]:
-            cfg.layer = layer
-            cfg.layer_loc = layer_loc
-            cfg.learned_dict_ratio = dict_ratio
-
-            cfg.output_folder = f"tiedlong_{'tied' if cfg.tied_ae else ''}_{cfg.layer_loc}_l{cfg.layer}_r{int(cfg.learned_dict_ratio)}"
-            cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{cfg.layer_loc}"
-            cfg.use_synthetic_dataset = False
-            cfg.dtype = torch.float32
-            cfg.lr = 1e-3
-            cfg.n_chunks=30
-            cfg.n_repetitions = 3
-
-            sweep(dense_l1_range_experiment, cfg)
-
-        # delete the dataset
-        shutil.rmtree(cfg.dataset_folder)
-
-
 def run_zero_l1_baseline():
     cfg = parse_args()
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
@@ -855,8 +823,82 @@ def run_pythia_1_4_b_sweep():
 
     cfg.dataset_folder = "activation_data_1_4_b"
     cfg.output_folder = "output_1_4_b"
-
     sweep(pythia_1_4_b_dict, cfg)
 
+def long_mlp_sweep(cfg):
+    l1_values = np.logspace(-3.5, -2.5, 5)
+    l1_values = np.concatenate([[0], [1e-4], l1_values])
+    device = cfg.device
+
+    ensembles = []
+
+    dict_size = int(cfg.activation_width * cfg.learned_dict_ratio)
+    if cfg.tied_ae:
+        models = [
+            FunctionalTiedSAE.init(cfg.activation_width, dict_size, l1_alpha, bias_decay=0.0, dtype=cfg.dtype)
+            for l1_alpha in l1_values
+        ]
+    else:
+        models = [
+            FunctionalSAE.init(cfg.activation_width, dict_size, l1_alpha, bias_decay=0.0, dtype=cfg.dtype)
+            for l1_alpha in l1_values
+        ]
+    
+    if cfg.tied_ae:
+        ensemble = FunctionalEnsemble(
+            models, FunctionalTiedSAE,
+            torchopt.adam, {
+                "lr": cfg.lr
+            },
+            device=device
+        )
+    else:
+        ensemble = FunctionalEnsemble(
+            models, FunctionalSAE,
+            torchopt.adam, {
+                "lr": cfg.lr
+            },
+            device=device
+        )
+    args = {"batch_size": cfg.batch_size, "device": device, "dict_size": dict_size}
+    name = f"l1_range_8_{cfg.device}"
+    ensembles.append((ensemble, args, name))
+
+    print(len(ensembles), "ensembles")
+    return (ensembles, ["dict_size"], ["l1_alpha"], {"dict_size": [dict_size], "l1_alpha": l1_values})
+
+def run_across_layers_mlp_long():
+    cfg = parse_args()
+    # set device and layer in config through command line
+    cfg.model_name = "EleutherAI/pythia-70m-deduped"
+    cfg.dataset_name = "EleutherAI/pile"
+
+    cfg.batch_size = 2048
+    cfg.use_wandb = False
+    cfg.wandb_images = False
+    cfg.save_every = 10
+    cfg.tied_ae = True
+    cfg.use_synthetic_dataset = False
+    cfg.dtype = torch.float32
+    cfg.lr = 1e-3
+    cfg.n_chunks = 20
+    cfg.n_repetitions = 3
+    cfg.activation_width=2048
+
+    cfg.layer_loc = "mlp"
+
+    for tied in [True, False]:
+        cfg.tied_ae = tied
+        for dict_ratio in [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16]:
+            cfg.learned_dict_ratio = dict_ratio
+
+            cfg.output_folder = f"{'tied' if cfg.tied_ae else ''}_{cfg.layer_loc}_l{cfg.layer}_r{cfg.learned_dict_ratio}_long"
+            cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{cfg.layer_loc}"
+            sweep(long_mlp_sweep, cfg)
+
+    # delete the dataset
+    shutil.rmtree(cfg.dataset_folder)
+
+
 if __name__ == "__main__":
-    run_pythia_1_4_b_sweep()
+    run_across_layers_mlp_long()

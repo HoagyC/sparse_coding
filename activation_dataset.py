@@ -337,7 +337,7 @@ def make_activation_dataset_hf(
                 print(f"Saved undersized chunk {chunk_idx} of activations, total size: {batch_idx * activation_size}")
                 break
             else:
-                print(f"Saved chunk {chunk_idx} of activations, total size: {batch_idx * activation_size}")
+                print(f"Saved chunk {chunk_idx} of activations, total size: {(chunk_idx + 1) * batch_idx * activation_size}")
 
 def save_activation_chunk(dataset, n_saved_chunks, dataset_folder):
     dataset_t = torch.cat(dataset, dim=0).to("cpu")
