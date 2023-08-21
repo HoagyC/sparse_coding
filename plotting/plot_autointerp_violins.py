@@ -88,7 +88,7 @@ def read_results(activation_name: str, score_mode: str, plots_folder: str) -> No
     plt.xticks(np.arange(1, len(transforms) + 1), transforms, rotation=90)
 
     # add standard errors around the means but don't plot the means
-    cis = [1.96 * np.std(scores[transform][1]) / np.sqrt(len(scores[transform][1])) for transform in transforms]
+    cis = [1.96 * np.std(scores[transform][1], ddof=1) / np.sqrt(len(scores[transform][1])) for transform in transforms]
     for i, transform in enumerate(transforms):
         plt.errorbar(i+1, np.mean(scores[transform][1]), yerr=cis[i], fmt="o", color=colors[i % len(colors)], elinewidth=2, capsize=20)
 

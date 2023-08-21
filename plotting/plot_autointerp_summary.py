@@ -40,7 +40,7 @@ def read_all_layers(score_mode: str, layer_loc: str) -> None:
     scores_list = [[scores for scores in scores_list if len(scores) > 0] for scores_list in scores_list]
     # now we need to get the means and confidence intervals for each transform
     means = [[np.mean(scores) for scores in scores_list] for scores_list in scores_list]
-    cis = [[1.96 * np.std(scores) / np.sqrt(len(scores)) for scores in scores_list] for scores_list in scores_list]
+    cis = [[1.96 * np.std(scores, ddof=1) / np.sqrt(len(scores)) for scores in scores_list] for scores_list in scores_list]
     # now we can plot the bar chart
     plt.clf() # clear the plot
     # fix yrange from -0.2 to 0.6
@@ -54,6 +54,8 @@ def read_all_layers(score_mode: str, layer_loc: str) -> None:
     colors = ["red", "blue", "green", "orange", "purple", "pink", "black", "brown", "cyan", "magenta", "grey", "yellow", "lime"]
     for i in layers:
         for j, transform in enumerate(transforms):
+            if "tied" in transform and not "032" in transform:
+                continue
             # note, n transforms is 13
             plt.errorbar(i + 1 + (j * 0.05), means[i][j], yerr=cis[i][j], fmt="o", color=colors[j % len(colors)], elinewidth=1, capsize=0)
         
@@ -71,7 +73,10 @@ def read_all_layers(score_mode: str, layer_loc: str) -> None:
     plt.savefig(save_path)
 
 if __name__ == "__main__":
-    read_all_layers("top", "residual")
-    read_all_layers("random", "residual")
-    read_all_layers("top_random", "residual")
+    # read_all_layers("top", "residual")
+    # read_all_layers("random", "residual")
+    # read_all_layers("top_random", "residual")
+    read_all_layers("top", "mlp")
+    read_all_layers("random", "mlp")
+    read_all_layers("top_random", "mlp")
             
