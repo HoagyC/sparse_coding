@@ -45,4 +45,7 @@ class ICAEncoder(LearnedDict):
         return torch.tensor(self.ica.components_, dtype=torch.float32)
     
     def to_topk_dict(self, sparsity):
-        return TopKLearnedDict(self.get_learned_dict(), sparsity)
+        positives = self.ica.components_.copy()
+        negatives = -positives
+        components = np.concatenate([positives, negatives], axis=0)
+        return TopKLearnedDict(components, sparsity)

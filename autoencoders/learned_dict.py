@@ -70,7 +70,7 @@ class IdentityReLU(LearnedDict):
         return torch.clamp(batch + self.bias, min=0.0)
     
     def to_device(self, device):
-        pass
+        self.bias = self.bias.to(device)
 
 class RandomDict(LearnedDict):
     def __init__(self, activation_size, n_feats = None):

@@ -13,20 +13,18 @@ import sys
 from typing import Any, Dict, Union, List, Callable, Optional, Tuple
 
 from baukit import Trace
-from datasets import load_dataset, ReadInstruction
-from einops import rearrange
+from datasets import load_dataset
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from sklearn.decomposition import FastICA, PCA, NMF
 import torch
 import torch.nn as nn
 from transformer_lens import HookedTransformer
 
 from autoencoders.learned_dict import LearnedDict
 from argparser import parse_args
-from utils import dotdict, make_tensor_name, upload_to_aws, check_use_baukit
-from nanoGPT_model import GPT
+from activation_dataset import make_tensor_name, check_use_baukit
+from utils import dotdict
 
 
 # set OPENAI_API_KEY environment variable from secrets.json['openai_key']
@@ -107,7 +105,7 @@ def make_feature_activation_dataset(
     sentence_dataset = load_dataset("openwebtext", split="train", streaming=True)
 
     if model.cfg.model_name == "nanoGPT":
-        tokenizer_model = HookedTransformer.from_pretrained("gpt2")
+        tokenizer_model = HookedTransformer.from_pretrained("gpt2", device=device)
     else:
         tokenizer_model = model
 
@@ -136,7 +134,7 @@ def make_feature_activation_dataset(
                 print(f"Added {n_added} fragments, thrown {n_thrown} fragments\t\t\t\t\t\t", end="\r")
                 sentence = next(iter_dataset)
                 # split the sentence into fragments
-                sentence_tokens = tokenizer_model.to_tokens(sentence["text"], prepend_bos=False)
+                sentence_tokens = tokenizer_model.to_tokens(sentence["text"], prepend_bos=False).to(device)
                 n_tokens = sentence_tokens.shape[1]
                 # get a random fragment from the sentence - only taking one fragment per sentence so examples aren't correlated]
                 if random_fragment:
@@ -155,6 +153,7 @@ def make_feature_activation_dataset(
             tokens = torch.cat(fragments, dim=0)
             assert tokens.shape == (batch_size, OPENAI_FRAGMENT_LEN), tokens.shape
 
+            # breakpoint()
             if use_baukit:
                 with Trace(model, tensor_name) as ret:
                     _ = model(tokens)
@@ -230,7 +229,7 @@ def get_df(
             print("Dataset does not have enough features, remaking")
 
     if reload_data:
-        model = HookedTransformer.from_pretrained(model_name)
+        model = HookedTransformer.from_pretrained(model_name, device=device)
 
         base_df = make_feature_activation_dataset(
             model,
@@ -291,6 +290,8 @@ async def interpret(base_df: pd.DataFrame, save_folder: str, n_feats_to_explain:
                 continue
             random_activation_records.append(ActivationRecord(df.iloc[i]["fragment_token_strs"], [df.iloc[i][f"feature_{feat_n}_activation_{j}"] for j in range(OPENAI_FRAGMENT_LEN)]))
         if skip_feature:
+            # Add placeholder folder so that we don't try to recompute this feature
+            os.makedirs(os.path.join(save_folder, f"feature_{feat_n}"), exist_ok=True)
             print(f"Skipping feature {feat_n} due to lack of activating examples")
             continue
 
@@ -432,6 +433,8 @@ def read_scores(results_folder: str, score_mode: str = "top") -> Dict[str, Tuple
             folder = os.path.join(results_folder, transform, feature_folder)
             if not os.path.exists(folder):
                 continue
+            if not os.path.exists(os.path.join(folder, "explanation.txt")):
+                continue
             explanation_text = open(os.path.join(folder, "explanation.txt")).read()
             # score should be on the second line but if explanation had newlines could be on the third or below
             # score = float(explanation_text.split("\n")[1].split(" ")[1])
@@ -470,6 +473,16 @@ def run_list_of_learned_dicts(dicts: List[Tuple[str, LearnedDict]], cfg):
         run(dict, cfg)
 
 
+def worker(queue, device_id):
+    device = f"cuda:{device_id}"
+    while not queue.empty():
+        learned_dict, cfg = queue.get()
+        print(f"Running {cfg.save_loc}")
+        cfg.device = device
+        learned_dict.to_device(device)
+        run(learned_dict, cfg)
+
+
 def interpret_across_baselines(n_gpus: int = 3):
     baselines_dir = "/mnt/ssd-cluster/baselines"
     save_dir = "/mnt/ssd-cluster/auto_interp_results/"
@@ -477,7 +490,7 @@ def interpret_across_baselines(n_gpus: int = 3):
     base_cfg = parse_args()
 
     if n_gpus > 1:
-        job_queue: List[Tuple[LearnedDict, dotdict]] = []
+        job_queue: mp.Queue = mp.Queue()
 
     all_folders = os.listdir(baselines_dir)
     for folder in all_folders:
@@ -485,23 +498,28 @@ def interpret_across_baselines(n_gpus: int = 3):
         layer = int(layer_str[1:])
         layer_baselines = os.listdir(os.path.join(baselines_dir, folder))
         for baseline_file in layer_baselines:
-            print(f"{baseline_file=}")
             cfg = copy.deepcopy(base_cfg)
             cfg.layer = layer
             cfg.layer_loc = layer_loc
             cfg.save_loc = os.path.join(save_dir, folder, baseline_file[:-3])
             cfg.n_feats_explain = 50
-            if "nmf" in baseline_file:
+            if not("identity" in baseline_file or "random" in baseline_file):
+                continue
+            if not cfg.layer_loc == "mlp":
                 continue
             learned_dict = torch.load(os.path.join(baselines_dir, folder, baseline_file), map_location=cfg.device)
             print(f"{layer=}, {layer_loc=}, {baseline_file=}")
             if n_gpus == 1:
                 run(learned_dict, cfg)
             else:
-                job_queue.append((learned_dict, cfg))
+                job_queue.put((learned_dict, cfg))
     
-    with mp.Pool(n_gpus) as p:
-        p.starmap(run, job_queue) 
+    if n_gpus > 1:
+        processes = [mp.Process(target=worker, args=(job_queue, i)) for i in range(n_gpus)]
+        for p in processes:
+            p.start()
+        for p in processes:
+            p.join()
 
 
 def interpret_across_big_sweep(l1_val: float, n_gpus: int = 1):
@@ -520,17 +538,19 @@ def interpret_across_big_sweep(l1_val: float, n_gpus: int = 1):
         except:
             continue
         print(f"{tied}, {layer_loc=}, {layer=}, {ratio=}")
-        # if layer_loc != "residual":
-        #     continue
-        # if ratio > 2:
-        #     continue
+        if layer_loc != "mlp":
+            continue
+        if ratio > 2:
+            continue
         # if layer != 4:
         #     continue
-        # if extra_str != "long":
-        #     continue
+        if extra_str != "long":
+            continue
+        if tied != "untied":
+            continue
 
         cfg = copy.deepcopy(base_cfg)
-        autoencoders = torch.load(os.path.join(base_dir, folder, "_80", "learned_dicts.pt"), map_location=cfg.device)
+        autoencoders = torch.load(os.path.join(base_dir, folder, "_59", "learned_dicts.pt"), map_location=cfg.device)
         # find ae with matching l1_val
         matching_encoders = [ae for ae in autoencoders if abs(ae[1]["l1_alpha"] - l1_val) < 1e-4]
         if not len(matching_encoders) == 1:            print(f"Found {len(matching_encoders)} matching encoders for {folder}")
@@ -546,7 +566,7 @@ def interpret_across_big_sweep(l1_val: float, n_gpus: int = 1):
         cfg.layer = layer
         cfg.layer_loc = layer_loc
         cfg.save_loc = os.path.join(save_dir, save_str)
-        cfg.n_feats_explain = 50
+        cfg.n_feats_explain = 100
         if n_gpus == 1:
             run(matching_encoder, cfg)
         else:
@@ -592,7 +612,7 @@ def read_results(activation_name: str, score_mode: str) -> None:
     plt.xticks(np.arange(1, len(transforms) + 1), transforms, rotation=90)
 
     # add standard errors around the means but don't plot the means
-    cis = [1.96 * np.std(scores[transform][1]) / np.sqrt(len(scores[transform][1])) for transform in transforms]
+    cis = [1.96 * np.std(scores[transform][1], ddof=1) / np.sqrt(len(scores[transform][1])) for transform in transforms]
     for i, transform in enumerate(transforms):
         plt.errorbar(i+1, np.mean(scores[transform][1]), yerr=cis[i], fmt="o", color=colors[i % len(colors)], elinewidth=2, capsize=20)
 
@@ -649,7 +669,9 @@ if __name__ == "__main__":
         # l1_val = 0.00018478
         # l1_val = 0.0008577 # 8e-4 in logspace(-4, -2, 16)
         # l1_val = 0.00083768 # 8e-4 in logspace(-4, -2, 14)
-        l1_val = 0.0007197 # 8e-4 in logspace(-4, -2, 8)
+        # l1_val = 0.0007197 # 8e-4 in logspace(-4, -2, 8)
+        # l1_val = 1e-3
+        l1_val = 0.000316 # early one for mlp??
         interpret_across_big_sweep(l1_val)
     
     elif len(sys.argv) > 1 and sys.argv[1] == "all_baselines":

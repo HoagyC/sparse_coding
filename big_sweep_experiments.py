@@ -26,6 +26,7 @@ from big_sweep import sweep
 
 import shutil
 import os
+from datetime import datetime
 
 # an example function that builds a list of ensembles to run
 # you could this as a template for other experiments
@@ -825,6 +826,48 @@ def run_pythia_1_4_b_sweep():
     cfg.output_folder = "output_1_4_b"
     sweep(pythia_1_4_b_dict, cfg)
 
+def run_zeros_only(cfg):
+    l1_values = np.array([0])
+    dict_size = int(cfg.activation_width * cfg.learned_dict_ratio)
+    device = cfg.device
+
+    dict_size = int(cfg.activation_width * cfg.learned_dict_ratio)
+    ensembles = []
+    if cfg.tied_ae:
+        models = [
+            FunctionalTiedSAE.init(cfg.activation_width, dict_size, l1_alpha, bias_decay=0.0, dtype=cfg.dtype)
+            for l1_alpha in l1_values
+        ]
+    else:
+        models = [
+            FunctionalSAE.init(cfg.activation_width, dict_size, l1_alpha, bias_decay=0.0, dtype=cfg.dtype)
+            for l1_alpha in l1_values
+        ]
+    
+    if cfg.tied_ae:
+        ensemble = FunctionalEnsemble(
+            models, FunctionalTiedSAE,
+            torchopt.adam, {
+                "lr": cfg.lr
+            },
+            device=device
+        )
+    else:
+        ensemble = FunctionalEnsemble(
+            models, FunctionalSAE,
+            torchopt.adam, {
+                "lr": cfg.lr
+            },
+            device=device
+        )
+    args = {"batch_size": cfg.batch_size, "device": device, "dict_size": dict_size}
+    name = f"l1_range_8_{cfg.device}"
+    ensembles.append((ensemble, args, name))
+
+    print(len(ensembles), "ensembles")
+    return (ensembles, ["dict_size"], ["l1_alpha"], {"dict_size": [dict_size], "l1_alpha": l1_values})
+
+
 def long_mlp_sweep(cfg):
     l1_values = np.logspace(-3.5, -2.5, 5)
     l1_values = np.concatenate([[0], [1e-4], l1_values])
@@ -889,10 +932,10 @@ def run_across_layers_mlp_long():
 
     for tied in [True, False]:
         cfg.tied_ae = tied
-        for dict_ratio in [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16]:
+        for dict_ratio in [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0]:
             cfg.learned_dict_ratio = dict_ratio
 
-            cfg.output_folder = f"{'tied' if cfg.tied_ae else ''}_{cfg.layer_loc}_l{cfg.layer}_r{cfg.learned_dict_ratio}_long"
+            cfg.output_folder = f"{'tied' if cfg.tied_ae else 'untied'}_{cfg.layer_loc}_l{cfg.layer}_r{cfg.learned_dict_ratio}_long"
             cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{cfg.layer_loc}"
             sweep(long_mlp_sweep, cfg)
 
@@ -900,5 +943,114 @@ def run_across_layers_mlp_long():
     shutil.rmtree(cfg.dataset_folder)
 
 
+
+def simple_setoff(cfg):
+    l1_values = np.logspace(-5, -3.5, 8)
+    l1_values = np.concatenate([[0], l1_values])
+    ensembles = []
+
+    dict_size = int(cfg.activation_width * cfg.learned_dict_ratio)
+    device = cfg.device
+    if cfg.tied_ae:
+        models = [
+            FunctionalTiedSAE.init(cfg.activation_width, dict_size, l1_alpha, bias_decay=0.0, dtype=cfg.dtype)
+            for l1_alpha in l1_values
+        ]
+    else:
+        models = [
+            FunctionalSAE.init(cfg.activation_width, dict_size, l1_alpha, bias_decay=0.0, dtype=cfg.dtype)
+            for l1_alpha in l1_values
+        ]
+    
+    if cfg.tied_ae:
+        ensemble = FunctionalEnsemble(
+            models, FunctionalTiedSAE,
+            torchopt.adam, {
+                "lr": cfg.lr
+            },
+            device=device
+        )
+    else:
+        ensemble = FunctionalEnsemble(
+            models, FunctionalSAE,
+            torchopt.adam, {
+                "lr": cfg.lr
+            },
+            device=device
+        )
+    args = {"batch_size": cfg.batch_size, "device": device, "dict_size": dict_size}
+    name = f"zeros_{cfg.device}"
+    ensembles.append((ensemble, args, name))
+
+    print(len(ensembles), "ensembles")
+    return (ensembles, ["dict_size"], ["l1_alpha"], {"dict_size": [dict_size], "l1_alpha": l1_values})
+
+def run_all_zeros(device, layer):
+    cfg = parse_args()
+    cfg.model_name = "EleutherAI/pythia-70m-deduped"
+    cfg.dataset_name = "EleutherAI/pile"
+
+    cfg.batch_size = 2048
+    cfg.use_wandb = True
+    cfg.wandb_images = False
+    cfg.save_every = 10
+
+    cfg.use_synthetic_dataset = False
+    cfg.dtype = torch.float32
+    cfg.lr = 1e-3
+    cfg.activation_width=2048
+
+    cfg.device = device
+    for tied_ae in [True, False]:
+        for layer_loc in ["residual", "mlpout"]:
+            for dict_ratio in [0.5, 1, 2, 4, 8, 16, 32]:
+                if layer_loc == "mlp":
+                    cfg.n_chunks = 20
+                    cfg.n_repetitions = 3
+                else:
+                    cfg.n_chunks = 10
+                    cfg.n_repetitions = 1
+                cfg.tied_ae = tied_ae
+                cfg.layer_loc = layer_loc
+                cfg.layer = layer
+                cfg.learned_dict_ratio = dict_ratio
+                cfg.output_folder = f"/mnt/ssd-cluster/zeros_{cfg.layer_loc}_l{cfg.layer}_r{cfg.learned_dict_ratio}_{'tied' if cfg.tied_ae else 'untied'}"
+                cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{cfg.layer_loc}"
+                sweep(run_zeros_only, cfg)
+
+
+def simple_run():
+    cfg = parse_args()
+    cfg.model_name = "gpt2"
+    cfg.dataset_name = "EleutherAI/pile"
+
+    cfg.batch_size = 2048
+    cfg.use_wandb = True
+    cfg.wandb_images = True
+    cfg.save_every = 10
+    cfg.use_synthetic_dataset = False
+    cfg.dtype = torch.float32
+    cfg.lr = 1e-3
+    cfg.n_chunks = 40
+    cfg.n_repetitions = 10
+    cfg.activation_width=2048
+    cfg.layer=6
+
+    cfg.layer_loc = "mlp"
+
+    cfg.tied_ae = False
+    cfg.learned_dict_ratio = 4
+    cfg.device = "cuda:1"
+
+    time_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    cfg.output_folder = f"gpt2small_{'tied' if cfg.tied_ae else 'untied'}_{cfg.layer_loc}_l{cfg.layer}_r{cfg.learned_dict_ratio}_{time_str}"
+    cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{cfg.layer_loc}_gpt2"
+    sweep(simple_setoff, cfg)
+
+
 if __name__ == "__main__":
-    run_across_layers_mlp_long()
+    import sys
+    device = sys.argv[1]
+    layer = int(sys.argv[2])
+    sys.argv = sys.argv[:1]
+    run_all_zeros(device, layer)

@@ -89,6 +89,16 @@ def log_standard_metrics(learned_dicts, chunk, chunk_num, hyperparam_ranges, cfg
     l1_values = hyperparam_ranges["l1_alpha"]
     dict_sizes = hyperparam_ranges["dict_size"]
 
+    n_actives_log = {}
+    for learned_dict, setting in learned_dicts:
+        name = make_hyperparam_name(setting)
+        n_ever_active = standard_metrics.batched_calc_feature_n_ever_active(learned_dict, sample, threshold=1)
+        n_actives_log[name + "_n_active"] = n_ever_active
+        n_actives_log[name + "_prop_active"] = n_ever_active / learned_dict.n_feats
+
+    
+    cfg.wandb_instance.log(n_actives_log, commit=True)
+
     if len(dict_sizes) > 1:
         small_dict_size = dict_sizes[0]
 
@@ -324,7 +334,9 @@ def sweep(ensemble_init_func, cfg):
         for ensemble, arg, _ in ensembles:
             learned_dicts.extend(unstacked_to_learned_dicts(ensemble, arg, cfg.ensemble_hyperparams, cfg.buffer_hyperparams))
 
-        if cfg.wandb_images:
+        print(i, chunk_idx)
+        if cfg.wandb_images and i % 10 == 0:
+            print("logging images")
             log_standard_metrics(learned_dicts, chunk, i, hyperparam_ranges, cfg)
 
         del chunk

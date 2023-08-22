@@ -22,12 +22,13 @@ import standard_metrics
 
 load_dir = "/mnt/ssd-cluster/bigrun0308"
 plot_data_dir = "/mnt/ssd-cluster/plot_data"
+plot_dir = "/mnt/ssd-cluster/plots"
 
 def plot_by_group() -> None:
-    chunk_range = [9]
+    chunk_range = [59]
     learned_dict_files = [os.path.join(load_dir, x) for x in os.listdir(load_dir)]
-    learned_dict_files += [f for f in os.listdir(".") if f.startswith("output_attn")]
-    learned_dict_files += [f for f in os.listdir(".") if f.startswith("output_sweep")]
+    # learned_dict_files += [f for f in os.listdir(".") if f.startswith("output_attn")]
+    # learned_dict_files += [f for f in os.listdir(".") if f.startswith("output_sweep")]
     # learned_dict_files = [f for f in os.listdir(".") if f.startswith("lr1e-3")]
 
     resid_dicts = [f for f in learned_dict_files if "resid" in f]
@@ -51,8 +52,9 @@ def plot_by_group() -> None:
     ratio16_dicts = [f for f in learned_dict_files if "r16" in f]
     ratio32_dicts = [f for f in learned_dict_files if "r32" in f]
 
-    tied_dicts = [f for f in learned_dict_files if "tied" in f]
-    untied_dicts = [f for f in learned_dict_files if not "tied" in f]
+    tied_dicts = [f for f in learned_dict_files if "/tied" in f]
+    untied_dicts = [f for f in learned_dict_files if "untied" in f]
+    long_dicts = [f for f in learned_dict_files if "long" in f]
 
     # experiments = [
     #     ("l0_resid", [layer_0_dicts, resid_dicts]),
@@ -69,27 +71,41 @@ def plot_by_group() -> None:
     #     ("l5_mlp", [layer_5_dicts, mlp_dicts]),
     # ]
     experiments = [
-        # ("l0_mlp_out", [[layer_0_dicts, mlp_out_dicts]]),
-        ("l1_mlp", [[layer_1_dicts, mlp_dicts]]),
-        # ("l2_mlp_out", [[layer_2_dicts, mlp_out_dicts]]),
-        # ("l3_mlp_out", [[layer_3_dicts, mlp_out_dicts]]),
-        # ("l4_mlp_out", [[layer_4_dicts, mlp_out_dicts]]),
-        # ("l5_mlp_out", [[layer_5_dicts, mlp_out_dicts]]),
+        ("l0_mlp_untied", [[layer_0_dicts, mlp_dicts, long_dicts, untied_dicts]]),
+        ("l1_mlp_untied", [[layer_1_dicts, mlp_dicts, long_dicts, untied_dicts]]),
+        ("l2_mlp_untied", [[layer_2_dicts, mlp_dicts, long_dicts, untied_dicts]]),
+        ("l3_mlp_untied", [[layer_3_dicts, mlp_dicts, long_dicts, untied_dicts]]),
+        ("l4_mlp_untied", [[layer_4_dicts, mlp_dicts, long_dicts, untied_dicts]]),
+        ("l5_mlp_untied", [[layer_5_dicts, mlp_dicts, long_dicts, untied_dicts]]),
+        ("l0_mlp_tied", [[layer_0_dicts, mlp_dicts, long_dicts, tied_dicts]]),
+        ("l1_mlp_tied", [[layer_1_dicts, mlp_dicts, long_dicts, tied_dicts]]),
+        ("l2_mlp_tied", [[layer_2_dicts, mlp_dicts, long_dicts, tied_dicts]]),
+        ("l3_mlp_tied", [[layer_3_dicts, mlp_dicts, long_dicts, tied_dicts]]),
+        ("l4_mlp_tied", [[layer_4_dicts, mlp_dicts, long_dicts, tied_dicts]]),
+        ("l5_mlp_tied", [[layer_5_dicts, mlp_dicts, long_dicts, tied_dicts]]),
     ]
 
     for graph_name, categories in experiments:
         learned_dicts_nested: List[List[Tuple[str, List[Tuple[LearnedDict, Dict[Any, Any]]]]]] = []
         for subcategory in categories:
             learned_dict_loc_list = list(set.intersection(*[set(x) for x in subcategory]))
-            learned_dict_loc_list.sort(key=lambda x: int(x.split("_")[-1][1:])) # sort by ratio
+            print(learned_dict_loc_list)
+            learned_dict_loc_list.sort(key=lambda x: int(float((x.split("_")[-2][1:])))) # sort by ratio
             learned_dict_lists = []
-            for i in range(0, 120, 10):
-                learned_dict_lists.extend([(x.split("sweep_")[-1], torch.load(os.path.join(x, f"_{i}", "learned_dicts.pt"))) for x in learned_dict_loc_list])
+            for x in learned_dict_loc_list:
+                name = x.split("_")[-2][1:]
+                try:
+                    learned_dicts = torch.load(os.path.join(x, "_59", "learned_dicts.pt"))
+                except:
+                    print(f"Could not load learned dicts for {x}")
+                    continue
+                learned_dict_lists.append((name, learned_dicts))
             learned_dicts_nested.append(learned_dict_lists)
 
+        chunk_name = "_".join(graph_name.split("_")[:2])
         print(f"Found {sum(len(x) for x in learned_dicts_nested)} lists of dicts for experiment {graph_name}")
 
-        dataset = torch.load(f"/mnt/ssd-cluster/single_chunks/{graph_name}/0.pt")
+        dataset = torch.load(f"/mnt/ssd-cluster/single_chunks/{chunk_name}/0.pt")
         sample_idxs = np.random.choice(len(dataset), 5000, replace=False)
 
         device = torch.device("cuda:0")
@@ -110,7 +126,7 @@ def plot_by_group() -> None:
             all_data.append(datapoint_series)
 
         
-        pickle.dump(all_data, open(f"all_data_{graph_name}.pkl", "wb"))
+        pickle.dump(plot_dir, open(f"all_data_{graph_name}.pkl", "wb"))
 
         colors = ["Purples", "Blues", "Greens", "Oranges", "Reds", "Greys", "YlOrBr", "YlOrRd", "OrRd"]
         markers = ["o", "v", "s", "P", "X"]
@@ -122,13 +138,14 @@ def plot_by_group() -> None:
         for k, datapoint_lists in enumerate(all_data):
             for i, (run_name, datapoints) in enumerate(datapoint_lists):
                 r_sq, sparsity, l1_alpha = zip(*datapoints)
-                ax.scatter(sparsity, r_sq, c=[math.log10(l1) for l1 in l1_alpha], label=run_name, cmap=colors[i % len(colors)], vmin=-5, vmax=-2, marker=markers[k % len(markers)])
-                if i == len(datapoints) - 1:
-                    # write the l1_alpha values on every 5th point and highlight them
-                    for j, (x, y) in enumerate(zip(sparsity, r_sq)):
-                        if j % 5 == 0:
-                            ax.annotate(f"{l1_alpha[j]:.1}", (x, y))
-                            ax.scatter([x], [y], c="black")
+                cs = [math.log10(l1) if l1 != 0 else -5 for l1 in l1_alpha]
+                ax.scatter(sparsity, r_sq, label=run_name, cmap=colors[i % len(colors)], vmin=-5, vmax=-2, marker=markers[k % len(markers)])
+                # if i == len(datapoints) - 1:
+                #     # write the l1_alpha values on every 5th point and highlight them
+                #     for j, (x, y) in enumerate(zip(sparsity, r_sq)):
+                #         if j % 5 == 0:
+                #             ax.annotate(f"{l1_alpha[j]:.1}", (x, y))
+                #             ax.scatter([x], [y], c="black")
 
         # cap the x axis at 512, but allow smaller
         l, r = ax.get_xlim()
@@ -138,7 +155,11 @@ def plot_by_group() -> None:
         ax.set_xlabel("Mean no. features active")
         ax.set_ylabel("Unexplained Variance")
         ax.legend()
-        plt.savefig(f"freq_plot_compare_{graph_name}_5.png")
+        # set legend opacity to 1
+        leg = ax.get_legend()
+        leg.legendHandles[0].set_alpha(1)
+        ax.set_title(f"Sparsity vs. Unexplained Variance for {graph_name}")
+        plt.savefig(os.path.join(plot_dir, f"freq_plot_compare_{graph_name}_long.png"))
         print(f"Saved plot for {graph_name}")
 
 

@@ -75,17 +75,17 @@ def run_layer_baselines(args) -> None:
             ica_top_k = ica.to_topk_dict(sparsity)
             torch.save(ica_top_k, os.path.join(output_folder, folder_name, "ica_topk.pt"))
 
-        if os.path.exists(os.path.join(output_folder, folder_name, "nmf.pt")) and not remake:
-            print("Skipping NMF")
-        else:
-            # Run NMF
-            nmf = NMFEncoder(activation_size=activation_dim)
-            print("Training NMF")
-            nmf.train(full_chunk)
-            torch.save(nmf, os.path.join(output_folder, folder_name, "nmf.pt"))
+        # if os.path.exists(os.path.join(output_folder, folder_name, "nmf.pt")) and not remake:
+        #     print("Skipping NMF")
+        # else:
+        #     # Run NMF
+        #     nmf = NMFEncoder(activation_size=activation_dim)
+        #     print("Training NMF")
+        #     nmf.train(full_chunk)
+        #     torch.save(nmf, os.path.join(output_folder, folder_name, "nmf.pt"))
 
-            nmf_top_k = nmf.to_topk_dict(sparsity)
-            torch.save(nmf_top_k, os.path.join(output_folder, folder_name, "nmf_topk.pt"))
+        #     nmf_top_k = nmf.to_topk_dict(sparsity)
+        #     torch.save(nmf_top_k, os.path.join(output_folder, folder_name, "nmf_topk.pt"))
 
         if os.path.exists(os.path.join(output_folder, folder_name, "random.pt")) and not remake:
             print("Skipping random")
@@ -151,7 +151,7 @@ def run_all() -> None:
 
     layers = list(range(6))
 
-    layer_locs = ["residual"]
+    layer_locs = ["mlp"]
     devices = [f"cuda:{i}" for i in [1,2,3,4,6,7]]
     args_list = [(layer, layer_locs, chunks_folder, output_folder, sparsity, devices[i]) for i, layer in enumerate(layers)]
 

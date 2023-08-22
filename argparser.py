@@ -67,6 +67,6 @@ def parse_args() -> dotdict:
     cfg = dotdict(vars(args))  # convert to dotdict via dict
     if not torch.cuda.is_available() and cfg.device != "cpu":
         print("WARNING: CUDA not available, using CPU")
-    cfg.device = torch.device(cfg.device if torch.cuda.is_available() else "cpu")
+    cfg.device = cfg.device if torch.cuda.is_available() else "cpu"
 
     return cfg

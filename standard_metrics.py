@@ -412,6 +412,16 @@ def calc_feature_n_active(batch):
     n_active = torch.sum(batch != 0, dim=0)
     return n_active
 
+def batched_calc_feature_n_ever_active(learned_dict: LearnedDict, activations: torch.Tensor, batch_size: int = 1000, threshold: int = 10) -> int:
+    n_active_count = torch.zeros(learned_dict.n_feats, device=activations.device)
+    for i in range(0, len(activations), batch_size):
+        batch = activations[i:i+batch_size]
+        feat_activations = learned_dict.encode(batch)
+        n_active_count += calc_feature_n_active(feat_activations)
+
+    n_active_total = int((n_active_count > threshold).sum().item())
+    return n_active_total
+
 def calc_feature_mean(batch):
     # batch: [batch_size, n_features]
     mean = torch.mean(batch, dim=0)
@@ -493,6 +503,18 @@ def cluster_vectors(model: LearnedDict, n_clusters: int = 1000, top_clusters: in
     # random_points = np.random.choice(direction_vectors_tsne.shape[0], n_points, replace=False)
     # # now find the nearest neighbours to these points
     # nbrs = NearestNeighbors(n_neighbors=5, algorithm='ball_tree').fit(direction_vectors_tsne)
+
+
+def hierarchical_cluster_vectors(vectors: TensorType["_n_dict_components", "_activation_size"], n_clusters=100, show = True):
+    from scipy.cluster.hierarchy import dendrogram, linkage, cut_tree 
+    linkage_matrix = linkage(vectors, 'average', metric='cosine') # computes the distance matrix
+    dendrogram(linkage_matrix, labels=list(range(vectors.shape[0])), leaf_rotation=90, leaf_font_size=8)
+    if show:
+        # set backend not to be agg so that we can see the dendrogram
+        plt.switch_backend("TkAgg")
+        plt.show()
+    clusters = cut_tree(linkage_matrix, n_clusters=n_clusters)
+    return clusters
 
 
 def make_one_chunk_per_layer() -> None:

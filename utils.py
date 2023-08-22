@@ -17,7 +17,7 @@ SSH_PYTHON = "/opt/conda/bin/python"
 
 PORT = 22
 
-USER = "aidan"
+USER = "hoagy"
 
 SSH_DIRECTORY = f"sparse_coding_{USER}"
 BUCKET_NAME = "sparse-coding"
@@ -71,7 +71,8 @@ def copy_recent():
 def copy_dotfiles():
     """Copy dotfiles into remote host and run install and deploy scripts"""
     df_dir = f"dotfiles_{USER}"
-    command = f"scp -P {PORT} -r ~/git/dotfiles {DEST_ADDR}:{df_dir}"
+    # command = f"scp -P {PORT} -r ~/git/dotfiles {DEST_ADDR}:{df_dir}"
+    command = f"rsync -rv --filter ':- .gitignore' --exclude '.git' -e 'ssh -p {PORT}' ~/git/ {DEST_ADDR}:{df_dir}"
     subprocess.call(command, shell=True)
     command = f"ssh -p {PORT} {DEST_ADDR} 'cd ~/{df_dir} && ./install.sh && ./deploy.sh'"
     subprocess.call(command, shell=True)
