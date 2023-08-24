@@ -489,6 +489,7 @@ def concept_ablation(
     sequence_lengths: Optional[TensorType["batch"]] = None,
     scale_by_magnitude: bool = False,
     min_perf_decrease: float = 1.0, # to stop scale_by_magnitude from removing unimportant features
+    return_intermediate_scores: bool = False,
 ) -> List[Tuple[int, float, float]]:
     """Try and add as much data back as possible while keeping a specific concept erased"""
     if sequence_lengths is not None:
@@ -521,8 +522,14 @@ def concept_ablation(
 
     scores = []
 
+    if return_intermediate_scores:
+        intermediate_states = []
+
     prev_score = float("inf")
     for iteration in range(max_features_removed):
+        if return_intermediate_scores:
+            intermediate_states.append([])
+
         min_weighted_score = float("inf")
         min_score = None
         min_idx = None
@@ -544,16 +551,21 @@ def concept_ablation(
 
             score = scoring_function(logits)
 
+            activation_dist = distance_metric(clean_activation, activation).mean().item()
+
             if scale_by_magnitude:
-                weighted_score = score * distance_metric(clean_activation, activation).mean().item()
+                weighted_score = score * activation_dist
             else:
                 weighted_score = score
+
+            if return_intermediate_scores:
+                intermediate_states[-1].append((ablated_directions + [i], score, activation_dist))
 
             if weighted_score < min_weighted_score and score < prev_score * min_perf_decrease:
                 min_weighted_score = weighted_score
                 min_score = score
                 min_idx = i
-                min_activation_dist = distance_metric(clean_activation, activation).mean().item()
+                min_activation_dist = activation_dist
         
         if min_idx is None:
             print("Early stopped at iteration", iteration, "with score", prev_score)
@@ -567,7 +579,10 @@ def concept_ablation(
 
         scores.append((ablated_directions.copy(), min_score, min_activation_dist))
 
-    return scores
+    if return_intermediate_scores:
+        return scores, intermediate_states
+    else:
+        return scores
 
 def least_squares_erasure(
     model: HookedTransformer,
@@ -581,7 +596,7 @@ def least_squares_erasure(
     if sequence_lengths is not None:
         ablation_mask = ablation_mask_from_seq_lengths(sequence_lengths, dataset.shape[1])
     else:
-        ablation_mask = None
+        ablation_mask = torch.ones_like(dataset, dtype=torch.bool)
 
     _, activation_cache = model.run_with_cache(
         dataset,
@@ -589,19 +604,24 @@ def least_squares_erasure(
         return_type="logits"
     )
 
-    if ablation_mask is None:
-        ablation_mask = torch.ones_like(dataset, dtype=torch.bool)
-
     B, L, D = activation_cache[standard_metrics.get_model_tensor_name(location)].shape
 
-    activations_flattened = activation_cache[standard_metrics.get_model_tensor_name(location)].reshape(B*L, D)
+    activations_flattened = activation_cache[standard_metrics.get_model_tensor_name(location)].reshape(B, L, D)
     classes_flattened = classes.repeat_interleave(L)
     mask_flattened = ablation_mask.reshape(B*L)
 
-    activations = activations_flattened[mask_flattened]
-    classes_ = classes_flattened[mask_flattened]
+    #activations = activations_flattened #[mask_flattened]
+    #classes_ = classes_flattened #[mask_flattened]
+
+    activations = activation_cache[standard_metrics.get_model_tensor_name(location)].reshape(B, L*D)
+    classes_ = classes
 
     print(activations.shape, classes_.shape)
+
+    #print(classes_)
+
+    #activations = activation_cache[standard_metrics.get_model_tensor_name(location)][:, -1]
+    #classes_ = classes
 
     eraser = LeaceEraser.fit(activations, classes_)
 
@@ -609,7 +629,7 @@ def least_squares_erasure(
 
     def erasure(tensor, hook):
         nonlocal distance
-        erased = eraser(tensor.reshape(B*L, D)).reshape(B, L, D)
+        erased = eraser(tensor.reshape(B, L*D)).reshape(B, L, D)
 
         if ablation_mask is not None:
             erased[~ablation_mask] = tensor[~ablation_mask]
@@ -685,38 +705,36 @@ def bottleneck_test():
 
     pca_dict.to_device(device)
 
-    max_fvus = [0.2, 0.1, 0.05]
+    l1_targets = [1e-3, 3e-4, 1e-4, 0]
     best_dicts = {}
     ratios = [4]
-    dict_sets = [(ratio, "learned_{max_fvu:.2f}", torch.load(f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r{ratio}/_9/learned_dicts.pt")) for ratio in ratios]
-    dict_sets += [(4, "zero_l1_baseline", torch.load("output_zero_b_4/_7/learned_dicts.pt"))]
+    dict_sets = [(ratio, "Dict L1={l1_alpha:.1e}", torch.load(f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r{ratio}/_9/learned_dicts.pt")) for ratio in ratios]
+    dict_sets += [(4, "Dict L1={l1_alpha:.1e}", torch.load("/mnt/ssd-cluster/zeros_residual_l3_r4_tied/_9/learned_dicts.pt"))]
 
     print("evaluating dicts")
-    for max_fvu in max_fvus:
+    for l1_target in l1_targets:
         for ratio, label, dicts in tqdm.tqdm(dict_sets):
             for dict, hyperparams in dicts:
                 dict.to_device(device)
-                sample_idxs = np.random.choice(activation_dataset.shape[0], size=50000, replace=False)
-                fvu = standard_metrics.fraction_variance_unexplained(dict, activation_dataset[sample_idxs]).item()
-                if fvu < max_fvu:
-                    name = label.format(max_fvu=max_fvu, dict_size=hyperparams["dict_size"])
+                diff = abs(l1_target - hyperparams["l1_alpha"])
+                name = label.format(l1_alpha=l1_target)
+                if name not in best_dicts:
+                    best_dicts[name] = (diff, hyperparams, dict)
 
-                    if name not in best_dicts:
-                        best_dicts[name] = (fvu, hyperparams, dict)
-                    else:
-                        if fvu > best_dicts[name][0]:
-                            best_dicts[name] = (fvu, hyperparams, dict)
+                if diff < best_dicts[name][0]:
+                    best_dicts[name] = (diff, hyperparams, dict)
     
-    print("found satisfying dicts:", list(best_dicts.keys()))
+    for name, (diff, hparams, dict) in best_dicts.items():
+        print(name, diff, hparams)
     
     del activation_dataset
 
     dictionaries = {}
-    dictionaries["pca"] = (pca_dict, {"pca": True})
+    dictionaries["PCA"] = (pca_dict, {"pca": True})
     for name, (_, hyperparams, dict) in best_dicts.items():
         dictionaries[name] = (dict, hyperparams)
 
-    tau_values = np.logspace(-6.5, -1.5, 10)
+    tau_values = np.logspace(-6.5, -1.5, 25)
 
     scores = {}
 
@@ -745,9 +763,7 @@ def bottleneck_test():
     #torch.save(diff_mean_scores, f"diff_mean_scores_layer_{layer}.pt")
 
 def erasure_test():
-    torch.autograd.set_grad_enabled(False)
-
-    model_name = "EleutherAI/pythia-70m-deduped"
+    model_name = "EleutherAI/pythia-1.4B-deduped"
 
     model = HookedTransformer.from_pretrained(model_name)
 
@@ -755,7 +771,7 @@ def erasure_test():
 
     model.to(device)
 
-    prompts, classes, class_tokens, sequence_lengths = generate_gender_dataset(model_name, 100, 100, model.tokenizer.pad_token_id)
+    prompts, classes, class_tokens, sequence_lengths, ignore_until = generate_gender_dataset(model_name, 150, 150, model.tokenizer.pad_token_id)
     prompts = prompts.to(device)
     classes = classes.to(device)
     sequence_lengths = sequence_lengths.to(device)
@@ -766,31 +782,36 @@ def erasure_test():
         predictions = predictions[torch.arange(sequence_lengths.shape[0]), sequence_lengths-1]
         predictions = predictions[:, [class_tokens[0], class_tokens[1]]]
         probs = F.softmax(predictions, dim=-1)
-
         pred = torch.einsum("bc,bc->b", probs, class_one_hot).mean()
         return torch.abs(pred - 0.5).item() + 0.5
     
-    layer = 2
-    activation_dataset = torch.load(f"activation_data/layer_{layer}/0.pt")
+    layer = 6
+    activation_dataset = torch.load(f"activation_data_1_4_b/0.pt")
     activation_dataset = activation_dataset.to(device, dtype=torch.float32)
 
     max_fvu = 0.05
+    dict_size_filter = [12288]
     best_dicts = {}
-    ratios = [4]
-    dict_sets = [(ratio, torch.load(f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r{ratio}/_9/learned_dicts.pt")) for ratio in ratios]
+    dict_sets = [("learned_{dict_size}_{max_fvu:.2f}", torch.load(f"output_1_4_b/_160/learned_dicts.pt"))]
 
     print("evaluating dicts")
-    for ratio, dicts in tqdm.tqdm(dict_sets):
+    for label, dicts in tqdm.tqdm(dict_sets):
         for dict, hyperparams in dicts:
+            if hyperparams["dict_size"] not in dict_size_filter:
+                continue
             dict.to_device(device)
             sample_idxs = np.random.choice(activation_dataset.shape[0], size=50000, replace=False)
             fvu = standard_metrics.fraction_variance_unexplained(dict, activation_dataset[sample_idxs]).item()
             if fvu < max_fvu:
-                if hyperparams["dict_size"] not in best_dicts:
-                    best_dicts[hyperparams["dict_size"]] = (fvu, hyperparams, dict)
+                name = label.format(max_fvu=max_fvu, dict_size=hyperparams["dict_size"])
+
+                if name not in best_dicts:
+                    best_dicts[name] = (fvu, hyperparams, dict)
                 else:
-                    if fvu > best_dicts[hyperparams["dict_size"]][0]:
-                        best_dicts[hyperparams["dict_size"]] = (fvu, hyperparams, dict)
+                    if fvu > best_dicts[name][0]:
+                        best_dicts[name] = (fvu, hyperparams, dict)
+
+    print("found satisfying dicts:", list(best_dicts.keys()))
     
     del activation_dataset
 
@@ -798,7 +819,17 @@ def erasure_test():
     for dict_size, (_, hyperparams, dict) in best_dicts.items():
         dictionaries[f"learned_{dict_size}"] = (dict, hyperparams)
 
-    leace_score, leace_edit, leace_eraser = least_squares_erasure(
+    #leace_score, leace_edit, leace_eraser = least_squares_erasure(
+    #    model,
+    #    (layer, "residual"),
+    #    prompts,
+    #    classes,
+    #    scoring_function=gender_erasure_metric,
+    #    distance_metric=ce_distance,
+    #    sequence_lengths=sequence_lengths,
+    #)
+
+    learned_nullspace, learned_edit, learned_score = trained_erasure(
         model,
         (layer, "residual"),
         prompts,
@@ -806,6 +837,7 @@ def erasure_test():
         scoring_function=gender_erasure_metric,
         distance_metric=ce_distance,
         sequence_lengths=sequence_lengths,
+        iterations=1000,
     )
 
     print(f"LEACE score: {leace_score:.3e}, LEACE edit: {leace_edit:.2f}")
@@ -819,9 +851,9 @@ def erasure_test():
     torch.save(leace_eraser, f"leace_eraser_layer_{layer}.pt")
 
     scores = {}
-    tau_values = np.logspace(-4, 0, 10)
+    intermediate = {}
     for name, (dict, _) in dictionaries.items():
-        scores[name] = concept_ablation(
+        scores[name], intermediate[name] = concept_ablation(
             model,
             dict, (layer, "residual"),
             prompts,
@@ -829,10 +861,13 @@ def erasure_test():
             scale_by_magnitude=False,
             sequence_lengths=sequence_lengths,
             ablation_rank="full",
+            return_intermediate_scores=True,
+            max_features_removed=1,
         )
 
     torch.save(scores, f"erasure_scores_layer_{layer}.pt")
+    torch.save(intermediate, f"erasure_intermediate_layer_{layer}.pt")
     torch.save(dictionaries, f"erasure_dictionaries_layer_{layer}.pt")
 
 if __name__ == "__main__":
-    erasure_test()
+    bottleneck_test()

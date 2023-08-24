@@ -6,44 +6,65 @@ import numpy as np
 import os
 import shutil
 
+from itertools import product
+
 if __name__ == "__main__":
 
-    scores = torch.load("dict_scores_layer_2.pt")
+    scores = torch.load("dict_scores_layer_3.pt")
 
-    diff_mean_scores = torch.load("diff_mean_scores_layer_2.pt")
+    #diff_mean_scores = torch.load("diff_mean_scores_layer_2.pt")
 
     fig, ax = plt.subplots()
 
-    colors = ["red", "blue", "green", "orange", "purple", "brown", "pink", "gray", "olive", "cyan"]
-    markers = ["x", "+", "*", "o", "v", "^", "<", ">", "s", "."]
+    ax.grid(True, alpha=0.5, linestyle="dashed")
+    ax.set_axisbelow(True)
+
+    #colors = ["red", "blue", "green", "orange", "purple", "brown", "pink", "gray", "olive", "cyan"]
+    #markers = ["x", "+", "*", "o", "v", "^", "<", ">", "s", "."]
+    #styles = ["solid", "dashed", "dashdot", "dotted"]
 
     xs, ys, keys = [], [], []
     for key, score in scores.items():
         _, graph, div, corruption = zip(*score)
         graph_size = [len(g) for g in graph]
-        xs.append(corruption)
+        xs.append(graph_size)
         ys.append(div)
         keys.append(key)
-    
-    scales, corruption_AE, div_AE = zip(*diff_mean_scores)
-    xs.append(corruption_AE)
-    ys.append(div_AE)
-    keys.append("diff-means editing")
 
-    print(scales)
+    for key, x, y in zip(keys, xs, ys):
+        if key == "PCA":
+            color = "Reds"
+            c = 0.5
+        elif key == "Dict L1=1.0e-03":
+            color = "Blues"
+            c = 0.8
+        elif key == "Dict L1=3.0e-04":
+            color = "Blues"
+            c = 0.6
+        elif key == "Dict L1=1.0e-04":
+            color = "Blues"
+            c = 0.4
+        elif key == "Dict L1=0.0e+00":
+            color = "Blues"
+            c = 0.2
+        
+        cmap = plt.get_cmap(color)
+        c = cmap(c)
 
-    for color, marker, key, x, y in zip(colors, markers, keys, xs, ys):
-        ax.scatter(x, y, c=color, marker=marker, label=key, alpha=0.5)
+        ax.plot(x, y, color=c, linestyle="dashed", label=key, alpha=1)
 
-    ax.set_xlabel("Corruption")
-    ax.set_ylabel("Task-Specific Loss")
+    ax.set_xlabel("No. Uncorrupted Features")
+    ax.set_ylabel("KL-Divergence From Base")
 
     #ax.set_xscale("log")
 
-    ax.legend()
+    ax.legend(
+        loc="upper right",
+        framealpha=1,
+    )
 
-    shutil.rmtree("graphs", ignore_errors=True)
-    os.mkdir("graphs")
+    #shutil.rmtree("graphs", ignore_errors=True)
+    #os.mkdir("graphs", exist_ok=True)
 
     plt.savefig("graphs/score_size.png")
 

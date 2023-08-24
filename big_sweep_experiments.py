@@ -775,16 +775,16 @@ def synthetic_test():
         sweep(synthetic_linear_range, cfg)
 
 def pythia_1_4_b_dict(cfg):
-    dict_ratio = 6
-    l1_values = np.logspace(-4, -2, 5)
-    dict_size = int(cfg.activation_width * dict_ratio)
-    devices = ["cuda:1"]
+    dict_ratios = [6]
+    l1_values = np.logspace(-4, -2, 7)
+    dict_sizes = [int(cfg.activation_width * dict_ratio) for dict_ratio in dict_ratios]
+    devices = ["cuda:6"]
 
     ensembles = []
     for i in range(1):
         #l1_range = l1_values[i*2:(i+1)*2]
         models = [
-            FunctionalTiedSAE.init(cfg.activation_width, dict_size, l1_value, dtype=cfg.dtype)
+            FunctionalTiedSAE.init(cfg.activation_width, dict_sizes[i], l1_value, dtype=cfg.dtype)
             for l1_value in l1_values
         ]
         device = devices.pop()
@@ -795,11 +795,11 @@ def pythia_1_4_b_dict(cfg):
             },
             device=device
         )
-        args = {"batch_size": cfg.batch_size, "device": device, "dict_size": max_size}
+        args = {"batch_size": cfg.batch_size, "device": device, "dict_size": dict_sizes[i]}
         name = f"l1_{i}"
         ensembles.append((ensemble, args, name))
     
-    return (ensembles, [], ["l1_alpha", "dict_size"], {"dict_size": dict_sizes, "l1_alpha": [l1_value]})
+    return (ensembles, ["dict_size"], ["l1_alpha"], {"dict_size": dict_sizes, "l1_alpha": l1_values})
 
 def run_pythia_1_4_b_sweep():
     cfg = parse_args()
@@ -815,8 +815,10 @@ def run_pythia_1_4_b_sweep():
     cfg.wandb_images = False
     cfg.use_synthetic_dataset = False
 
-    cfg.activation_width = 512
+    cfg.device = "cuda:1"
     cfg.n_chunks = 30
+
+    cfg.n_repetitions = 10
 
     cfg.layer = 6
     cfg.layer_loc = "residual"

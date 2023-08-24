@@ -137,6 +137,8 @@ class FunctionalThresholdingSAE:
     
     @staticmethod
     def encode(params, batch, learned_dict):
+        batch = batch - params["centering"][None, :]
+
         c = torch.einsum("nd,bd->bn", learned_dict, batch)
 
         a_sq = params["activation_scale"].pow(2)
