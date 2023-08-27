@@ -457,6 +457,8 @@ def parse_folder_name(folder_name: str) -> Tuple[str, str, int, float, str]:
     tied, layer_loc, layer_str, ratio_str, *extras = folder_name.split("_")
     if extras:
         extra_str = "_".join(extras)
+    else:
+        extra_str = ""
     layer = int(layer_str[1:])
     ratio = float(ratio_str[1:])
     if ratio == 0:
@@ -540,7 +542,7 @@ def interpret_across_big_sweep(l1_val: float, n_gpus: int = 1):
         print(f"{tied}, {layer_loc=}, {layer=}, {ratio=}")
         if layer_loc != "mlp":
             continue
-        if ratio > 2:
+        if ratio != 1:
             continue
         # if layer != 4:
         #     continue
@@ -566,12 +568,57 @@ def interpret_across_big_sweep(l1_val: float, n_gpus: int = 1):
         cfg.layer = layer
         cfg.layer_loc = layer_loc
         cfg.save_loc = os.path.join(save_dir, save_str)
-        cfg.n_feats_explain = 100
+        cfg.n_feats_explain = 200
         if n_gpus == 1:
             run(matching_encoder, cfg)
         else:
             cfg.device = f"cuda:{len(job_queue) % n_gpus}"
             job_queue.append((LearnedDict, cfg))
+    
+    if n_gpus > 1:
+        with mp.Pool(n_gpus) as p:
+            p.starmap(run, job_queue) 
+
+
+def interpret_across_chunks(l1_val: float, n_gpus: int = 1):
+    base_cfg = parse_args()
+    base_dir = "/mnt/ssd-cluster/longrun2408"
+    save_dir = "/mnt/ssd-cluster/auto_interp_results_overtime/"
+    os.makedirs(save_dir, exist_ok=True)
+
+    all_folders = os.listdir(base_dir)
+    if n_gpus != 1:
+        job_queue: List[Tuple[Callable, dotdict]] = []
+
+    for folder in all_folders:
+        for n_chunks in [1,4,16,32]:
+            tied, layer_loc, layer, ratio, extra_str = parse_folder_name(folder)
+            if layer != base_cfg.layer:
+                continue
+            cfg = copy.deepcopy(base_cfg)
+            autoencoders = torch.load(os.path.join(base_dir, folder, f"_{n_chunks - 1}", "learned_dicts.pt"), map_location=cfg.device)
+            # find ae with matching l1_val
+            matching_encoders = [ae for ae in autoencoders if abs(ae[1]["l1_alpha"] - l1_val) < 1e-4]
+            if not len(matching_encoders) == 1:            
+                print(f"Found {len(matching_encoders)} matching encoders for {folder}")
+            matching_encoder = matching_encoders[0][0]
+        
+            # save the learned dict
+            save_str = f"l{layer}_{layer_loc}/{tied}_r{ratio}_nc{n_chunks}_l1a{l1_val:.2}"
+            os.makedirs(os.path.join(save_dir, save_str), exist_ok=True)
+            torch.save(matching_encoder, os.path.join(save_dir, save_str, "learned_dict.pt"))
+
+            # run the interpretation
+            cfg.load_interpret_autoencoder = os.path.join(save_dir, save_str, "learned_dict.pt")
+            cfg.layer = layer
+            cfg.layer_loc = layer_loc
+            cfg.save_loc = os.path.join(save_dir, save_str)
+            cfg.n_feats_explain = 100
+            if n_gpus == 1:
+                run(matching_encoder, cfg)
+            else:
+                cfg.device = f"cuda:{len(job_queue) % n_gpus}"
+                job_queue.append((LearnedDict, cfg))
     
     if n_gpus > 1:
         with mp.Pool(n_gpus) as p:
@@ -633,6 +680,7 @@ def read_results(activation_name: str, score_mode: str) -> None:
 
 
 if __name__ == "__main__":
+    cfg: Union[argparse.Namespace, dotdict]
     if len(sys.argv) > 1 and sys.argv[1] == "read_results":
         # parse --layer and --model_name from command line using custom parser
         argparser = argparse.ArgumentParser()
@@ -677,13 +725,20 @@ if __name__ == "__main__":
     elif len(sys.argv) > 1 and sys.argv[1] == "all_baselines":
         sys.argv.pop(1)
         interpret_across_baselines()
+    
+    elif len(sys.argv) > 1 and sys.argv[1] == "chunks":
+        l1_val = 0.0007197 # 8e-4 in logspace(-4, -2, 8)
+        sys.argv.pop(1)
+        interpret_across_chunks(l1_val)
 
     else:
-        default_cfg = parse_args()
-        default_cfg.chunk_size_gb = 10
-        if os.path.isdir(default_cfg.load_interpret_autoencoder):
-            run_folder(default_cfg)
+        cfg = parse_args()
+        cfg.chunk_size_gb = 10
+        if os.path.isdir(cfg.load_interpret_autoencoder):
+            run_folder(cfg)
 
         else:
-            learned_dict = torch.load(default_cfg.load_interpret_autoencoder, map_location=default_cfg.device)
-            run(learned_dict, default_cfg)
+            learned_dict = torch.load(cfg.load_interpret_autoencoder, map_location=cfg.device)
+            save_folder = f"/mnt/ssd-cluster/auto_interp_results/l{cfg.layer}_{cfg.layer_loc}"
+            cfg.save_loc = os.path.join(save_folder, cfg.load_interpret_autoencoder)
+            run(learned_dict, cfg)
