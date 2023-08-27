@@ -3,17 +3,20 @@ import json
 import multiprocessing as mp
 import os
 import pickle
+import sys
 from typing import List, Tuple
 
+import torch
 from datasets import load_dataset
 from sklearn import metrics
 from sklearn.linear_model import RidgeClassifier
-import torch
 from torchtyping import TensorType
 from transformer_lens import HookedTransformer
 
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+
+from activation_dataset import make_tensor_name
 from autoencoders.learned_dict import LearnedDict
-import utils
 
 # set OPENAI_API_KEY environment variable from secrets.json['openai_key']
 # needs to be done before importing openai interp bits
@@ -222,8 +225,8 @@ def measure_ablation_score() -> None:
     features_to_ablate = torch.zeros(model.n_feats).to(dtype=torch.bool)
     features_to_ablate[feature_id] = 1
 
-    tensor_to_ablate = utils.make_tensor_name(cfg.layer, cfg.layer_loc, cfg.model_name)
-    tensor_to_read = utils.make_tensor_name(cfg.layer+1, layer_loc="residual", model_name=cfg.model_name)
+    tensor_to_ablate = make_tensor_name(cfg.layer, cfg.layer_loc, cfg.model_name)
+    tensor_to_read = make_tensor_name(cfg.layer + 1, layer_loc="residual", model_name=cfg.model_name)
     
     print(f"num nonzero activations: {(torch.Tensor(sim_activations) > 2).sum()}")
     breakpoint()

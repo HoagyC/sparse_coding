@@ -1,3 +1,4 @@
+import os
 import torch
 from typing import Dict, List, Tuple, Any
 
@@ -16,6 +17,8 @@ import matplotlib.pyplot as plt
 import itertools
 import tqdm
 import numpy as np
+
+BASE_FOLDER = "~/sparse_coding_aidan"
 
 def train_pca(dataset):
     pca = BatchedPCA(dataset.shape[1], device)
@@ -52,7 +55,7 @@ if __name__ == "__main__":
 
     print(tokens.shape)
 
-    dataset = torch.load("activation_data_layers/layer_2/0.pt").to(dtype=torch.float32, device=device)
+    dataset = torch.load(os.path.join(BASE_FOLDER, "activation_data_layers/layer_2/0.pt")).to(dtype=torch.float32, device=device)
     pca = train_pca(dataset)
 
     sample_idxs = np.random.choice(len(dataset), 10000, replace=False)
@@ -64,7 +67,7 @@ if __name__ == "__main__":
         "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r2/_9/learned_dicts.pt",
         "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r8/_9/learned_dicts.pt",
         "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r16/_9/learned_dicts.pt",
-        "output_topk/_39/learned_dicts.pt",
+        os.path.join(BASE_FOLDER, "output_topk/_39/learned_dicts.pt"),
     ]
 
     file_labels = [
@@ -154,4 +157,4 @@ if __name__ == "__main__":
     ax.legend()
     ax.set_ylabel("Loss")
     ax.set_xlabel("Fraction Variance Unexplained")
-    plt.savefig("pca_perplexity.png")
+    plt.savefig(os.path.join(BASE_FOLDER, "pca_perplexity.png"))

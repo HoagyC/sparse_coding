@@ -35,6 +35,8 @@ from concept_erasure import LeaceEraser
 
 _batch, _sequence, _n_dict_components, _d_activation, _vocab_size = None, None, None, None, None
 
+BASE_FOLDER = "~/sparse_coding_aidan"
+
 def logits_under_ablation(
     model: HookedTransformer,
     lens: LearnedDict,
@@ -668,7 +670,7 @@ def new_bottleneck_test():
         return -(correct - incorrect).mean().item()
 
     layer = 3
-    activation_dataset = torch.load(f"activation_data/layer_3/0.pt")
+    activation_dataset = torch.load(os.path.join(BASE_FOLDER, f"activation_data/layer_3/0.pt"))
     activation_dataset = activation_dataset.to(device, dtype=torch.float32)
 
     #diff_mean_scores = diff_mean_activation_editing(
@@ -697,7 +699,7 @@ def new_bottleneck_test():
     best_dicts = {}
     ratios = [4]
     dict_sets = [(ratio, "learned_{max_fvu:.2f}", torch.load(f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r{ratio}/_9/learned_dicts.pt")) for ratio in ratios]
-    dict_sets += [(4, "zero_l1_baseline", torch.load("output_zero_b_4/_7/learned_dicts.pt"))]
+    dict_sets += [(4, "zero_l1_baseline", torch.load(os.path.join(BASE_FOLDER, "output_zero_b_4/_7/learned_dicts.pt")))]
 
     print("evaluating dicts")
     for max_fvu in max_fvus:
@@ -747,10 +749,10 @@ def new_bottleneck_test():
             scores[name].append((tau, graph, div, corruption))
             print(f"tau: {tau:.3e} ({i+1}/{len(tau_values)}), graph size: {len(graph)}, div: {div:.3e}, corruption: {corruption:.2f}")
 
-    torch.save(scores, f"dict_scores_layer_{layer}.pt")
-    torch.save(dictionaries, f"dictionaries_layer_{layer}.pt")
+    torch.save(scores, os.path.join(BASE_FOLDER, f"dict_scores_layer_{layer}.pt"))
+    torch.save(dictionaries, os.path.join(BASE_FOLDER, f"dictionaries_layer_{layer}.pt"))
 
-    #torch.save(diff_mean_scores, f"diff_mean_scores_layer_{layer}.pt")
+    #torch.save(diff_mean_scores, os.path.join(BASE_FOLDER, f"diff_mean_scores_layer_{layer}.pt"))
 
 def erasure_test():
     torch.autograd.set_grad_enabled(False)
@@ -779,7 +781,7 @@ def erasure_test():
         return torch.abs(pred - 0.5).item() + 0.5
     
     layer = 2
-    activation_dataset = torch.load(f"activation_data/layer_{layer}/0.pt")
+    activation_dataset = torch.load(os.path.join(BASE_FOLDER, f"activation_data/layer_{layer}/0.pt"))
     activation_dataset = activation_dataset.to(device, dtype=torch.float32)
 
     max_fvu = 0.05
@@ -823,8 +825,8 @@ def erasure_test():
 
     print(f"base score: {base_score:.3e}")
 
-    torch.save((leace_score, leace_edit, base_score), f"leace_scores_layer_{layer}.pt")
-    torch.save(leace_eraser, f"leace_eraser_layer_{layer}.pt")
+    torch.save((leace_score, leace_edit, base_score), os.path.join(BASE_FOLDER, f"leace_scores_layer_{layer}.pt"))
+    torch.save(leace_eraser, os.path.join(BASE_FOLDER, f"leace_eraser_layer_{layer}.pt"))
 
     scores = {}
     tau_values = np.logspace(-4, 0, 10)
@@ -839,8 +841,8 @@ def erasure_test():
             ablation_rank="full",
         )
 
-    torch.save(scores, f"erasure_scores_layer_{layer}.pt")
-    torch.save(dictionaries, f"erasure_dictionaries_layer_{layer}.pt")
+    torch.save(scores, os.path.join(BASE_FOLDER, f"erasure_scores_layer_{layer}.pt"))
+    torch.save(dictionaries, os.path.join(BASE_FOLDER, f"erasure_dictionaries_layer_{layer}.pt"))
 
 if __name__ == "__main__":
     erasure_test()

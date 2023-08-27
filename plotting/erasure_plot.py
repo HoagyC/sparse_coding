@@ -8,11 +8,14 @@ import shutil
 
 import itertools
 
-def plot_bottleneck_scores():
-    shutil.rmtree("graphs", ignore_errors=True)
-    os.mkdir("graphs")
+BASE_FOLDER = "~/sparse_coding_aidan"
 
-    scores = torch.load("dict_scores_layer_3.pt")
+def plot_bottleneck_scores():
+    graphs_folder = os.path.join(BASE_FOLDER, "graphs")
+    shutil.rmtree(graphs_folder, ignore_errors=True)
+    os.mkdir(graphs_folder)
+
+    scores = torch.load(os.path.join(BASE_FOLDER, "dict_scores_layer_3.pt"))
 
     print(list(scores.keys()))
 
@@ -41,17 +44,18 @@ def plot_bottleneck_scores():
 
     ax.legend()
 
-    fig.savefig("graphs/bottleneck_scores.png")
+    fig.savefig(os.path.join(graphs_folder, "bottleneck_scores.png"))
 
 def plot_erasure_scores():
-    shutil.rmtree("graphs", ignore_errors=True)
-    os.mkdir("graphs")
+    graphs_folder = os.path.join(BASE_FOLDER, "graphs")
+    shutil.rmtree(graphs_folder, ignore_errors=True)
+    os.mkdir(graphs_folder)
+    
+    leace_score, leace_edit, base_score = torch.load(os.path.join(BASE_FOLDER, "leace_scores_layer_2.pt"))
 
-    leace_score, leace_edit, base_score = torch.load("leace_scores_layer_2.pt")
+    scores = torch.load(os.path.join(BASE_FOLDER, "erasure_scores_layer_2.pt"))
 
-    scores = torch.load("erasure_scores_layer_2.pt")
-
-    kl_divs = torch.load("kl_div_scores_layer_2.pt")
+    kl_divs = torch.load(os.path.join(BASE_FOLDER, "kl_div_scores_layer_2.pt"))
 
     colors = ["red", "blue", "green", "orange", "purple", "brown", "pink", "gray", "olive", "cyan"]
     markers = ["x", "+", "*", "o", "v", "^", "<", ">", "s", "."]
@@ -82,7 +86,7 @@ def plot_erasure_scores():
 
     ax.legend()
 
-    plt.savefig("graphs/erasure_by_edit_magnitude.png")
+    plt.savefig(os.path.join(graphs_folder, "erasure_by_edit_magnitude.png"))
 
     plt.close(fig)
     del fig, ax
@@ -99,7 +103,7 @@ def plot_erasure_scores():
 
     ax.legend()
 
-    plt.savefig("graphs/erasure_by_kl_div.png")
+    plt.savefig(os.path.join(graphs_folder, "erasure_by_kl_div.png"))
 
 if __name__ == "__main__":
     #plot_bottleneck_scores()

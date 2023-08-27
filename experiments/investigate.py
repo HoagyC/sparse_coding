@@ -1,13 +1,17 @@
 """
 Looking at whether there are systematic differences between feature that have converged with larger dicts and those that have not.
 """
+import os
 import pickle
+import sys
 
 import matplotlib.pyplot as plt
 import torch
 
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+
 from argparser import parse_args
-from run import run_mmcs_with_larger, AutoEncoder
+from standard_metrics import run_mmcs_with_larger
 
 def test_diversity_of_random_features():
     random_features = torch.randn(10000, 128)
@@ -34,13 +38,9 @@ def test_diversity_of_random_features():
     plt.savefig("outputs/enn_vs_mmcs_gaussian.png")
 
 
-
-
 def main(cfg):
-    # load in two autoencoders
-    with open(cfg.load_autoencoders, "rb") as f:
-        autoencoders = pickle.load(f)
-    # autoencoders = torch.load(cfg.load_autoencoders, map_location=torch.device("cpu"))
+    # load in two autoencoder
+    autoencoders = torch.load("location_A.pt", map_location=torch.device("cpu"))
 
     print(len(autoencoders), len(autoencoders[0]))
     ae1, ae2 = autoencoders[0][2:4]

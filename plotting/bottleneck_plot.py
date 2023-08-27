@@ -7,10 +7,10 @@ import os
 import shutil
 
 if __name__ == "__main__":
+    base_folder = "sparse_coding_aidan"
+    scores = torch.load(os.path.join(base_folder, "dict_scores_layer_2.pt"))
 
-    scores = torch.load("dict_scores_layer_2.pt")
-
-    diff_mean_scores = torch.load("diff_mean_scores_layer_2.pt")
+    diff_mean_scores = torch.load(os.path.join("diff_mean_scores_layer_2.pt"))
 
     fig, ax = plt.subplots()
 
@@ -41,11 +41,12 @@ if __name__ == "__main__":
     #ax.set_xscale("log")
 
     ax.legend()
+    graph_folder = os.path.join(base_folder, "graphs")
 
-    shutil.rmtree("graphs", ignore_errors=True)
-    os.mkdir("graphs")
+    shutil.rmtree(graph_folder, ignore_errors=True)
+    os.mkdir(graph_folder)
 
-    plt.savefig("graphs/score_size.png")
+    plt.savefig(os.path.join(graph_folder, "score_size.png"))
 
     plt.close(fig)
     del fig, ax

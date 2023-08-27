@@ -1,3 +1,4 @@
+import os
 from functools import partial
 from itertools import product
 from typing import List, Tuple, Union, Any, Dict, Literal, Optional, Callable
@@ -36,6 +37,8 @@ from concept_erasure import LeaceEraser
 from bottleneck_test import resample_ablation_hook
 
 from datasets import Dataset, load_dataset
+
+BASE_FOLDER = "~/sparse_coding_aidan"
 
 def ablate_dirs_intervention(lens, loc, features_to_ablate):
     def ablation_intervention(tensor, hook=None):
@@ -126,16 +129,16 @@ if __name__ == "__main__":
 
     scores = {}
 
-    eraser = torch.load("leace_eraser_layer_2.pt")
+    eraser = torch.load(os.path.join(BASE_FOLDER, "leace_eraser_layer_2.pt"))
     eraser_hook = eraser_intervention(eraser)
     scores["LEACE"] = eval_hook(model, eraser_hook, token_tensors, (2, "residual"), base_logits, max_batches=n_batches, batch_size=batch_size, device=device)
 
     print(f"KL LEACE: {scores['LEACE']}")
 
-    dicts = torch.load("erasure_dictionaries_layer_2.pt")
+    dicts = torch.load(os.path.join(BASE_FOLDER, "erasure_dictionaries_layer_2.pt"))
     dict, _ = dicts["learned_2048"]
 
-    idxs_sets = torch.load("erasure_scores_layer_2.pt")["learned_2048"]
+    idxs_sets = torch.load(os.path.join(BASE_FOLDER, "erasure_scores_layer_2.pt"))["learned_2048"]
 
     for i, (idxs, _, _) in enumerate(idxs_sets):
         hook, _ = resample_ablation_hook(
@@ -157,4 +160,4 @@ if __name__ == "__main__":
 
         print(f"KL Learned {i}: {scores[f'learned_2048_{i}']}")
     
-    torch.save(scores, "kl_div_scores_layer_2.pt")
+    torch.save(scores, os.path.join(BASE_FOLDER, "kl_div_scores_layer_2.pt"))

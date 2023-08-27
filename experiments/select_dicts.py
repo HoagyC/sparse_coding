@@ -14,6 +14,7 @@ import tqdm
 
 TARGET_SPARSITY = 180
 DICT_RATIO = 4
+BASE_FOLDER = "~/sparse_coding_aidan"
 
 device = torch.device("cuda:0")
 
@@ -60,13 +61,13 @@ def init_model_dataset(cfg):
         print(f"Activations in {cfg.dataset_folder} already exist, loading them")
 
 def init_test_data(cfg, n_layers):
-    os.makedirs("activation_data_layers", exist_ok=True)
+    os.makedirs(os.path.join(BASE_FOLDER, "activation_data_layers"), exist_ok=True)
 
     for layer in range(6):
         cfg.layer = layer
         cfg.use_residual = True
         cfg.n_chunks = 1
-        cfg.dataset_folder = f"activation_data_layers/layer_{layer}"
+        cfg.dataset_folder = os.path.join(BASE_FOLDER, "activation_data_layers", f"layer_{layer}")
 
         os.makedirs(cfg.dataset_folder, exist_ok=True)
 
@@ -79,7 +80,7 @@ for layer, l_dicts in tqdm.tqdm(enumerate(dicts)):
     best_idx = -1
     scores = []
 
-    chunk = torch.load(f"activation_data/layer_{layer}/0.pt").to(device, dtype=torch.float32)[:100000]
+    chunk = torch.load(os.path.join(BASE_FOLDER, "activation_data", f"layer_{layer}", "0.pt")).to(device, dtype=torch.float32)[:100000]
 
     for idx, (l_dict, hyperparams) in enumerate(l_dicts):
         l_dict.to_device(device)
@@ -108,5 +109,5 @@ for layer, (best_idx, scores) in enumerate(all_scores):
 plt.legend()
 plt.xlabel("Sparsity")
 plt.ylabel("FVU")
-plt.savefig("sparsity_fvu.png")
+plt.savefig(os.path.join(BASE_FOLDER, "sparsity_fvu.png"))
 plt.close()

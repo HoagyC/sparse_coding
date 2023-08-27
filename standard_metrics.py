@@ -726,6 +726,40 @@ def calc_all_kurtosis():
 
     pickle.dump(results, open("kurtosis_data.pkl", "wb"))
 
+
+def run_mmcs_with_larger(learned_dicts, threshold=0.9, device: Union[str, torch.device] = "cpu"):
+    n_l1_coefs, n_dict_sizes = len(learned_dicts), len(learned_dicts[0])
+    av_mmcs_with_larger_dicts = np.zeros((n_l1_coefs, n_dict_sizes))
+    feats_above_threshold = np.zeros((n_l1_coefs, n_dict_sizes))
+    full_max_cosine_sim_for_histograms = np.empty((n_l1_coefs, n_dict_sizes-1), dtype=object)
+
+
+    for l1_ndx, dict_size_ndx in tqdm(list(product(range(n_l1_coefs), range(n_dict_sizes)))):
+        if dict_size_ndx == n_dict_sizes - 1:
+            continue
+        smaller_dict = learned_dicts[l1_ndx][dict_size_ndx]
+        # Clone the larger dict, because we're going to zero it out to do replacements
+        larger_dict_clone = learned_dicts[l1_ndx][dict_size_ndx + 1].clone().to(device)
+        smaller_dict_features, _ = smaller_dict.shape
+        larger_dict_features, _ = larger_dict_clone.shape
+        # Hungary algorithm
+        from scipy.optimize import linear_sum_assignment
+        # Calculate all cosine similarities and store in a 2D array
+        cos_sims = np.zeros((smaller_dict_features, larger_dict_features))
+        for idx, vector in enumerate(smaller_dict):
+            cos_sims[idx] = torch.nn.functional.cosine_similarity(vector.to(device), larger_dict_clone, dim=1).cpu().numpy()
+        # Convert to a minimization problem
+        cos_sims = 1 - cos_sims
+        # Use the Hungarian algorithm to solve the assignment problem
+        row_ind, col_ind = linear_sum_assignment(cos_sims)
+        # Retrieve the max cosine similarities and corresponding indices
+        max_cosine_similarities = 1 - cos_sims[row_ind, col_ind]
+        av_mmcs_with_larger_dicts[l1_ndx, dict_size_ndx] = max_cosine_similarities.mean().item()
+        threshold = 0.9
+        feats_above_threshold[l1_ndx, dict_size_ndx] = (max_cosine_similarities > threshold).sum().item() / smaller_dict_features * 100
+        full_max_cosine_sim_for_histograms[l1_ndx][dict_size_ndx] = max_cosine_similarities
+    return av_mmcs_with_larger_dicts, feats_above_threshold, full_max_cosine_sim_for_histograms
+
 if __name__ == "__main__":
     make_one_chunk_per_layer()
 
