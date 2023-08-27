@@ -10,6 +10,7 @@ from cluster_runs import dispatch_job_on_chunk
 
 from autoencoders.ensemble import FunctionalEnsemble
 from autoencoders.sae_ensemble import FunctionalSAE, FunctionalTiedSAE, FunctionalMaskedTiedSAE, FunctionalThresholdingSAE
+from autencoders.mlp_tests import FunctionalPositiveTiedSAE
 from autoencoders.semilinear_autoencoder import SemiLinearSAE
 from autoencoders.residual_denoising_autoencoder import FunctionalLISTADenoisingSAE, FunctionalResidualDenoisingSAE
 from autoencoders.direct_coef_search import DirectCoefOptimizer
