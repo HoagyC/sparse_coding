@@ -12,7 +12,7 @@ from transformer_lens.loading_from_pretrained import convert_hf_model_config, ge
 
 VAST_NUM = 4
 # DEST_ADDR = f"root@ssh{VAST_NUM}.vast.ai"
-DEST_ADDR = "mchorse@216.153.50.63"
+DEST_ADDR = "mchorse@198.176.96.64"
 SSH_PYTHON = "/opt/conda/bin/python"
 
 PORT = 22
