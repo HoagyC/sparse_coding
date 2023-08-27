@@ -39,7 +39,7 @@ def read_scores(results_folder: str, score_mode: str = "top") -> Dict[str, Tuple
         for feature_folder in feat_folders:
             feature_ndx = int(feature_folder.split("_")[1])
             folder = os.path.join(results_folder, transform, feature_folder)
-            if not os.path.exists(folder):
+            if not os.path.exists(folder) or not os.path.exists(os.path.join(folder, "explanation.txt")):
                 continue
             explanation_text = open(os.path.join(folder, "explanation.txt")).read()
             # score should be on the second line but if explanation had newlines could be on the third or below
