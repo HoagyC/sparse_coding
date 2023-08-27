@@ -256,7 +256,7 @@ def synthetic_linear_range(cfg):
     return (ensembles, ["dict_size"], ["l1_alpha"], {"dict_size": dict_sizes, "l1_alpha": l1_vals})
 
 def dense_l1_range_experiment(cfg):
-    l1_values = np.logspace(-4, -2, 8)
+    l1_values = np.logspace(-4, -2, 16)
     devices = [f"cuda:{i}" for i in range(8)]
 
     ensembles = []
@@ -562,15 +562,19 @@ def run_dense_l1_range():
     cfg.dataset_name = "EleutherAI/pile"
 
     cfg.batch_size = 2048
-    cfg.layer_loc = "attn"
+    cfg.layer_loc = "mlp"
     cfg.activation_width = 512
+    cfg.layer=3
+    cfg.bias_decay=0
+    cfg.tied_ae=True
 
-    cfg.output_folder = f"layerloctest_{'_tied' if cfg.tied_ae else ''}_{cfg.layer_loc}_l{cfg.layer}_r{int(cfg.learned_dict_ratio)}"
+    cfg.output_folder = f"normal_{'_tied' if cfg.tied_ae else ''}_{cfg.layer_loc}_l{cfg.layer}_r{int(cfg.learned_dict_ratio)}"
     cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{cfg.layer_loc}"
     cfg.use_synthetic_dataset = False
     cfg.dtype = torch.float32
-    cfg.lr = 3e-4
-    cfg.n_chunks=30
+    cfg.lr = 1e-3
+    cfg.n_chunks=20
+    cfg.n_repetitions=15
 
     sweep(dense_l1_range_experiment, cfg)
 
@@ -583,18 +587,19 @@ def run_across_layers():
     cfg.use_wandb = False
     cfg.activation_width = 512
     cfg.save_every = 5
-    cfg.n_chunks=10
+    cfg.n_chunks=20
+    cfg.n_repetitions=20
     cfg.tied_ae=True
     for layer in [0, 1, 2, 3, 4, 5]:
-        for layer_loc in ["residual", "mlp"]:
-            for dict_ratio in [0.5, 1, 2, 4, 8, 16, 32]:
+        for layer_loc in ["residual"]:
+            for dict_ratio in [4]:
                 cfg.layer = layer
                 cfg.layer_loc = layer_loc
                 cfg.learned_dict_ratio = dict_ratio
 
                 print(f"Running layer {layer}, layer location {layer_loc}, dict_ratio {dict_ratio}")
 
-                cfg.output_folder = f"output_hoagy_dense_sweep{'_tied' if cfg.tied_ae else ''}_{layer_loc}_l{cfg.layer}_r{int(cfg.learned_dict_ratio)}"
+                cfg.output_folder = f"/mnt/ssd-cluster/longrun2408/{'tied' if cfg.tied_ae else 'untied'}_{layer_loc}_l{cfg.layer}_r{int(cfg.learned_dict_ratio)}"
                 cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{layer_loc}"
                 
                 print(f"Output folder: {cfg.output_folder}, dataset folder: {cfg.dataset_folder}")
@@ -603,7 +608,7 @@ def run_across_layers():
                 cfg.dtype = torch.float32
                 cfg.lr = 1e-3
 
-                sweep(dense_l1_range_experiment, cfg)
+                sweep(simple_setoff, cfg)
 
             # delete the dataset to save space
             shutil.rmtree(cfg.dataset_folder)
@@ -944,9 +949,66 @@ def run_across_layers_mlp_long():
     shutil.rmtree(cfg.dataset_folder)
 
 
+def run_positive(cfg):
+    l1_values = np.logspace(-5, -3.5, 8)
+    l1_values = np.concatenate([[0], l1_values])
+    ensembles = []
+
+    dict_size = int(cfg.activation_width * cfg.learned_dict_ratio)
+    device = cfg.device
+    models = [
+        FunctionalPositiveTiedSAE.init(cfg.activation_width, dict_size, l1_alpha, bias_decay=cfg.bias_decay, dtype=cfg.dtype)
+        for l1_alpha in l1_values
+    ]
+        
+    ensemble = FunctionalEnsemble(
+        models, FunctionalPositiveTiedSAE,
+        torchopt.adam, {
+            "lr": cfg.lr
+        },
+        device=device
+    )
+    args = {"batch_size": cfg.batch_size, "device": device, "dict_size": dict_size}
+    name = f"positive_{cfg.device}"
+    ensembles.append((ensemble, args, name))
+
+    print(len(ensembles), "ensembles")
+    return (ensembles, ["dict_size"], ["l1_alpha"], {"dict_size": [dict_size], "l1_alpha": l1_values})
+
+def setup_positives():
+    cfg = parse_args()
+    # set device and layer in config through command line
+    cfg.model_name = "EleutherAI/pythia-70m-deduped"
+    cfg.dataset_name = "EleutherAI/pile"
+
+    cfg.batch_size = 2048
+    cfg.use_wandb = True
+    cfg.wandb_images = True
+    cfg.save_every = 10
+    cfg.tied_ae = True
+    cfg.use_synthetic_dataset = False
+    cfg.dtype = torch.float32
+    cfg.lr = 1e-3
+    cfg.n_chunks = 20
+    cfg.n_repetitions = 15
+    cfg.activation_width=2048
+    cfg.layer_loc = "mlp"
+    
+    for bias_decay in [0.01]:
+        cfg.bias_decay = bias_decay
+        for dict_ratio in [1.0]:
+            cfg.learned_dict_ratio = dict_ratio
+
+            cfg.output_folder = f"positive_{cfg.layer_loc}_l{cfg.layer}_r{cfg.learned_dict_ratio}_bd{cfg.bias_decay}"
+            cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{cfg.layer_loc}"
+            sweep(run_positive, cfg)
+
+    # delete the dataset
+    shutil.rmtree(cfg.dataset_folder)
+
 
 def simple_setoff(cfg):
-    l1_values = np.logspace(-5, -3.5, 8)
+    l1_values = np.logspace(-4, -2, 8)
     l1_values = np.concatenate([[0], l1_values])
     ensembles = []
 
@@ -980,7 +1042,7 @@ def simple_setoff(cfg):
             device=device
         )
     args = {"batch_size": cfg.batch_size, "device": device, "dict_size": dict_size}
-    name = f"zeros_{cfg.device}"
+    name = f"simple_{cfg.device}"
     ensembles.append((ensemble, args, name))
 
     print(len(ensembles), "ensembles")
@@ -1049,9 +1111,81 @@ def simple_run():
     sweep(simple_setoff, cfg)
 
 
+def run_single_layer():
+    cfg = parse_args()
+    cfg.model_name = "EleutherAI/pythia-70m-deduped"
+    cfg.dataset_name = "EleutherAI/pile"
+
+    cfg.batch_size = 1024
+    cfg.use_wandb = True
+    cfg.wandb_images = False
+    cfg.activation_width = 512
+    cfg.save_every = 5
+    cfg.n_chunks=64
+    cfg.n_repetitions=1
+    cfg.tied_ae=True
+    for layer_loc in ["residual"]:
+        cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{layer_loc}"
+        # shutil.rmtree(cfg.dataset_folder)
+        for dict_ratio in [6]:
+            cfg.layer_loc = layer_loc
+            cfg.learned_dict_ratio = dict_ratio
+
+            print(f"Running layer {cfg.layer}, layer location {layer_loc}, dict_ratio {dict_ratio}")
+
+            cfg.output_folder = f"/mnt/ssd-cluster/longrun2408/{'tied' if cfg.tied_ae else 'untied'}_{layer_loc}_l{cfg.layer}_r{int(cfg.learned_dict_ratio)}"
+            
+            print(f"Output folder: {cfg.output_folder}, dataset folder: {cfg.dataset_folder}")
+            
+            cfg.use_synthetic_dataset = False
+            cfg.dtype = torch.float32
+            cfg.lr = 1e-3
+
+            sweep(simple_setoff, cfg)
+
+        # delete the dataset to save space
+        shutil.rmtree(cfg.dataset_folder)
+        
+def run_single_layer_gpt2():
+    cfg = parse_args()
+    cfg.model_name = "gpt2"
+    cfg.dataset_name = "openwebtext"
+
+    cfg.batch_size = 1024
+    cfg.use_wandb = True
+    cfg.wandb_images = False
+    cfg.activation_width = 768
+    cfg.save_every = 5
+    cfg.n_chunks=10
+    cfg.n_repetitions=4
+    cfg.tied_ae=True
+    for layer_loc in ["residual"]:
+        cfg.dataset_folder = f"pilechunks_gpt2sm_l{cfg.layer}_{layer_loc}"
+        # shutil.rmtree(cfg.dataset_folder)
+        for dict_ratio in [2,4,8,16]:
+            cfg.layer_loc = layer_loc
+            cfg.learned_dict_ratio = dict_ratio
+
+            print(f"Running layer {cfg.layer}, layer location {layer_loc}, dict_ratio {dict_ratio}")
+
+            cfg.output_folder = f"/mnt/ssd-cluster/gpt2small/{'tied' if cfg.tied_ae else 'untied'}_{layer_loc}_l{cfg.layer}_r{int(cfg.learned_dict_ratio)}"
+            
+            print(f"Output folder: {cfg.output_folder}, dataset folder: {cfg.dataset_folder}")
+            
+            cfg.use_synthetic_dataset = False
+            cfg.dtype = torch.float32
+            cfg.lr = 1e-3
+
+            sweep(simple_setoff, cfg)
+
+        # delete the dataset to save space
+        shutil.rmtree(cfg.dataset_folder)
+
 if __name__ == "__main__":
-    import sys
-    device = sys.argv[1]
-    layer = int(sys.argv[2])
-    sys.argv = sys.argv[:1]
-    run_all_zeros(device, layer)
+    # import sys
+    # device = sys.argv[1]
+    # layer = int(sys.argv[2])
+    # sys.argv = sys.argv[:1]
+    # run_all_zeros(device, layer)
+    # setup_positives()
+    run_single_layer_gpt2()
