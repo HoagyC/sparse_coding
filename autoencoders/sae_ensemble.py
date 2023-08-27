@@ -1,16 +1,24 @@
+import copy
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 import torchopt
 
-import copy
+from autoencoders.learned_dict import (LearnedDict, ReverseSAE, TiedSAE,
+                                       UntiedSAE)
 
-from autoencoders.learned_dict import LearnedDict, UntiedSAE, TiedSAE, ReverseSAE
 
 class FunctionalSAE:
     @staticmethod
-    def init(activation_size, n_dict_components, l1_alpha, bias_decay=0.0, device=None, dtype=None):
+    def init(
+        activation_size,
+        n_dict_components,
+        l1_alpha,
+        bias_decay=0.0,
+        device=None,
+        dtype=None,
+    ):
         params = {}
         buffers = {}
 
@@ -39,7 +47,7 @@ class FunctionalSAE:
         c = torch.clamp(c, min=0.0)
 
         return c
-    
+
     @staticmethod
     def loss(params, buffers, batch):
         c = torch.einsum("nd,bd->bn", params["encoder"], batch)
@@ -54,7 +62,7 @@ class FunctionalSAE:
         l_reconstruction = (x_hat - batch).pow(2).mean()
         l_l1 = buffers["l1_alpha"] * torch.norm(c, 1, dim=-1).mean()
         l_bias_decay = buffers["bias_decay"] * torch.norm(params["encoder_bias"], 2)
-        
+
         loss_data = {
             "loss": l_reconstruction + l_l1 + l_bias_decay,
             "l_reconstruction": l_reconstruction,
@@ -68,9 +76,17 @@ class FunctionalSAE:
 
         return l_reconstruction + l_l1 + l_bias_decay, (loss_data, aux_data)
 
+
 class FunctionalTiedSAE:
     @staticmethod
-    def init(activation_size, n_dict_components, l1_alpha, bias_decay=0.0, device=None, dtype=None):
+    def init(
+        activation_size,
+        n_dict_components,
+        l1_alpha,
+        bias_decay=0.0,
+        device=None,
+        dtype=None,
+    ):
         params = {}
         buffers = {}
 
@@ -103,7 +119,7 @@ class FunctionalTiedSAE:
         l_reconstruction = (x_hat - batch).pow(2).mean()
         l_l1 = buffers["l1_alpha"] * torch.norm(c, 1, dim=-1).mean()
         l_bias_decay = buffers["bias_decay"] * torch.norm(params["encoder_bias"], 2)
-        
+
         loss_data = {
             "loss": l_reconstruction + l_l1 + l_bias_decay,
             "l_reconstruction": l_reconstruction,
@@ -116,6 +132,7 @@ class FunctionalTiedSAE:
         }
 
         return l_reconstruction + l_l1 + l_bias_decay, (loss_data, aux_data)
+
 
 class FunctionalThresholdingSAE:
     @staticmethod
@@ -134,18 +151,18 @@ class FunctionalThresholdingSAE:
         buffers["l1_alpha"] = torch.tensor(l1_alpha, device=device, dtype=dtype)
 
         return params, buffers
-    
+
     @staticmethod
     def encode(params, batch, learned_dict):
         c = torch.einsum("nd,bd->bn", learned_dict, batch)
 
         a_sq = params["activation_scale"].pow(2)
         c = (c + params["activation_gain"]) / torch.clamp(a_sq, 1e-8)
-        c = F.relu6(60 * (c - 0.9)) / 6 + F.relu(c-1)
+        c = F.relu6(60 * (c - 0.9)) / 6 + F.relu(c - 1)
         c = c * a_sq
 
         return c
-    
+
     @staticmethod
     def loss(params, buffers, batch):
         dict_norms = torch.norm(params["encoder"], 2, dim=-1)
@@ -169,15 +186,16 @@ class FunctionalThresholdingSAE:
         }
 
         return l_reconstruction + l_l1, (loss_data, aux_data)
-    
+
     @staticmethod
     def to_learned_dict(params, buffers):
         return ThresholdingSAE(params)
 
+
 class ThresholdingSAE(LearnedDict):
     def __init__(self, params):
         self.params = params
-    
+
     def get_learned_dict(self):
         dict_norms = torch.norm(self.params["encoder"], 2, dim=-1)
         return self.params["encoder"] / torch.clamp(dict_norms, 1e-8)[:, None]
@@ -185,14 +203,23 @@ class ThresholdingSAE(LearnedDict):
     def encode(self, batch):
         c = FunctionalThresholdingSAE.encode(self.params, batch, self.get_learned_dict())
         return c
-    
+
     def to_device(self, device):
         self.params = {k: v.to(device) for k, v in self.params.items()}
+
 
 # allows stacking between different dict sizes
 class FunctionalMaskedTiedSAE:
     @staticmethod
-    def init(activation_size, n_dict_components, n_components_stack, l1_alpha, bias_decay=0.0, device=None, dtype=None):
+    def init(
+        activation_size,
+        n_dict_components,
+        n_components_stack,
+        l1_alpha,
+        bias_decay=0.0,
+        device=None,
+        dtype=None,
+    ):
         params = {}
         buffers = {}
 
@@ -209,12 +236,16 @@ class FunctionalMaskedTiedSAE:
         buffers["coef_mask"][:n_dict_components] = False
 
         return params, buffers
-    
+
     @staticmethod
     def to_learned_dict(params, buffers):
         n_components = buffers["dict_size"].item()
-        return TiedSAE(params["encoder"][:n_components], params["encoder_bias"][:n_components], norm_encoder=True)
-    
+        return TiedSAE(
+            params["encoder"][:n_components],
+            params["encoder_bias"][:n_components],
+            norm_encoder=True,
+        )
+
     @staticmethod
     def loss(params, buffers, batch):
         decoder_norms = torch.norm(params["encoder"], 2, dim=-1)
@@ -243,12 +274,20 @@ class FunctionalMaskedTiedSAE:
         }
 
         return l_reconstruction + l_l1, (loss_data, aux_data)
-    
+
 
 # allows stacking between different dict sizes
 class FunctionalMaskedSAE:
     @staticmethod
-    def init(activation_size, n_dict_components, n_components_stack, l1_alpha, bias_decay=0.0, device=None, dtype=None):
+    def init(
+        activation_size,
+        n_dict_components,
+        n_components_stack,
+        l1_alpha,
+        bias_decay=0.0,
+        device=None,
+        dtype=None,
+    ):
         params = {}
         buffers = {}
 
@@ -268,12 +307,16 @@ class FunctionalMaskedSAE:
         buffers["coef_mask"][:n_dict_components] = False
 
         return params, buffers
-    
+
     @staticmethod
     def to_learned_dict(params, buffers):
         n_components = buffers["dict_size"].item()
-        return UntiedSAE(params["encoder"][:n_components], params["decoder"][:n_components], params["encoder_bias"][:n_components])
-    
+        return UntiedSAE(
+            params["encoder"][:n_components],
+            params["decoder"][:n_components],
+            params["encoder_bias"][:n_components],
+        )
+
     @staticmethod
     def loss(params, buffers, batch):
         decoder_norms = torch.norm(params["decoder"], 2, dim=-1)
@@ -306,7 +349,14 @@ class FunctionalMaskedSAE:
 
 class FunctionalReverseSAE:
     @staticmethod
-    def init(activation_size, n_dict_components, l1_alpha, bias_decay=0.0, device=None, dtype=None):
+    def init(
+        activation_size,
+        n_dict_components,
+        l1_alpha,
+        bias_decay=0.0,
+        device=None,
+        dtype=None,
+    ):
         params = {}
         buffers = {}
 
@@ -341,7 +391,7 @@ class FunctionalReverseSAE:
         l_reconstruction = (x_hat - batch).pow(2).mean()
         l_l1 = buffers["l1_alpha"] * torch.norm(c, 1, dim=-1).mean()
         l_bias_decay = buffers["bias_decay"] * torch.norm(params["encoder_bias"], 2)
-        
+
         loss_data = {
             "loss": l_reconstruction + l_l1 + l_bias_decay,
             "l_reconstruction": l_reconstruction,

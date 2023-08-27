@@ -1,23 +1,25 @@
-import unittest
-
-# set the path to the root of the project
-from copy import deepcopy
-import sys
 import os
 import pickle
-sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+import sys
+import unittest
+# set the path to the root of the project
+from copy import deepcopy
 
-from interpret import make_feature_activation_dataset
-from argparser import parse_args
-from utils import dotdict, make_tensor_name
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 from datasets import load_dataset
 from transformer_lens import HookedTransformer
 
+from activation_dataset import make_tensor_name
+from argparser import parse_args
+from interpret import make_feature_activation_dataset
+from utils import dotdict
+
+
 class TestMain(unittest.TestCase):
     def setUp(self) -> None:
         self.default_cfg = parse_args()
-    
+
     def test_l1_mlp(self):
         cfg = deepcopy(self.default_cfg)
         self.layer = 1
@@ -27,7 +29,7 @@ class TestMain(unittest.TestCase):
             self.autoencoder = pickle.load(f).to("cuda")
         activation_fn_kwargs = {"autoencoder": self.autoencoder}
         self.transform_folder = os.path.join("auto_interp_results", "test_transform", "l1_mlp")
-        # clear the folder
+        # clear the folder
         if os.path.exists(self.transform_folder):
             for file in os.listdir(self.transform_folder):
                 os.remove(os.path.join(self.transform_folder, file))
@@ -57,7 +59,9 @@ class TestMain(unittest.TestCase):
             print(f"Testing position {position}")
             x_hat, activations = self.autoencoder(mlp_activation_data[position])
             for feature in range(2048):
-                assert abs(self.df[f"feature_{feature}_activation_{position}"][0] - activations[feature]) < 1e-3, f"feature {feature} does not match. Got {self.df[f'feature_{feature}_activation_{position}'][0]} but expected {activations[feature]}"
+                assert (
+                    abs(self.df[f"feature_{feature}_activation_{position}"][0] - activations[feature]) < 1e-3
+                ), f"feature {feature} does not match. Got {self.df[f'feature_{feature}_activation_{position}'][0]} but expected {activations[feature]}"
 
     def test_l2_residual(self):
         cfg = deepcopy(self.default_cfg)
@@ -67,7 +71,7 @@ class TestMain(unittest.TestCase):
         cfg.layer_loc = "residual"
         activation_fn_kwargs = {}
         self.transform_folder = os.path.join("auto_interp_results", "test_transform", "residual2")
-        # clear the folder
+        # clear the folder
         if os.path.exists(self.transform_folder):
             for file in os.listdir(self.transform_folder):
                 os.remove(os.path.join(self.transform_folder, file))
@@ -98,9 +102,11 @@ class TestMain(unittest.TestCase):
             print(f"Testing position {position}")
             activations = activation_data[position]
             for feature in range(512):
-                assert abs(self.df[f"feature_{feature}_activation_{position}"][0] - activations[feature]) < 1e-3 or abs(1 - (self.df[f"feature_{feature}_activation_{position}"][0]/activations[feature])) < 1e-3, \
-                f"feature {feature} does not match. Got {self.df[f'feature_{feature}_activation_{position}'][0]} but expected {activations[feature]}"
-    
+                assert (
+                    abs(self.df[f"feature_{feature}_activation_{position}"][0] - activations[feature]) < 1e-3
+                    or abs(1 - (self.df[f"feature_{feature}_activation_{position}"][0] / activations[feature])) < 1e-3
+                ), f"feature {feature} does not match. Got {self.df[f'feature_{feature}_activation_{position}'][0]} but expected {activations[feature]}"
+
     def tearDown(self) -> None:
         return super().tearDown()
 

@@ -13,14 +13,15 @@
 from datetime import datetime
 
 import numpy as np
-from sklearn.decomposition import NMF
 import torch
+from sklearn.decomposition import NMF
 from torchtyping import TensorType
 
 from autoencoders.learned_dict import LearnedDict
 from autoencoders.topk_encoder import TopKLearnedDict
 
 _n_samples, _activation_size = None, None
+
 
 class NMFEncoder(LearnedDict):
     def __init__(self, activation_size, n_components=0, shift=0.0):
@@ -31,10 +32,10 @@ class NMFEncoder(LearnedDict):
             self.n_feats = n_components
         self.nmf = NMF()
         self.shift = shift
-    
+
     def to_device(self, device):
         pass
-    
+
     def encode(self, x):
         if torch.min(x) < self.shift:
             print("Warning: data has values below expected minumum for NMF. This may cause errors.")
@@ -42,7 +43,7 @@ class NMFEncoder(LearnedDict):
         x.clamp_(min=0.0)
         c = self.nmf.transform(x.cpu().numpy().astype(np.float64))
         return torch.tensor(c, device=x.device)
-        
+
     def train(self, dataset: TensorType["_n_samples", "_activation_size"]):
         if torch.min(dataset) < self.shift:
             self.shift = torch.min(dataset)
@@ -50,7 +51,7 @@ class NMFEncoder(LearnedDict):
         assert dataset.shape[1] == self.activation_size
         print(f"Fitting NMF on {dataset.shape[0]} activations")
         nmf_start = datetime.now()
-        self.nmf.fit(dataset.cpu().numpy()) # 1GB of activations takes about 15m
+        self.nmf.fit(dataset.cpu().numpy())  # 1GB of activations takes about 15m
         print(f"NMF fit in {datetime.now() - nmf_start}")
 
     # WARNING, you can't get the proper coefficient matrix H just by multiplying by the learned dictionary W

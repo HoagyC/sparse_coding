@@ -1,28 +1,30 @@
 import pickle
-import torch
 import random
 
+import torch
 from transformers import AutoTokenizer
 
 COUNT_CUTOFF = 100000
 
 # max_name_toks = 3
 
-#prompt = "{name}'s gender is {gender}"
+# prompt = "{name}'s gender is {gender}"
 prompt = "{name} uses the pronouns"
-#prompt_len = 4
+# prompt_len = 4
 
 codes_map = {"M": 0, "F": 1}
 answer_map = {"M": " he", "F": " she"}
 
+
 def generate_gender_dataset(
     tokenizer_name,
-    n_male, n_female,
+    n_male,
+    n_female,
     pad_token_id=0,
 ):
     with open("gender_dataset.pkl", "rb") as f:
         max_name_toks, entries = pickle.load(f)
-    
+
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, padding_side="right")
     tokenizer.pad_token_id = pad_token_id
 
@@ -51,11 +53,11 @@ def generate_gender_dataset(
             if count_female >= n_female:
                 continue
             count_female += 1
-        
+
         t = tokenizer(
-            prompt.format(name=" "+name),
+            prompt.format(name=" " + name),
             padding="max_length",
-            max_length=prompt_len+max_name_toks
+            max_length=prompt_len + max_name_toks,
         )
 
         try:
@@ -66,7 +68,7 @@ def generate_gender_dataset(
         sequence_lengths.append(seq_len)
         prompts.append(t["input_ids"])
         classes.append(codes_map[code])
-    
+
     assert count_male == n_male
     assert count_female == n_female
 

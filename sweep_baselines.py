@@ -7,18 +7,18 @@ import os
 import torch
 import tqdm
 
-from autoencoders.pca import BatchedPCA
 from autoencoders.ica import ICAEncoder
-from autoencoders.nmf import NMFEncoder
 from autoencoders.learned_dict import IdentityReLU, RandomDict
-
+from autoencoders.nmf import NMFEncoder
+from autoencoders.pca import BatchedPCA
 from standard_metrics import mean_nonzero_activations
+
 
 def run_layer_baselines(args) -> None:
     layer: int
     layer_locs: list[str]
     chunks_folder: str
-    output_folder: str 
+    output_folder: str
     sparsity: int
     device: torch.device
     remake: bool = False
@@ -33,21 +33,20 @@ def run_layer_baselines(args) -> None:
         full_chunk = torch.load(full_chunk_path, map_location=device)
         activation_dim = full_chunk.shape[1]
 
-        # Load the learned dict with l1_alpha of 8e-4
+        # Load the learned dict with l1_alpha of 8e-4
         if layer_loc == "residual":
             learned_dicts = torch.load(f"/mnt/ssd-cluster/bigrun0308/tied_{layer_loc}_l{layer}_r1/_9/learned_dicts.pt")
             l1_vals = [hparams["l1_alpha"] for _, hparams in learned_dicts]
             print("l1 vals", list(enumerate(l1_vals)))
-            learned_dict = learned_dicts[7][0] # 7th is 8.5e-4
+            learned_dict = learned_dicts[7][0]  # 7th is 8.5e-4
             learned_dict.to_device(device)
             sparsity = mean_nonzero_activations(learned_dict, full_chunk.to(torch.float32)).sum().item()
             print(f"new sparsity for layer {layer}:", sparsity)
 
-
         if os.path.exists(os.path.join(output_folder, folder_name, "pca.pt")) and not remake:
             print("Skipping PCA")
         else:
-            # Run batched PCA on the layer
+            # Run batched PCA on the layer
             pca = BatchedPCA(n_dims=activation_dim, device=device)
             print("Training PCA")
             pca_batch_size = 500
@@ -56,8 +55,8 @@ def run_layer_baselines(args) -> None:
                     j = min(i + pca_batch_size, len(full_chunk))
                     batch = full_chunk[i:j]
                     pca.train_batch(batch)
-            
-            pca_ld = pca.to_learned_dict(sparsity=activation_dim) # No sparsity, use topK for that
+
+            pca_ld = pca.to_learned_dict(sparsity=activation_dim)  # No sparsity, use topK for that
             torch.save(pca_ld, os.path.join(output_folder, folder_name, "pca.pt"))
 
             pca_top_k = pca.to_topk_dict(sparsity)
@@ -66,7 +65,7 @@ def run_layer_baselines(args) -> None:
         if os.path.exists(os.path.join(output_folder, folder_name, "ica.pt")) and not remake:
             print("Skipping ICA")
         else:
-            # Run ICA
+            # Run ICA
             ica = ICAEncoder(activation_size=activation_dim)
             print("Training ICA")
             ica.train(full_chunk)
@@ -90,16 +89,19 @@ def run_layer_baselines(args) -> None:
         if os.path.exists(os.path.join(output_folder, folder_name, "random.pt")) and not remake:
             print("Skipping random")
         else:
-            # Run random dict
+            # Run random dict
             random_dict = RandomDict(activation_size=activation_dim)
             torch.save(random_dict, os.path.join(output_folder, folder_name, "random.pt"))
 
         if os.path.exists(os.path.join(output_folder, folder_name, "identity_relu.pt")) and not remake:
             print("Skipping identity relu")
         else:
-            # Run identity relu
+            # Run identity relu
             identity_relu = IdentityReLU(activation_size=activation_dim)
-            torch.save(identity_relu, os.path.join(output_folder, folder_name, "identity_relu.pt"))
+            torch.save(
+                identity_relu,
+                os.path.join(output_folder, folder_name, "identity_relu.pt"),
+            )
 
 
 def resave_change_sparsity() -> None:
@@ -112,7 +114,7 @@ def resave_change_sparsity() -> None:
         full_chunk_path = os.path.join(chunks_folder, folder_name, "0.pt")
         full_chunk = torch.load(full_chunk_path, map_location=device)
 
-        # Load the learned dict with l1_alpha of 8e-4
+        # Load the learned dict with l1_alpha of 8e-4
         learned_dicts = torch.load(f"/mnt/ssd-cluster/bigrun0308/tied_{layer_loc}_l{layer}_r1/_9/learned_dicts.pt")
         l1_vals = [hparams["l1_alpha"] for _, hparams in learned_dicts]
         print("l1 vals", list(enumerate(l1_vals)))
@@ -142,6 +144,7 @@ def resave_change_sparsity() -> None:
         pca_top_k = pca.to_topk_dict(sparsity)
         torch.save(pca_top_k, f"/mnt/ssd-cluster/baselines/{folder_name}/pca_topk.pt")
 
+
 def run_all() -> None:
     chunks_folder = "/mnt/ssd-cluster/single_chunks"
     output_folder = "/mnt/ssd-cluster/baselines"
@@ -152,10 +155,10 @@ def run_all() -> None:
     layers = list(range(6))
 
     layer_locs = ["mlp"]
-    devices = [f"cuda:{i}" for i in [1,2,3,4,6,7]]
+    devices = [f"cuda:{i}" for i in [1, 2, 3, 4, 6, 7]]
     args_list = [(layer, layer_locs, chunks_folder, output_folder, sparsity, devices[i]) for i, layer in enumerate(layers)]
 
-    with mp.Pool(processes=len(layers)) as pool:        
+    with mp.Pool(processes=len(layers)) as pool:
         pool.map(run_layer_baselines, args_list)
 
 

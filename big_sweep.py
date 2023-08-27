@@ -1,30 +1,28 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.multiprocessing as mp
-import torch.utils.data as data
-
-from cluster_runs import dispatch_job_on_chunk
-from activation_dataset import setup_data, check_transformerlens_model, get_activation_size
-from sc_datasets.random_dataset import SparseMixDataset
+import datetime
+import json
+import os
+import pickle
+import sys
+from itertools import chain, product
 
 import numpy as np
-from itertools import product, chain
-
+import torch
+import torch.multiprocessing as mp
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.utils.data as data
+import tqdm
 from transformer_lens import HookedTransformer
 from transformers import GPT2Tokenizer
 
-import tqdm
-
-import wandb
-import datetime
-import pickle
-import json
-import os
-import sys
-
 import standard_metrics
-from autoencoders.learned_dict import LearnedDict, UntiedSAE, TiedSAE
+import wandb
+from activation_dataset import (check_transformerlens_model,
+                                get_activation_size, setup_data)
+from autoencoders.learned_dict import LearnedDict, TiedSAE, UntiedSAE
+from cluster_runs import dispatch_job_on_chunk
+from sc_datasets.random_dataset import SparseMixDataset
+
 
 def get_model(cfg):
     if check_transformerlens_model(cfg.model_name):
@@ -37,8 +35,9 @@ def get_model(cfg):
     else:
         print("Using default tokenizer from gpt2")
         tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-    
+
     return model, tokenizer
+
 
 def calc_expected_interference(dictionary, batch):
     # dictionary: [n_features, d_activation]
@@ -47,7 +46,7 @@ def calc_expected_interference(dictionary, batch):
     normed_weights = dictionary / torch.clamp(norms, 1e-8)[:, None]
 
     cosines = torch.einsum("ij,kj->ik", normed_weights, normed_weights)
-    totals = torch.einsum("ij,bj->bi", cosines ** 2, batch)
+    totals = torch.einsum("ij,bj->bi", cosines**2, batch)
 
     capacities = batch / torch.clamp(totals, min=1e-8)
     # nonzero_count: [n_features]
@@ -62,9 +61,15 @@ def filter_learned_dicts(learned_dicts, hyperparam_filters):
 
     filtered_learned_dicts = []
     for learned_dict, hyperparams in learned_dicts:
-        if all([isclose(hyperparams[hp], val, rel_tol=1e-3) if isinstance(val, float) else hyperparams[hp] == val for hp, val in hyperparam_filters.items()]):
+        if all(
+            [
+                isclose(hyperparams[hp], val, rel_tol=1e-3) if isinstance(val, float) else hyperparams[hp] == val
+                for hp, val in hyperparam_filters.items()
+            ]
+        ):
             filtered_learned_dicts.append((learned_dict, hyperparams))
     return filtered_learned_dicts
+
 
 def format_hyperparam_val(val):
     if isinstance(val, float):
@@ -72,20 +77,21 @@ def format_hyperparam_val(val):
     else:
         return str(val)
 
+
 def make_hyperparam_name(setting):
     return "_".join([f"{k}_{format_hyperparam_val(v)}" for k, v in setting.items()])
+
 
 def log_standard_metrics(learned_dicts, chunk, chunk_num, hyperparam_ranges, cfg):
     n_samples = 2000
     sample_indexes = np.random.choice(len(chunk), size=n_samples, replace=False)
     sample = chunk[sample_indexes]
 
-
     grid_hyperparams = [k for k in hyperparam_ranges.keys() if k not in ["l1_alpha", "dict_size"]]
     mmcs_plot_settings = []
     for setting in product(*[hyperparam_ranges[hp] for hp in grid_hyperparams]):
         mmcs_plot_settings.append({hp: val for hp, val in zip(grid_hyperparams, setting)})
-    
+
     l1_values = hyperparam_ranges["l1_alpha"]
     dict_sizes = hyperparam_ranges["dict_size"]
 
@@ -96,7 +102,6 @@ def log_standard_metrics(learned_dicts, chunk, chunk_num, hyperparam_ranges, cfg
         n_actives_log[name + "_n_active"] = n_ever_active
         n_actives_log[name + "_prop_active"] = n_ever_active / learned_dict.n_feats
 
-    
     cfg.wandb_instance.log(n_actives_log, commit=True)
 
     if len(dict_sizes) > 1:
@@ -121,14 +126,16 @@ def log_standard_metrics(learned_dicts, chunk, chunk_num, hyperparam_ranges, cfg
 
                     larger_dict = filter_learned_dicts(learned_dicts, setting_)[0][0]
                     mmcs_scores[i, j] = standard_metrics.mcs_duplicates(small_dict, larger_dict).mean().item()
-            
+
             mmcs_grid_plots[make_hyperparam_name(setting)] = standard_metrics.plot_grid(
                 mmcs_scores,
-                l1_values, dict_sizes[1:],
-                "l1_alpha", "dict_size",
-                cmap="viridis"
+                l1_values,
+                dict_sizes[1:],
+                "l1_alpha",
+                "dict_size",
+                cmap="viridis",
             )
-    
+
     sparsity_hists = {}
 
     for learned_dict, setting in learned_dicts:
@@ -136,16 +143,17 @@ def log_standard_metrics(learned_dicts, chunk, chunk_num, hyperparam_ranges, cfg
             standard_metrics.mean_nonzero_activations(learned_dict, sample),
             "Mean nonzero activations",
             "Frequency",
-            bins=20
+            bins=20,
         )
-    
+
     if cfg.use_wandb:
         if len(dict_sizes) > 1:
             for k, plot in mmcs_grid_plots.items():
                 cfg.wandb_instance.log({f"mmcs_grid_{chunk_num}/{k}": wandb.Image(plot)}, commit=False)
-        
+
         for k, plot in sparsity_hists.items():
             cfg.wandb_instance.log({f"sparsity_hist_{chunk_num}/{k}": wandb.Image(plot)})
+
 
 def ensemble_train_loop(ensemble, cfg, args, ensemble_name, sampler, dataset, progress_counter):
     torch.set_grad_enabled(False)
@@ -171,7 +179,7 @@ def ensemble_train_loop(ensemble, cfg, args, ensemble_name, sampler, dataset, pr
                         hyperparam_values[ep] = args[ep]
                     else:
                         raise ValueError(f"Hyperparameter {ep} not found in args")
-                    
+
                 for bp in cfg.buffer_hyperparams:
                     if bp in ensemble.buffers:
                         hyperparam_values[bp] = ensemble.buffers[bp][m].item()
@@ -182,12 +190,13 @@ def ensemble_train_loop(ensemble, cfg, args, ensemble_name, sampler, dataset, pr
 
                 for k in losses.keys():
                     log[f"{ensemble_name}_{name}_{k}"] = losses[k][m].item()
-                
+
                 log[f"{ensemble_name}_{name}_num_nonzero"] = num_nonzero[m].item()
 
             run.log(log, commit=True)
 
         progress_counter.value = i
+
 
 def unstacked_to_learned_dicts(ensemble, args, ensemble_hyperparams, buffer_hyperparams):
     unstacked = ensemble.unstack(device="cpu")
@@ -202,7 +211,7 @@ def unstacked_to_learned_dicts(ensemble, args, ensemble_hyperparams, buffer_hype
                 hyperparam_values[ep] = args[ep]
             else:
                 raise ValueError(f"Hyperparameter {ep} not found in args")
-            
+
         for bp in buffer_hyperparams:
             if bp in buffers:
                 hyperparam_values[bp] = buffers[bp].item()
@@ -210,9 +219,10 @@ def unstacked_to_learned_dicts(ensemble, args, ensemble_hyperparams, buffer_hype
                 raise ValueError(f"Hyperparameter {bp} not found in buffers")
 
         learned_dict = ensemble.sig.to_learned_dict(params, buffers)
-        
+
         learned_dicts.append((learned_dict, hyperparam_values))
     return learned_dicts
+
 
 def generate_synthetic_dataset(cfg, generator, chunk_size, n_chunks):
     batch_size = generator.batch_size
@@ -222,8 +232,9 @@ def generate_synthetic_dataset(cfg, generator, chunk_size, n_chunks):
         print(f"Generating chunk {i+1}/{n_chunks}")
         chunk = torch.zeros((chunk_size, cfg.activation_width), dtype=torch.float32, device="cpu")
         for j in tqdm.tqdm(range(n_samples)):
-            chunk[j*batch_size:(j+1)*batch_size] = generator.send(None).cpu()
+            chunk[j * batch_size : (j + 1) * batch_size] = generator.send(None).cpu()
         torch.save(chunk, os.path.join(cfg.dataset_folder, f"{i}.pt"))
+
 
 def init_model_dataset(cfg):
     cfg.activation_width = get_activation_size(cfg.model_name, cfg.layer_loc)
@@ -239,11 +250,12 @@ def init_model_dataset(cfg):
             layer=cfg.layer,
             layer_loc=cfg.layer_loc,
             n_chunks=cfg.n_chunks,
-            device=cfg.device
+            device=cfg.device,
         )
         del transformer, tokenizer
     else:
         print(f"Activations in {cfg.dataset_folder} already exist, loading them")
+
 
 def init_synthetic_dataset(cfg):
     if len(os.listdir(cfg.dataset_folder)) == 0:
@@ -256,8 +268,10 @@ def init_synthetic_dataset(cfg):
             cfg.feature_prob_decay,
             cfg.noise_magnitude_scale,
             "cuda:0",
-            sparse_component_covariance = None if cfg.correlated_components else torch.eye(cfg.n_ground_truth_components, device="cuda:0"),
-            t_type=torch.float16
+            sparse_component_covariance=None
+            if cfg.correlated_components
+            else torch.eye(cfg.n_ground_truth_components, device="cuda:0"),
+            t_type=torch.float16,
         )
 
         print("generated dataset")
@@ -271,7 +285,8 @@ def init_synthetic_dataset(cfg):
     else:
         print(f"Activations in {cfg.dataset_folder} already exist, loading them")
 
-def sweep(ensemble_init_func, cfg):    
+
+def sweep(ensemble_init_func, cfg):
     torch.set_grad_enabled(False)
     with torch.no_grad():
         torch.cuda.empty_cache()
@@ -287,7 +302,12 @@ def sweep(ensemble_init_func, cfg):
         secrets = json.load(open("secrets.json"))
         wandb.login(key=secrets["wandb_key"])
         wandb_run_name = f"ensemble_{cfg.model_name}_{start_time[4:]}"  # trim year
-        cfg.wandb_instance = wandb.init(project="sparse coding", config=dict(cfg), name=wandb_run_name, entity="sparse_coding")
+        cfg.wandb_instance = wandb.init(
+            project="sparse coding",
+            config=dict(cfg),
+            name=wandb_run_name,
+            entity="sparse_coding",
+        )
 
     if cfg.use_synthetic_dataset:
         init_synthetic_dataset(cfg)
@@ -299,7 +319,12 @@ def sweep(ensemble_init_func, cfg):
     # the ensemble initialization function returns
     # a list of (ensemble, args, name) tuples
     # and a dict of hyperparam ranges
-    ensembles, ensemble_hyperparams, buffer_hyperparams, hyperparam_ranges = ensemble_init_func(cfg)
+    (
+        ensembles,
+        ensemble_hyperparams,
+        buffer_hyperparams,
+        hyperparam_ranges,
+    ) = ensemble_init_func(cfg)
 
     # ensemble_hyperparams are constant across all models in a given ensemble
     # they are stored in the ensemble's args
@@ -324,17 +349,15 @@ def sweep(ensemble_init_func, cfg):
         os.makedirs(cfg.iter_folder, exist_ok=True)
 
         chunk_loc = os.path.join(cfg.dataset_folder, f"{chunk_idx}.pt")
-        chunk = torch.load(chunk_loc).to(device="cpu", dtype=torch.float32)  
+        chunk = torch.load(chunk_loc).to(device="cpu", dtype=torch.float32)
         if cfg.center_activations:
             if i == 0:
                 print("Centring activations")
                 means = chunk.mean(dim=0)
                 torch.save(means, os.path.join(cfg.output_folder, "means.pt"))
-            chunk -= means          
+            chunk -= means
 
-        dispatch_job_on_chunk(
-            ensembles, cfg, chunk, ensemble_train_loop
-        )
+        dispatch_job_on_chunk(ensembles, cfg, chunk, ensemble_train_loop)
 
         learned_dicts = []
         for ensemble, arg, _ in ensembles:
@@ -346,7 +369,7 @@ def sweep(ensemble_init_func, cfg):
             log_standard_metrics(learned_dicts, chunk, i, hyperparam_ranges, cfg)
 
         del chunk
-        if i == len(chunk_order) - 1 or (i + 1) in [2 ** j for j in range(10)]:
+        if i == len(chunk_order) - 1 or (i + 1) in [2**j for j in range(10)]:
             torch.save(learned_dicts, os.path.join(cfg.iter_folder, "learned_dicts.pt"))
 
         print("\n")

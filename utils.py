@@ -2,13 +2,13 @@ import json
 import os
 import subprocess
 import sys
-from typing import Optional, Union, List
 from pathlib import Path
+from typing import List, Optional, Union
 
 import boto3
-from botocore.exceptions import NoCredentialsError, ClientError
-
-from transformer_lens.loading_from_pretrained import convert_hf_model_config, get_official_model_name
+from botocore.exceptions import ClientError, NoCredentialsError
+from transformer_lens.loading_from_pretrained import (convert_hf_model_config,
+                                                      get_official_model_name)
 
 VAST_NUM = 4
 # DEST_ADDR = f"root@ssh{VAST_NUM}.vast.ai"
@@ -28,15 +28,18 @@ ACCESS_KEY_NAME_DICT = {
     "AKIATEQID7TUM5FUW4R5": "logan",
 }
 
+
 def sync():
     """Sync the local directory with the remote host."""
     command = f'rsync -rv --filter ":- .gitignore" --exclude ".git" -e "ssh -p {PORT}" . {DEST_ADDR}:{SSH_DIRECTORY}'
     subprocess.call(command, shell=True)
 
+
 def datasets_sync():
     """Sync .csv files with the remote host."""
     command = f'rsync -am --include "*.csv" --exclude "*" -e "ssh -p {PORT}" . {DEST_ADDR}:{SSH_DIRECTORY}'
     subprocess.call(command, shell=True)
+
 
 def autointerp_sync():
     """Sync the local directory with the remote host's auto interp results, excluding hdf files."""
@@ -44,13 +47,15 @@ def autointerp_sync():
     print(command)
     subprocess.call(command, shell=True)
 
+
 def copy_models():
     """Copy the models from local directory to the remote host."""
     command = f"scp -P {PORT} -r models {DEST_ADDR}:{SSH_DIRECTORY}/models"
     subprocess.call(command, shell=True)
-    # also copying across a few other files
+    # also copying across a few other files
     command = f"scp -P {PORT} -r outputs/thinrun/autoencoders_cpu.pkl {DEST_ADDR}:{SSH_DIRECTORY}"
     subprocess.call(command, shell=True)
+
 
 def copy_secrets():
     """Copy the secrets.json file from local directory to the remote host."""
@@ -68,6 +73,7 @@ def copy_recent():
     command = f"scp -P {PORT} -r {DEST_ADDR}:{output} outputs"
     subprocess.call(command, shell=True)
 
+
 def copy_dotfiles():
     """Copy dotfiles into remote host and run install and deploy scripts"""
     df_dir = f"dotfiles_{USER}"
@@ -76,6 +82,7 @@ def copy_dotfiles():
     subprocess.call(command, shell=True)
     command = f"ssh -p {PORT} {DEST_ADDR} 'cd ~/{df_dir} && ./install.sh && ./deploy.sh'"
     subprocess.call(command, shell=True)
+
 
 def setup():
     """Sync, copy models, create venv and install requirements."""
@@ -86,7 +93,9 @@ def setup():
     # command = f"ssh -p {VAST_PORT} {dest_addr} \"cd {SSH_DIRECTORY} && echo $PATH\""
     subprocess.call(command, shell=True)
 
+
 import warnings
+
 
 class dotdict(dict):
     """Dictionary that can be accessed with dot notation."""
@@ -113,7 +122,7 @@ class dotdict(dict):
 
 
 def upload_to_aws(local_file_name) -> bool:
-    """"
+    """ "
     Upload a file to an S3 bucket
     :param local_file_name: File to upload
     :param s3_file_name: S3 object name. If not specified then local_file_name is used
@@ -144,29 +153,31 @@ def upload_to_aws(local_file_name) -> bool:
     except FileNotFoundError:
         print(f"File {local_file_name} was not found")
         return False
-    except NoCredentialsError: # mypy: ignore, not sure why it doesn't think it's a valid exception class
+    except NoCredentialsError:  # mypy: ignore, not sure why it doesn't think it's a valid exception class
         print("Credentials not available")
         return False
-    
+
+
 def _upload_directory(path, s3_client):
     for root, dirs, files in os.walk(path):
         for file_name in files:
             full_file_name = os.path.join(root, file_name)
             s3_client.upload_file(str(full_file_name), BUCKET_NAME, str(full_file_name))
 
+
 def download_from_aws(files: Union[str, List[str]], force_redownload: bool = False) -> bool:
     """
     Download a file from an S3 bucket
     :param files: List of files to download
     :param force_redownload: If True, will download even if the file already exists
-    
+
     Returns:
         True if all files were downloaded successfully, False otherwise
     """
     secrets = json.load(open("secrets.json"))
     if isinstance(files, str):
         files = [files]
-    
+
     if not force_redownload:
         files = [f for f in files if not os.path.exists(f)]
 
@@ -190,7 +201,7 @@ def download_from_aws(files: Union[str, List[str]], force_redownload: bool = Fal
             all_correct = False
 
     return all_correct
-    
+
 
 if __name__ == "__main__":
     if sys.argv[1] == "sync":

@@ -1,8 +1,4 @@
 import argparse
-from collections.abc import Generator
-from copy import deepcopy
-from dataclasses import dataclass, field
-from datetime import datetime
 import importlib
 import itertools
 import json
@@ -10,24 +6,28 @@ import math
 import multiprocessing as mp
 import os
 import pickle
-from typing import Union, Tuple, List, Any, Optional, TypeVar, Dict
+from collections.abc import Generator
+from copy import deepcopy
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union
 
-from baukit import Trace
-from datasets import Dataset, DatasetDict, load_dataset
-from einops import rearrange
-import pandas as pd
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from baukit import Trace
+from datasets import Dataset, DatasetDict, load_dataset
+from einops import rearrange
 from torch.utils.data import DataLoader
 from torchtyping import TensorType
 from tqdm import tqdm
 from transformer_lens import HookedTransformer
-from transformers import PreTrainedTokenizerBase, GPT2Tokenizer
-import wandb
+from transformers import GPT2Tokenizer, PreTrainedTokenizerBase
 
+import wandb
 from utils import *
 
 T = TypeVar("T", bound=Union[Dataset, DatasetDict])
@@ -45,9 +45,15 @@ def check_use_baukit(model_name):
     else:
         raise NotImplementedError(f"Unknown if model {model_name} uses baukit")
 
+
 def get_activation_size(model_name: str, layer_loc: str):
     assert check_transformerlens_model(model_name) or model_name == "nanoGPT", f"Model {model_name} not supported"
-    assert layer_loc in ["residual", "mlp", "attn", "mlpout"], f"Layer location {layer_loc} not supported"
+    assert layer_loc in [
+        "residual",
+        "mlp",
+        "attn",
+        "mlpout",
+    ], f"Layer location {layer_loc} not supported"
     model_cfg = convert_hf_model_config(model_name)
     if layer_loc == "residual":
         return model_cfg["d_model"]
@@ -58,6 +64,7 @@ def get_activation_size(model_name: str, layer_loc: str):
     elif layer_loc == "mlpout":
         return model_cfg["d_model"]
 
+
 def check_transformerlens_model(model_name: str):
     try:
         get_official_model_name(model_name)
@@ -65,9 +72,15 @@ def check_transformerlens_model(model_name: str):
     except ValueError:
         return False
 
+
 def make_tensor_name(layer: int, layer_loc: str, model_name: str) -> str:
     """Make the tensor name for a given layer and model."""
-    assert layer_loc in ["residual", "mlp", "attn", "mlpout"], f"Layer location {layer_loc} not supported"
+    assert layer_loc in [
+        "residual",
+        "mlp",
+        "attn",
+        "mlpout",
+    ], f"Layer location {layer_loc} not supported"
     if layer_loc == "residual":
         if check_transformerlens_model(model_name):
             tensor_name = f"blocks.{layer}.hook_resid_post"
@@ -93,9 +106,10 @@ def make_tensor_name(layer: int, layer_loc: str, model_name: str) -> str:
 
     return tensor_name
 
+
 def read_from_pile(address: str, max_lines: int = 100_000, start_line: int = 0):
     """Reads a file from the Pile dataset. Returns a generator."""
-    
+
     with open(address, "r") as f:
         for i, line in enumerate(f):
             if i < start_line:
@@ -173,7 +187,9 @@ def chunk_and_tokenize(
             assert isinstance(output["input_ids"][0], int)
 
             # Chunk the overflow into batches of size `chunk_size`
-            chunks = [output["input_ids"]] + [overflow[i * chunk_size : (i + 1) * chunk_size] for i in range(math.ceil(len(overflow) / chunk_size))]
+            chunks = [output["input_ids"]] + [
+                overflow[i * chunk_size : (i + 1) * chunk_size] for i in range(math.ceil(len(overflow) / chunk_size))
+            ]
             output = {"input_ids": chunks}
 
         total_tokens = sum(len(ids) for ids in output["input_ids"])
@@ -187,7 +203,11 @@ def chunk_and_tokenize(
         output_batch_size = len(output["input_ids"])
 
         if output_batch_size == 0:
-            raise ValueError("Not enough data to create a single batch complete batch." " Either allow the final batch to be returned," " or supply more data.")
+            raise ValueError(
+                "Not enough data to create a single batch complete batch."
+                " Either allow the final batch to be returned,"
+                " or supply more data."
+            )
 
         # We need to output this in order to compute the number of bits per byte
         div, rem = divmod(total_tokens, output_batch_size)
@@ -240,24 +260,27 @@ def get_columns_all_equal(dataset: Union[Dataset, DatasetDict]) -> List[str]:
 
 # End Nora's Code from https://github.com/AlignmentResearch/tuned-lens/blob/main/tuned_lens/data.py
 
+
 def make_activation_dataset(
-        sentence_dataset: DataLoader, 
-        model: HookedTransformer, 
-        tensor_name: str, 
-        activation_width: int,
-        dataset_folder: str,
-        baukit: bool = False,
-        chunk_size_gb: float = 2, 
-        device: torch.device = torch.device("cuda:0"), 
-        layer: int = 2,
-        n_chunks: int = 1,
-        max_length: int = 256,
-        model_batch_size: int = 4
-        ) -> pd.DataFrame:
+    sentence_dataset: DataLoader,
+    model: HookedTransformer,
+    tensor_name: str,
+    activation_width: int,
+    dataset_folder: str,
+    baukit: bool = False,
+    chunk_size_gb: float = 2,
+    device: torch.device = torch.device("cuda:0"),
+    layer: int = 2,
+    n_chunks: int = 1,
+    max_length: int = 256,
+    model_batch_size: int = 4,
+) -> pd.DataFrame:
     print(f"Running model and saving activations to {dataset_folder}")
     with torch.no_grad():
         chunk_size = chunk_size_gb * (2**30)  # 2GB
-        activation_size = activation_width * 2 * model_batch_size * max_length  # 3072 mlp activations, 2 bytes per half, 1024 context window
+        activation_size = (
+            activation_width * 2 * model_batch_size * max_length
+        )  # 3072 mlp activations, 2 bytes per half, 1024 context window
         actives_per_chunk = chunk_size // activation_size
         dataset = []
         n_saved_chunks = 0
@@ -271,8 +294,10 @@ def make_activation_dataset(
                     mlp_activation_data = rearrange(mlp_activation_data, "b s n -> (b s) n").to(torch.float16).to(device)
                     mlp_activation_data = nn.functional.gelu(mlp_activation_data)
             else:
-                _, cache = model.run_with_cache(batch, stop_at_layer=layer+1)
-                mlp_activation_data = cache[tensor_name].to(device).to(torch.float16)  # NOTE: could do all layers at once, but currently just doing 1 layer
+                _, cache = model.run_with_cache(batch, stop_at_layer=layer + 1)
+                mlp_activation_data = (
+                    cache[tensor_name].to(device).to(torch.float16)
+                )  # NOTE: could do all layers at once, but currently just doing 1 layer
                 mlp_activation_data = rearrange(mlp_activation_data, "b s n -> (b s) n")
 
             dataset.append(mlp_activation_data)
@@ -284,10 +309,11 @@ def make_activation_dataset(
                 dataset = []
                 if n_saved_chunks == n_chunks:
                     break
-    
+
         if n_saved_chunks < n_chunks:
             save_activation_chunk(dataset, n_saved_chunks, dataset_folder)
             print(f"Saved undersized chunk {n_saved_chunks} of activations, total size:  {batch_idx * activation_size} ")
+
 
 def make_activation_dataset_hf(
     sentence_dataset: DataLoader,
@@ -301,11 +327,13 @@ def make_activation_dataset_hf(
     n_chunks: int = 1,
     max_length: int = 256,
     model_batch_size: int = 4,
-    skip_chunks: int = 0
+    skip_chunks: int = 0,
 ):
     with torch.no_grad():
-        chunk_size = chunk_size_gb * (2 ** 30)  # 2GB
-        activation_size = activation_width * 2 * model_batch_size * max_length  # 3072 mlp activations, 2 bytes per half, 1024 context window
+        chunk_size = chunk_size_gb * (2**30)  # 2GB
+        activation_size = (
+            activation_width * 2 * model_batch_size * max_length
+        )  # 3072 mlp activations, 2 bytes per half, 1024 context window
         max_batches_per_chunk = int(chunk_size // activation_size)
 
         batches_to_skip = skip_chunks * max_batches_per_chunk
@@ -325,19 +353,20 @@ def make_activation_dataset_hf(
                     activation_data = cache[tensor_name].to(torch.float16)
                     activation_data = rearrange(activation_data, "b s n -> (b s) n")
                     datasets[layer].append(activation_data)
-                
+
                 if batch_idx >= max_batches_per_chunk:
                     break
 
             for layer, folder in zip(layers, dataset_folders):
                 dataset = datasets[layer]
                 save_activation_chunk(dataset, chunk_idx, folder)
-            
+
             if len(datasets[layer]) < max_batches_per_chunk:
                 print(f"Saved undersized chunk {chunk_idx} of activations, total size: {batch_idx * activation_size}")
                 break
             else:
                 print(f"Saved chunk {chunk_idx} of activations, total size: {(chunk_idx + 1) * batch_idx * activation_size}")
+
 
 def save_activation_chunk(dataset, n_saved_chunks, dataset_folder):
     dataset_t = torch.cat(dataset, dim=0).to("cpu")
@@ -345,25 +374,26 @@ def save_activation_chunk(dataset, n_saved_chunks, dataset_folder):
     with open(dataset_folder + "/" + str(n_saved_chunks) + ".pt", "wb") as f:
         torch.save(dataset_t, f)
 
+
 def setup_data(
-        tokenizer,
-        model,
-        dataset_name: str, # Name of dataset to load
-        dataset_folder: Union[str, List[str]], # Folder to save activations to
-        layer: Union[int, List[int]] = 2,
-        layer_loc: str = "residual",
-        start_line: int = 0, 
-        n_chunks: int = 1,
-        chunk_size_gb: float = 2,
-        skip_chunks: int = 0,
-        device: torch.device = torch.device("cuda:0")
-    ):
+    tokenizer,
+    model,
+    dataset_name: str,  # Name of dataset to load
+    dataset_folder: Union[str, List[str]],  # Folder to save activations to
+    layer: Union[int, List[int]] = 2,
+    layer_loc: str = "residual",
+    start_line: int = 0,
+    n_chunks: int = 1,
+    chunk_size_gb: float = 2,
+    skip_chunks: int = 0,
+    device: torch.device = torch.device("cuda:0"),
+):
     layers = [layer] if isinstance(layer, int) else layer
 
     sentence_len_lower = 1000
     activation_width = get_activation_size(model.cfg.model_name, layer_loc)
     baukit = check_use_baukit(model.cfg.model_name)
-    max_lines = int((chunk_size_gb * 1e9  * n_chunks)/ (activation_width * sentence_len_lower * 2))
+    max_lines = int((chunk_size_gb * 1e9 * n_chunks) / (activation_width * sentence_len_lower * 2))
     print(f"Setting max_lines to {max_lines} to minimize sentences processed")
 
     sentence_dataset = make_sentence_dataset(dataset_name, max_lines=max_lines, start_line=start_line)
@@ -373,7 +403,7 @@ def setup_data(
     if baukit:
         assert type(dataset_folder) == str, "Baukit only supports single dataset folder"
         make_activation_dataset(
-            sentence_dataset = token_loader, 
+            sentence_dataset=token_loader,
             model=model,
             tensor_name=tensor_names[0],
             activation_width=activation_width,
@@ -384,12 +414,12 @@ def setup_data(
             layer=layers[0],
             n_chunks=n_chunks,
             max_length=MAX_SENTENCE_LEN,
-            model_batch_size=MODEL_BATCH_SIZE
+            model_batch_size=MODEL_BATCH_SIZE,
         )
     else:
         dataset_folder = [dataset_folder] if isinstance(dataset_folder, str) else dataset_folder
         make_activation_dataset_hf(
-            sentence_dataset = token_loader,
+            sentence_dataset=token_loader,
             model=model,
             activation_width=activation_width,
             dataset_folders=dataset_folder,
@@ -400,10 +430,11 @@ def setup_data(
             n_chunks=n_chunks,
             max_length=MAX_SENTENCE_LEN,
             model_batch_size=MODEL_BATCH_SIZE,
-            skip_chunks=skip_chunks
+            skip_chunks=skip_chunks,
         )
     n_lines = len(sentence_dataset)
     return n_lines
+
 
 def setup_token_data(cfg, tokenizer, model):
     sentence_dataset = make_sentence_dataset(cfg.dataset_name)

@@ -1,10 +1,10 @@
-import matplotlib
-import torch
-import matplotlib.pyplot as plt
-import numpy as np
-
 import os
 import shutil
+
+import matplotlib
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
 
 if __name__ == "__main__":
     base_folder = "sparse_coding_aidan"
@@ -14,7 +14,18 @@ if __name__ == "__main__":
 
     fig, ax = plt.subplots()
 
-    colors = ["red", "blue", "green", "orange", "purple", "brown", "pink", "gray", "olive", "cyan"]
+    colors = [
+        "red",
+        "blue",
+        "green",
+        "orange",
+        "purple",
+        "brown",
+        "pink",
+        "gray",
+        "olive",
+        "cyan",
+    ]
     markers = ["x", "+", "*", "o", "v", "^", "<", ">", "s", "."]
 
     xs, ys, keys = [], [], []
@@ -24,7 +35,7 @@ if __name__ == "__main__":
         xs.append(corruption)
         ys.append(div)
         keys.append(key)
-    
+
     scales, corruption_AE, div_AE = zip(*diff_mean_scores)
     xs.append(corruption_AE)
     ys.append(div_AE)
@@ -38,7 +49,7 @@ if __name__ == "__main__":
     ax.set_xlabel("Corruption")
     ax.set_ylabel("Task-Specific Loss")
 
-    #ax.set_xscale("log")
+    # ax.set_xscale("log")
 
     ax.legend()
     graph_folder = os.path.join(base_folder, "graphs")

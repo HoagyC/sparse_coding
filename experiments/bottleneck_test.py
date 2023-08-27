@@ -1,41 +1,41 @@
+import copy
 from functools import partial
 from itertools import product
-from typing import List, Tuple, Union, Any, Dict, Literal, Optional, Callable
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
+import matplotlib
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+import torch.nn.functional as F
+import tqdm
+from concept_erasure import LeaceEraser
 from datasets import load_dataset
 from einops import rearrange
-import matplotlib.pyplot as plt
-import matplotlib
-import numpy as np
 from PIL import Image
 from sklearn.cluster import KMeans
 from sklearn.manifold import TSNE
-import torch
-import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchtyping import TensorType
-
-import tqdm
-
 from transformer_lens import HookedTransformer
 
+import standard_metrics
+from activation_dataset import setup_data
 from autoencoders.learned_dict import LearnedDict
 from autoencoders.pca import BatchedPCA
-
-from activation_dataset import setup_data
-
-import standard_metrics
-
-import copy
-
-from test_datasets.ioi import generate_ioi_dataset
 from test_datasets.gender import generate_gender_dataset
+from test_datasets.ioi import generate_ioi_dataset
 
-from concept_erasure import LeaceEraser
-
-_batch, _sequence, _n_dict_components, _d_activation, _vocab_size = None, None, None, None, None
+_batch, _sequence, _n_dict_components, _d_activation, _vocab_size = (
+    None,
+    None,
+    None,
+    None,
+    None,
+)
 
 BASE_FOLDER = "~/sparse_coding_aidan"
+
 
 def logits_under_ablation(
     model: HookedTransformer,
@@ -45,32 +45,38 @@ def logits_under_ablation(
     tokens: TensorType["_batch", "_sequence"],
     calc_fvu: bool = False,
 ) -> Tuple[TensorType["_batch", "_sequence"], Optional[TensorType["_batch", "_sequence"]]]:
-    
     fvu = None
 
     def intervention(tensor, hook=None):
         B, L, D = tensor.shape
         tensor = tensor.reshape(-1, D)
         codes = lens.encode(tensor)
-        ablation = torch.einsum("be,ed->bd", codes[:, ablated_directions], lens.get_learned_dict()[ablated_directions])
+        ablation = torch.einsum(
+            "be,ed->bd",
+            codes[:, ablated_directions],
+            lens.get_learned_dict()[ablated_directions],
+        )
         ablated = tensor - ablation
 
         if calc_fvu:
             nonlocal fvu
-            fvu = (ablation ** 2).sum() / (tensor ** 2).sum()
-        
+            fvu = (ablation**2).sum() / (tensor**2).sum()
+
         return ablated.reshape(B, L, D)
-    
+
     logits = model.run_with_hooks(
         tokens,
         return_type="logits",
-        fwd_hooks=[(
-            standard_metrics.get_model_tensor_name(location),
-            intervention,
-        )]
+        fwd_hooks=[
+            (
+                standard_metrics.get_model_tensor_name(location),
+                intervention,
+            )
+        ],
     )
 
     return logits, fvu
+
 
 def logits_under_reconstruction(
     model: HookedTransformer,
@@ -95,20 +101,23 @@ def logits_under_reconstruction(
         if calc_fvu:
             nonlocal fvu
             residuals = reconstruction - tensor
-            fvu = (residuals ** 2).sum() / (tensor ** 2).sum()
+            fvu = (residuals**2).sum() / (tensor**2).sum()
 
         return reconstruction
-    
+
     logits = model.run_with_hooks(
         tokens,
         return_type="logits",
-        fwd_hooks=[(
-            standard_metrics.get_model_tensor_name(location),
-            intervention,
-        )]
+        fwd_hooks=[
+            (
+                standard_metrics.get_model_tensor_name(location),
+                intervention,
+            )
+        ],
     )
 
     return logits, fvu
+
 
 def bottleneck_test(
     model: HookedTransformer,
@@ -144,9 +153,23 @@ def bottleneck_test(
 
         for direction in features_to_test:
             if ablation_type == "ablation":
-                logits, fvu = logits_under_ablation(model, lens, location, ablated_directions + [direction], tokens, calc_fvu=calc_fvu)
+                logits, fvu = logits_under_ablation(
+                    model,
+                    lens,
+                    location,
+                    ablated_directions + [direction],
+                    tokens,
+                    calc_fvu=calc_fvu,
+                )
             elif ablation_type == "reconstruction":
-                logits, fvu = logits_under_reconstruction(model, lens, location, ablated_directions + [direction], tokens, calc_fvu=calc_fvu)
+                logits, fvu = logits_under_reconstruction(
+                    model,
+                    lens,
+                    location,
+                    ablated_directions + [direction],
+                    tokens,
+                    calc_fvu=calc_fvu,
+                )
             else:
                 raise ValueError(f"Unknown ablation type '{ablation_type}'")
 
@@ -166,8 +189,9 @@ def bottleneck_test(
         results.append((min_direction, min_fvu, min_score))
         ablated_directions.append(min_direction)
         remaining_directions.remove(min_direction)
-    
+
     return results
+
 
 def resample_ablation_hook(
     lens: LearnedDict,
@@ -184,7 +208,7 @@ def resample_ablation_hook(
         corrupted_codes_ = corrupted_codes.reshape(-1, corrupted_codes.shape[-1])
 
     activation_dict = {"output": None}
-    
+
     def reconstruction_intervention(tensor, hook=None):
         nonlocal activation_dict
         B, L, D = tensor.shape
@@ -194,7 +218,7 @@ def resample_ablation_hook(
             code[:, features_to_ablate] = 0.0
         else:
             code[:, features_to_ablate] = corrupted_codes_[:, features_to_ablate]
-        
+
         reconstr = lens.decode(code).reshape(tensor.shape)
 
         if handicap is not None:
@@ -207,7 +231,7 @@ def resample_ablation_hook(
 
         activation_dict["output"] = output.clone()
         return output
-    
+
     def partial_ablation_intervention(tensor, hook=None):
         nonlocal activation_dict
         B, L, D = tensor.shape
@@ -219,7 +243,7 @@ def resample_ablation_hook(
             ablation_code[:, features_to_ablate] = -code[:, features_to_ablate]
         else:
             ablation_code[:, features_to_ablate] = corrupted_codes_[:, features_to_ablate] - code[:, features_to_ablate]
-        
+
         ablation = lens.decode(ablation_code).reshape(tensor.shape)
 
         if handicap is not None:
@@ -236,7 +260,7 @@ def resample_ablation_hook(
     def full_ablation_intervention(tensor, hook=None):
         nonlocal activation_dict
         B, L, D = tensor.shape
-        code = torch.einsum("bd,nd->bn", tensor.reshape(-1,D), lens.get_learned_dict())
+        code = torch.einsum("bd,nd->bn", tensor.reshape(-1, D), lens.get_learned_dict())
 
         ablation_code = torch.zeros_like(code)
 
@@ -263,8 +287,9 @@ def resample_ablation_hook(
         ablation_func = full_ablation_intervention
     else:
         raise ValueError(f"Unknown ablation type '{ablation_type}' with rank '{ablation_rank}'")
-    
+
     return ablation_func, activation_dict
+
 
 def resample_ablation(
     model: HookedTransformer,
@@ -291,14 +316,17 @@ def resample_ablation(
 
     logits = model.run_with_hooks(
         clean_tokens,
-        fwd_hooks=[(
-            standard_metrics.get_model_tensor_name(location),
-            ablation_func,
-        )],
+        fwd_hooks=[
+            (
+                standard_metrics.get_model_tensor_name(location),
+                ablation_func,
+            )
+        ],
         **kwargs,
     )
 
     return logits, activation_dict["output"]
+
 
 def activation_info(
     model: HookedTransformer,
@@ -307,7 +335,12 @@ def activation_info(
     tokens: TensorType["_batch", "_sequence"],
     ablation_type: Literal["ablation", "reconstruction"] = "ablation",
     replacement_residuals: Optional[TensorType["_batch", "_sequence", "_d_activation"]] = None,
-) -> Tuple[TensorType["_batch", "_sequence", "_d_activation"], TensorType["_batch", "_sequence", "_n_dict_components"], TensorType["_batch", "_sequence", "_d_activation"], TensorType["_batch", "_sequence", "_vocab_size"]]:
+) -> Tuple[
+    TensorType["_batch", "_sequence", "_d_activation"],
+    TensorType["_batch", "_sequence", "_n_dict_components"],
+    TensorType["_batch", "_sequence", "_d_activation"],
+    TensorType["_batch", "_sequence", "_vocab_size"],
+]:
     residuals = None
     codes = None
     activations = None
@@ -329,27 +362,32 @@ def activation_info(
                 return output + replacement_residuals
             else:
                 return tensor
-    
+
     logits = model.run_with_hooks(
         tokens,
-        fwd_hooks=[(
-            standard_metrics.get_model_tensor_name(location),
-            intervention,
-        )],
+        fwd_hooks=[
+            (
+                standard_metrics.get_model_tensor_name(location),
+                intervention,
+            )
+        ],
         return_type="logits",
     )
 
     return residuals, codes, activations, logits
+
 
 def scaled_distance_to_clean(clean_activation, corrupted_activation, activation):
     total_dist = torch.norm(clean_activation - corrupted_activation, dim=(-1, -2))
     dist = torch.norm(clean_activation - activation, dim=(-1, -2))
     return dist / total_dist
 
+
 def dot_difference_metric(clean_activation, corrupted_activation, activation):
     dataset_diff_vector = corrupted_activation - clean_activation
     diff_vector = activation - clean_activation
     return torch.einsum("bld,bld->b", diff_vector, dataset_diff_vector) / torch.norm(dataset_diff_vector, dim=(-1, -2)) ** 2
+
 
 def acdc_test(
     model: HookedTransformer,
@@ -357,22 +395,31 @@ def acdc_test(
     location: standard_metrics.Location,
     clean_tokens: TensorType["_batch", "_sequence"],
     corrupted_tokens: TensorType["_batch", "_sequence"],
-    logit_metric: Callable[[TensorType["_batch", "_sequence", "_vocab_size"], TensorType["_batch", "_sequence", "_vocab_size"]], float],
+    logit_metric: Callable[
+        [
+            TensorType["_batch", "_sequence", "_vocab_size"],
+            TensorType["_batch", "_sequence", "_vocab_size"],
+        ],
+        float,
+    ],
     threshold: float = 0.05,
     base_logits: Optional[TensorType["_batch", "_sequence", "_vocab_size"]] = None,
     ablation_type: Literal["ablation", "reconstruction"] = "reconstruction",
     ablation_handicap: bool = False,
-    distance_metric: Callable[[TensorType["_batch", "_sequence", "_d_activation"], TensorType["_batch", "_sequence", "_d_activation"], TensorType["_batch", "_sequence", "_d_activation"]], TensorType["_batch"]] = scaled_distance_to_clean,
+    distance_metric: Callable[
+        [
+            TensorType["_batch", "_sequence", "_d_activation"],
+            TensorType["_batch", "_sequence", "_d_activation"],
+            TensorType["_batch", "_sequence", "_d_activation"],
+        ],
+        TensorType["_batch"],
+    ] = scaled_distance_to_clean,
 ) -> Tuple[List[int], float, float]:
     remaining_directions = list(range(lens.n_dict_components()))
     ablated_directions: List[int] = []
 
     corrupted_residuals, corrupted_codes, corrupted_activation, _ = activation_info(
-        model,
-        lens,
-        location,
-        corrupted_tokens,
-        ablation_type=ablation_type
+        model, lens, location, corrupted_tokens, ablation_type=ablation_type
     )
 
     clean_residuals, _, clean_activation, reconstruction_logits = activation_info(
@@ -420,26 +467,40 @@ def acdc_test(
 
     return remaining_directions, prev_divergence, distance.mean().item()
 
+
 def diff_mean_activation_editing(
     model: HookedTransformer,
     location: standard_metrics.Location,
     clean_tokens: TensorType["_batch", "_sequence"],
     corrupted_tokens: TensorType["_batch", "_sequence"],
-    logit_metric: Callable[[TensorType["_batch", "_sequence", "_vocab_size"], TensorType["_batch", "_sequence", "_vocab_size"]], float],
+    logit_metric: Callable[
+        [
+            TensorType["_batch", "_sequence", "_vocab_size"],
+            TensorType["_batch", "_sequence", "_vocab_size"],
+        ],
+        float,
+    ],
     scale_range: Tuple[float, float] = (0.0, 1.0),
     n_points: int = 10,
-    distance_metric: Callable[[TensorType["_batch", "_sequence", "_d_activation"], TensorType["_batch", "_sequence", "_d_activation"], TensorType["_batch", "_sequence", "_d_activation"]], TensorType["_batch"]] = scaled_distance_to_clean,
+    distance_metric: Callable[
+        [
+            TensorType["_batch", "_sequence", "_d_activation"],
+            TensorType["_batch", "_sequence", "_d_activation"],
+            TensorType["_batch", "_sequence", "_d_activation"],
+        ],
+        TensorType["_batch"],
+    ] = scaled_distance_to_clean,
 ) -> List[Tuple[float, float, float]]:
     clean_logits, activation_cache = model.run_with_cache(
         clean_tokens,
-        #names_filter=[standard_metrics.get_model_tensor_name(location)],
+        # names_filter=[standard_metrics.get_model_tensor_name(location)],
         return_type="logits",
     )
     clean_activation = activation_cache[standard_metrics.get_model_tensor_name(location)]
 
     _, activation_cache = model.run_with_cache(
         corrupted_tokens,
-        #names_filter=[standard_metrics.get_model_tensor_name(location)],
+        # names_filter=[standard_metrics.get_model_tensor_name(location)],
         return_type="logits",
     )
     corrupted_activation = activation_cache[standard_metrics.get_model_tensor_name(location)]
@@ -459,21 +520,25 @@ def diff_mean_activation_editing(
 
         logits = model.run_with_hooks(
             corrupted_tokens,
-            fwd_hooks=[(
-                standard_metrics.get_model_tensor_name(location),
-                intervention,
-            )],
+            fwd_hooks=[
+                (
+                    standard_metrics.get_model_tensor_name(location),
+                    intervention,
+                )
+            ],
             return_type="logits",
         )
 
         distance = distance_metric(clean_activation, corrupted_activation, activation).mean().item()
         logit_score = logit_metric(logits, clean_logits)
         scores.append((scale, distance, logit_score))
-    
+
     return scores
 
+
 def ce_distance(clean_activation, activation):
-    return torch.linalg.norm(clean_activation - activation, dim=(-1,-2))
+    return torch.linalg.norm(clean_activation - activation, dim=(-1, -2))
+
 
 def ablation_mask_from_seq_lengths(
     seq_lengths: TensorType["_batch"],
@@ -482,8 +547,9 @@ def ablation_mask_from_seq_lengths(
     B = seq_lengths.shape[0]
     mask = torch.zeros((B, max_length), dtype=torch.bool)
     for i in range(B):
-        mask[i, :seq_lengths[i]] = True
+        mask[i, : seq_lengths[i]] = True
     return mask
+
 
 def concept_ablation(
     model: HookedTransformer,
@@ -492,19 +558,25 @@ def concept_ablation(
     dataset: TensorType["_batch", "_sequence"],
     scoring_function: Callable[[TensorType["_batch", "_sequence", "_vocab_size"]], float],
     max_features_removed: int = 10,
-    distance_metric: Callable[[TensorType["_batch", "_sequence", "_d_activation"], TensorType["_batch", "_sequence", "_d_activation"]], TensorType["_batch"]] = ce_distance,
+    distance_metric: Callable[
+        [
+            TensorType["_batch", "_sequence", "_d_activation"],
+            TensorType["_batch", "_sequence", "_d_activation"],
+        ],
+        TensorType["_batch"],
+    ] = ce_distance,
     ablation_type: Literal["ablation", "reconstruction"] = "ablation",
     ablation_rank: Literal["full", "partial"] = "partial",
     sequence_lengths: Optional[TensorType["_batch"]] = None,
     scale_by_magnitude: bool = False,
-    min_perf_decrease: float = 1.0, # to stop scale_by_magnitude from removing unimportant features
+    min_perf_decrease: float = 1.0,  # to stop scale_by_magnitude from removing unimportant features
 ) -> List[Tuple[List[int], float, float]]:
     """Try and add as much data back as possible while keeping a specific concept erased"""
     if sequence_lengths is not None:
         ablation_mask = ablation_mask_from_seq_lengths(sequence_lengths, dataset.shape[1])
     else:
         ablation_mask = None
-    
+
     ablated_directions: List[int] = []
     remaining_directions = list(range(lens.n_dict_components()))
 
@@ -563,7 +635,7 @@ def concept_ablation(
                 min_score = score
                 min_idx = i
                 min_activation_dist = distance_metric(clean_activation, activation).mean().item()
-        
+
         if min_idx is None:
             print("Early stopped at iteration", iteration, "with score", prev_score)
             break
@@ -578,13 +650,20 @@ def concept_ablation(
 
     return scores
 
+
 def least_squares_erasure(
     model: HookedTransformer,
     location: standard_metrics.Location,
     dataset: TensorType["_batch", "_sequence"],
     classes: TensorType["_batch"],
     scoring_function: Callable[[TensorType["_batch", "_sequence", "_vocab_size"]], float],
-    distance_metric: Callable[[TensorType["_batch", "_sequence", "_d_activation"], TensorType["_batch", "_sequence", "_d_activation"]], TensorType["_batch"]] = ce_distance,
+    distance_metric: Callable[
+        [
+            TensorType["_batch", "_sequence", "_d_activation"],
+            TensorType["_batch", "_sequence", "_d_activation"],
+        ],
+        TensorType["_batch"],
+    ] = ce_distance,
     sequence_lengths: Optional[TensorType["_batch"]] = None,
 ) -> Tuple[float, float, Any]:
     if sequence_lengths is not None:
@@ -595,7 +674,7 @@ def least_squares_erasure(
     _, activation_cache = model.run_with_cache(
         dataset,
         names_filter=lambda name: name == standard_metrics.get_model_tensor_name(location),
-        return_type="logits"
+        return_type="logits",
     )
 
     if ablation_mask is None:
@@ -603,35 +682,37 @@ def least_squares_erasure(
 
     B, L, D = activation_cache[standard_metrics.get_model_tensor_name(location)].shape
 
-    activations_flattened = activation_cache[standard_metrics.get_model_tensor_name(location)].reshape(B*L, D)
+    activations_flattened = activation_cache[standard_metrics.get_model_tensor_name(location)].reshape(B * L, D)
     classes_flattened = classes.repeat_interleave(L)
-    mask_flattened = ablation_mask.reshape(B*L)
+    mask_flattened = ablation_mask.reshape(B * L)
 
     activations = activations_flattened[mask_flattened]
     classes_ = classes_flattened[mask_flattened]
 
     print(activations.shape, classes_.shape)
 
-    eraser = LeaceEraser.fit(activations, classes_) # type: ignore
+    eraser = LeaceEraser.fit(activations, classes_)  # type: ignore
 
     distance = None
 
     def erasure(tensor, hook):
         nonlocal distance
-        erased = eraser(tensor.reshape(B*L, D)).reshape(B, L, D)
+        erased = eraser(tensor.reshape(B * L, D)).reshape(B, L, D)
 
         if ablation_mask is not None:
             erased[~ablation_mask] = tensor[~ablation_mask]
 
         distance = distance_metric(tensor, erased)
         return erased
-    
+
     logits = model.run_with_hooks(
         dataset,
-        fwd_hooks=[(
-            standard_metrics.get_model_tensor_name(location),
-            erasure,
-        )],
+        fwd_hooks=[
+            (
+                standard_metrics.get_model_tensor_name(location),
+                erasure,
+            )
+        ],
         return_type="logits",
     )
 
@@ -639,6 +720,7 @@ def least_squares_erasure(
     assert distance is not None
 
     return score, distance.mean().item(), eraser
+
 
 def new_bottleneck_test():
     torch.autograd.set_grad_enabled(False)
@@ -673,7 +755,7 @@ def new_bottleneck_test():
     activation_dataset = torch.load(os.path.join(BASE_FOLDER, f"activation_data/layer_3/0.pt"))
     activation_dataset = activation_dataset.to(device, dtype=torch.float32)
 
-    #diff_mean_scores = diff_mean_activation_editing(
+    # diff_mean_scores = diff_mean_activation_editing(
     #    model,
     #    (layer, "residual"),
     #    ioi_clean,
@@ -681,7 +763,7 @@ def new_bottleneck_test():
     #    divergence_metric,
     #    n_points=100,
     #    scale_range=(-10.0, 100.0),
-    #)
+    # )
 
     pca = BatchedPCA(n_dims=activation_dataset.shape[-1], device=device)
     batch_size = 4096
@@ -690,7 +772,7 @@ def new_bottleneck_test():
     for i in tqdm.trange(0, activation_dataset.shape[0], batch_size):
         j = min(i + batch_size, activation_dataset.shape[0])
         pca.train_batch(activation_dataset[i:j])
-    
+
     pca_dict = pca.to_rotation_dict(activation_dataset.shape[-1])
 
     pca_dict.to_device(device)
@@ -698,8 +780,21 @@ def new_bottleneck_test():
     max_fvus = [0.2, 0.1, 0.05]
     best_dicts = {}
     ratios = [4]
-    dict_sets = [(ratio, "learned_{max_fvu:.2f}", torch.load(f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r{ratio}/_9/learned_dicts.pt")) for ratio in ratios]
-    dict_sets += [(4, "zero_l1_baseline", torch.load(os.path.join(BASE_FOLDER, "output_zero_b_4/_7/learned_dicts.pt")))]
+    dict_sets = [
+        (
+            ratio,
+            "learned_{max_fvu:.2f}",
+            torch.load(f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r{ratio}/_9/learned_dicts.pt"),
+        )
+        for ratio in ratios
+    ]
+    dict_sets += [
+        (
+            4,
+            "zero_l1_baseline",
+            torch.load(os.path.join(BASE_FOLDER, "output_zero_b_4/_7/learned_dicts.pt")),
+        )
+    ]
 
     print("evaluating dicts")
     for max_fvu in max_fvus:
@@ -716,9 +811,9 @@ def new_bottleneck_test():
                     else:
                         if fvu > best_dicts[name][0]:
                             best_dicts[name] = (fvu, hyperparams, dict)
-    
+
     print("found satisfying dicts:", list(best_dicts.keys()))
-    
+
     del activation_dataset
 
     dictionaries = {}
@@ -736,7 +831,8 @@ def new_bottleneck_test():
         for i, tau in enumerate(tau_values):
             graph, div, corruption = acdc_test(
                 model,
-                dict, (layer, "residual"),
+                dict,
+                (layer, "residual"),
                 ioi_clean,
                 ioi_corrupted,
                 divergence_metric,
@@ -747,12 +843,15 @@ def new_bottleneck_test():
                 distance_metric=scaled_distance_to_clean,
             )
             scores[name].append((tau, graph, div, corruption))
-            print(f"tau: {tau:.3e} ({i+1}/{len(tau_values)}), graph size: {len(graph)}, div: {div:.3e}, corruption: {corruption:.2f}")
+            print(
+                f"tau: {tau:.3e} ({i+1}/{len(tau_values)}), graph size: {len(graph)}, div: {div:.3e}, corruption: {corruption:.2f}"
+            )
 
     torch.save(scores, os.path.join(BASE_FOLDER, f"dict_scores_layer_{layer}.pt"))
     torch.save(dictionaries, os.path.join(BASE_FOLDER, f"dictionaries_layer_{layer}.pt"))
 
-    #torch.save(diff_mean_scores, os.path.join(BASE_FOLDER, f"diff_mean_scores_layer_{layer}.pt"))
+    # torch.save(diff_mean_scores, os.path.join(BASE_FOLDER, f"diff_mean_scores_layer_{layer}.pt"))
+
 
 def erasure_test():
     torch.autograd.set_grad_enabled(False)
@@ -773,13 +872,13 @@ def erasure_test():
     class_one_hot = F.one_hot(classes, num_classes=2).float()
 
     def gender_erasure_metric(predictions):
-        predictions = predictions[torch.arange(sequence_lengths.shape[0]), sequence_lengths-1]
+        predictions = predictions[torch.arange(sequence_lengths.shape[0]), sequence_lengths - 1]
         predictions = predictions[:, [class_tokens[0], class_tokens[1]]]
         probs = F.softmax(predictions, dim=-1)
 
         pred = torch.einsum("bc,bc->b", probs, class_one_hot).mean()
         return torch.abs(pred - 0.5).item() + 0.5
-    
+
     layer = 2
     activation_dataset = torch.load(os.path.join(BASE_FOLDER, f"activation_data/layer_{layer}/0.pt"))
     activation_dataset = activation_dataset.to(device, dtype=torch.float32)
@@ -787,7 +886,13 @@ def erasure_test():
     max_fvu = 0.05
     best_dicts = {}
     ratios = [4]
-    dict_sets = [(ratio, torch.load(f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r{ratio}/_9/learned_dicts.pt")) for ratio in ratios]
+    dict_sets = [
+        (
+            ratio,
+            torch.load(f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r{ratio}/_9/learned_dicts.pt"),
+        )
+        for ratio in ratios
+    ]
 
     print("evaluating dicts")
     for ratio, dicts in tqdm.tqdm(dict_sets):
@@ -801,7 +906,7 @@ def erasure_test():
                 else:
                     if fvu > best_dicts[hyperparams["dict_size"]][0]:
                         best_dicts[hyperparams["dict_size"]] = (fvu, hyperparams, dict)
-    
+
     del activation_dataset
 
     dictionaries = {}
@@ -825,7 +930,10 @@ def erasure_test():
 
     print(f"base score: {base_score:.3e}")
 
-    torch.save((leace_score, leace_edit, base_score), os.path.join(BASE_FOLDER, f"leace_scores_layer_{layer}.pt"))
+    torch.save(
+        (leace_score, leace_edit, base_score),
+        os.path.join(BASE_FOLDER, f"leace_scores_layer_{layer}.pt"),
+    )
     torch.save(leace_eraser, os.path.join(BASE_FOLDER, f"leace_eraser_layer_{layer}.pt"))
 
     scores = {}
@@ -833,7 +941,8 @@ def erasure_test():
     for name, (dict, _) in dictionaries.items():
         scores[name] = concept_ablation(
             model,
-            dict, (layer, "residual"),
+            dict,
+            (layer, "residual"),
             prompts,
             scoring_function=gender_erasure_metric,
             scale_by_magnitude=False,
@@ -842,7 +951,11 @@ def erasure_test():
         )
 
     torch.save(scores, os.path.join(BASE_FOLDER, f"erasure_scores_layer_{layer}.pt"))
-    torch.save(dictionaries, os.path.join(BASE_FOLDER, f"erasure_dictionaries_layer_{layer}.pt"))
+    torch.save(
+        dictionaries,
+        os.path.join(BASE_FOLDER, f"erasure_dictionaries_layer_{layer}.pt"),
+    )
+
 
 if __name__ == "__main__":
     erasure_test()

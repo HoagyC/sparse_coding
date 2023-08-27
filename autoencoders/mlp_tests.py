@@ -2,6 +2,7 @@ import torch
 
 from autoencoders.learned_dict import LearnedDict
 
+
 class TiedPositiveSAE(LearnedDict):
     def __init__(self, encoder, encoder_bias, norm_encoder=False):
         self.encoder = encoder
@@ -17,7 +18,7 @@ class TiedPositiveSAE(LearnedDict):
     def to_device(self, device):
         self.encoder = self.encoder.to(device)
         self.encoder_bias = self.encoder_bias.to(device)
-    
+
     def encode(self, batch):
         self.encoder.clamp = torch.clamp(self.encoder, min=0.0)
         if self.norm_encoder:
@@ -30,6 +31,7 @@ class TiedPositiveSAE(LearnedDict):
         c = c + self.encoder_bias
         c = torch.clamp(c, min=0.0)
         return c
+
 
 class UntiedPositiveSAE(LearnedDict):
     def __init__(self, encoder, encoder_bias, norm_encoder=False):
@@ -47,7 +49,7 @@ class UntiedPositiveSAE(LearnedDict):
     def to_device(self, device):
         self.encoder = self.encoder.to(device)
         self.encoder_bias = self.encoder_bias.to(device)
-    
+
     def encode(self, batch):
         self.encoder.clamp = torch.clamp(self.encoder, min=0.0)
         if self.norm_encoder:
@@ -59,10 +61,18 @@ class UntiedPositiveSAE(LearnedDict):
         c = c + self.encoder_bias
         c = torch.clamp(c, min=0.0)
         return c
-    
+
+
 class FunctionalPositiveTiedSAE:
     @staticmethod
-    def init(activation_size, n_dict_components, l1_alpha, bias_decay=0.0, device=None, dtype=None):
+    def init(
+        activation_size,
+        n_dict_components,
+        l1_alpha,
+        bias_decay=0.0,
+        device=None,
+        dtype=None,
+    ):
         params = {}
         buffers = {}
 
@@ -71,9 +81,8 @@ class FunctionalPositiveTiedSAE:
         params["encoder"] = abs(params["encoder"])
 
         params["encoder_bias"] = torch.empty((n_dict_components,), device=device, dtype=dtype)
-        # init at -1 each
+        # init at -1 each
         nn.init.constant_(params["encoder_bias"], -1)
-        
 
         buffers["l1_alpha"] = torch.tensor(l1_alpha, device=device, dtype=dtype)
         buffers["bias_decay"] = torch.tensor(bias_decay, device=device, dtype=dtype)
@@ -99,7 +108,7 @@ class FunctionalPositiveTiedSAE:
         l_reconstruction = ((x_hat - 0.18) - batch).pow(2).mean()
         l_l1 = buffers["l1_alpha"] * torch.norm(c, 1, dim=-1).mean()
         l_bias_decay = buffers["bias_decay"] * torch.norm(params["encoder_bias"], 2)
-        
+
         loss_data = {
             "loss": l_reconstruction + l_l1 + l_bias_decay,
             "l_reconstruction": l_reconstruction,
@@ -112,4 +121,3 @@ class FunctionalPositiveTiedSAE:
         }
 
         return l_reconstruction + l_l1 + l_bias_decay, (loss_data, aux_data)
-

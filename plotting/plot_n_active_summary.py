@@ -1,8 +1,8 @@
-import sys
-import pickle
-import os
-from typing import List, Tuple
 import multiprocessing as mp
+import os
+import pickle
+import sys
+from typing import List, Tuple
 
 import matplotlib.pyplot as plt
 import torch
@@ -16,6 +16,7 @@ sys.path.append(LOCAL_DIR)
 
 from standard_metrics import calc_feature_n_active
 
+
 def plot_all():
     all_data = {}
     layer_locs = ["residual", "mlp"]
@@ -27,11 +28,11 @@ def plot_all():
                 run_name = f"{tied_str}l{layer}_{layer_loc}"
                 if not os.path.exists(os.path.join(PLOT_DATA_DIR, f"n_active_ratio_{run_name}.pkl")):
                     continue
-            
+
                 with open(os.path.join(PLOT_DATA_DIR, f"n_active_ratio_{run_name}.pkl"), "rb") as f:
                     all_data[run_name] = pickle.load(f)
-    
-    # now we want to plot the data on one figure with a subplot for each layer
+
+    # now we want to plot the data on one figure with a subplot for each layer
     fig, axs = plt.subplots(3, 6, figsize=(15, 8))
 
     for layer in layers:
@@ -67,19 +68,38 @@ def plot_all():
                 #     ax2.plot(*zip(*abs_data), label=epoch)
                 # ax2.legend()
                 # ax2.set_title(f"Plot of total active features for {layer_loc} layer {layer}")
-    
-    # set a single ylabel for each row
+
+    # set a single ylabel for each row
     for row in range(3):
         axs[row, 0].set_ylabel("No. active features")
-        # add text to the left of the graph to indicate which layer type is being plotted and whether tied or untied
+        # add text to the left of the graph to indicate which layer type is being plotted and whether tied or untied
         if row == 0:
-            axs[row, 0].text(-0.5, 0.5, "Residual, Tied", transform=axs[row, 0].transAxes, va="center", rotation=90)
+            axs[row, 0].text(
+                -0.5,
+                0.5,
+                "Residual, Tied",
+                transform=axs[row, 0].transAxes,
+                va="center",
+                rotation=90,
+            )
         elif row == 1:
-            axs[row, 0].text(-0.5, 0.5, "MLP, Tied", transform=axs[row, 0].transAxes, va="center", rotation=90)
+            axs[row, 0].text(
+                -0.5,
+                0.5,
+                "MLP, Tied",
+                transform=axs[row, 0].transAxes,
+                va="center",
+                rotation=90,
+            )
         elif row == 2:
-            axs[row, 0].text(-0.5, 0.5, "MLP, Untied", transform=axs[row, 0].transAxes, va="center", rotation=90)
-
-        
+            axs[row, 0].text(
+                -0.5,
+                0.5,
+                "MLP, Untied",
+                transform=axs[row, 0].transAxes,
+                va="center",
+                rotation=90,
+            )
 
     for col in range(6):
         axs[0, col].set_title(f"Layer {col}")
@@ -87,7 +107,6 @@ def plot_all():
 
     plt.tight_layout()
     plt.savefig(os.path.join(PLOTS_DIR, "n_active_summary.png"))
-
 
 
 if __name__ == "__main__":

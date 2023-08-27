@@ -4,25 +4,26 @@ import os
 import pickle
 import shutil
 import sys
-from typing import List, Tuple, Dict, Any
+from typing import Any, Dict, List, Tuple
 
 import matplotlib
 import matplotlib.pyplot as plt
-from matplotlib.markers import MarkerStyle
-from matplotlib.lines import Line2D
 import numpy as np
 import torch
 import tqdm
+from matplotlib.lines import Line2D
+from matplotlib.markers import MarkerStyle
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
-from autoencoders.pca import BatchedPCA, PCAEncoder
-from autoencoders.learned_dict import LearnedDict
 import standard_metrics
+from autoencoders.learned_dict import LearnedDict
+from autoencoders.pca import BatchedPCA, PCAEncoder
 
 load_dir = "/mnt/ssd-cluster/bigrun0308"
 plot_data_dir = "/mnt/ssd-cluster/plot_data"
 plot_dir = "/mnt/ssd-cluster/plots"
+
 
 def plot_by_group() -> None:
     chunk_range = [59]
@@ -90,7 +91,7 @@ def plot_by_group() -> None:
         for subcategory in categories:
             learned_dict_loc_list = list(set.intersection(*[set(x) for x in subcategory]))
             print(learned_dict_loc_list)
-            learned_dict_loc_list.sort(key=lambda x: int(float((x.split("_")[-2][1:])))) # sort by ratio
+            learned_dict_loc_list.sort(key=lambda x: int(float((x.split("_")[-2][1:]))))  # sort by ratio
             learned_dict_lists = []
             for x in learned_dict_loc_list:
                 name = x.split("_")[-2][1:]
@@ -125,13 +126,22 @@ def plot_by_group() -> None:
                 datapoint_series.append((run_name, datapoints))
             all_data.append(datapoint_series)
 
-        
         pickle.dump(plot_dir, open(f"all_data_{graph_name}.pkl", "wb"))
 
-        colors = ["Purples", "Blues", "Greens", "Oranges", "Reds", "Greys", "YlOrBr", "YlOrRd", "OrRd"]
+        colors = [
+            "Purples",
+            "Blues",
+            "Greens",
+            "Oranges",
+            "Reds",
+            "Greys",
+            "YlOrBr",
+            "YlOrRd",
+            "OrRd",
+        ]
         markers = ["o", "v", "s", "P", "X"]
-        #labels = ["0.5", "1", "2", "4", "8"]
-        #labels = [str(r) for r in learned_dict_files]
+        # labels = ["0.5", "1", "2", "4", "8"]
+        # labels = [str(r) for r in learned_dict_files]
 
         fig = plt.figure()
         ax = fig.add_subplot(111)
@@ -139,7 +149,15 @@ def plot_by_group() -> None:
             for i, (run_name, datapoints) in enumerate(datapoint_lists):
                 r_sq, sparsity, l1_alpha = zip(*datapoints)
                 cs = [math.log10(l1) if l1 != 0 else -5 for l1 in l1_alpha]
-                ax.scatter(sparsity, r_sq, label=run_name, cmap=colors[i % len(colors)], vmin=-5, vmax=-2, marker=markers[k % len(markers)])
+                ax.scatter(
+                    sparsity,
+                    r_sq,
+                    label=run_name,
+                    cmap=colors[i % len(colors)],
+                    vmin=-5,
+                    vmax=-2,
+                    marker=markers[k % len(markers)],
+                )
                 # if i == len(datapoints) - 1:
                 #     # write the l1_alpha values on every 5th point and highlight them
                 #     for j, (x, y) in enumerate(zip(sparsity, r_sq)):
@@ -147,15 +165,15 @@ def plot_by_group() -> None:
                 #             ax.annotate(f"{l1_alpha[j]:.1}", (x, y))
                 #             ax.scatter([x], [y], c="black")
 
-        # cap the x axis at 512, but allow smaller
+        # cap the x axis at 512, but allow smaller
         l, r = ax.get_xlim()
         ax.set_xlim(0, min(r, 512))
         ax.set_ylim(0, 1)
-        
+
         ax.set_xlabel("Mean no. features active")
         ax.set_ylabel("Unexplained Variance")
         ax.legend()
-        # set legend opacity to 1
+        # set legend opacity to 1
         leg = ax.get_legend()
         leg.legendHandles[0].set_alpha(1)
         ax.set_title(f"Sparsity vs. Unexplained Variance for {graph_name}")
@@ -165,29 +183,29 @@ def plot_by_group() -> None:
 
 def plot_fuv_sparsity():
     learned_dict_files = [
-        #"output_4_rd_deep/_0/learned_dicts.pt",
-        #"output_4_rd_deep/_1/learned_dicts.pt",
-        #"output_4_rd_deep/_2/learned_dicts.pt",
-        #"output_4_rd_deep/_3/learned_dicts.pt",
-        #"output_4_rd_deep/_4/learned_dicts.pt",
-        #"output_4_rd_deep/_5/learned_dicts.pt",
-        #"output_4_rd_deep/_6/learned_dicts.pt",
-        #"output_4_lista/_7/learned_dicts.pt",
+        # "output_4_rd_deep/_0/learned_dicts.pt",
+        # "output_4_rd_deep/_1/learned_dicts.pt",
+        # "output_4_rd_deep/_2/learned_dicts.pt",
+        # "output_4_rd_deep/_3/learned_dicts.pt",
+        # "output_4_rd_deep/_4/learned_dicts.pt",
+        # "output_4_rd_deep/_5/learned_dicts.pt",
+        # "output_4_rd_deep/_6/learned_dicts.pt",
+        # "output_4_lista/_7/learned_dicts.pt",
         # "output_4_lista_deep/_7/learned_dicts.pt",
-        #"output_4_lista_neg/_7/learned_dicts.pt",
-        #"output_4_rd_deep/_7/learned_dicts.pt",
-        #"output_4_tied/_7/learned_dicts.pt",
-        #"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r1/_9/learned_dicts.pt",
-        #"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r2/_9/learned_dicts.pt",
-        #"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r4/_9/learned_dicts.pt",
-        #"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r8/_9/learned_dicts.pt",
-        #"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r16/_9/learned_dicts.pt",
-        #"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r32/_9/learned_dicts.pt",
-        #"output_topk/_27/learned_dicts.pt",
-        #"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r0/_9/learned_dicts.pt",
-        #"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r2/_9/learned_dicts.pt",
-        #"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r8/_9/learned_dicts.pt",
-        #"/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r16/_9/learned_dicts.pt",
+        # "output_4_lista_neg/_7/learned_dicts.pt",
+        # "output_4_rd_deep/_7/learned_dicts.pt",
+        # "output_4_tied/_7/learned_dicts.pt",
+        # "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r1/_9/learned_dicts.pt",
+        # "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r2/_9/learned_dicts.pt",
+        # "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r4/_9/learned_dicts.pt",
+        # "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r8/_9/learned_dicts.pt",
+        # "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r16/_9/learned_dicts.pt",
+        # "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r32/_9/learned_dicts.pt",
+        # "output_topk/_27/learned_dicts.pt",
+        # "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r0/_9/learned_dicts.pt",
+        # "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r2/_9/learned_dicts.pt",
+        # "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r8/_9/learned_dicts.pt",
+        # "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r16/_9/learned_dicts.pt",
         # "output_topk_synthetic/_49/learned_dicts.pt",
         # "output_tied_synthetic/_49/learned_dicts.pt",
         "lr1e-3__mlp_l1_r1/_110/learned_dicts.pt"
@@ -217,7 +235,7 @@ def plot_fuv_sparsity():
     device = torch.device("cuda:7")
 
     dataset = torch.load("activation_data_synthetic/0.pt").to(dtype=torch.float32, device=device)
-    
+
     pca = BatchedPCA(dataset.shape[1], device)
 
     """
@@ -235,7 +253,7 @@ def plot_fuv_sparsity():
         j = min(i + batch_size, len(dataset))
         batch = dataset[i:j]
         pca.train_batch(batch)
-    
+
     sample_idxs = np.random.choice(len(dataset), 50000, replace=False)
     sample = dataset[sample_idxs]
 
@@ -246,16 +264,16 @@ def plot_fuv_sparsity():
     pca_scores = []
     for sparsity in tqdm.tqdm(range(1, sample.shape[1] // 2, 4)):
         pca_dict = pca.to_learned_dict(sparsity)
-        #pca_dict = PCAEncoder(torch.eye(sample.shape[1], device=device), sparsity)
+        # pca_dict = PCAEncoder(torch.eye(sample.shape[1], device=device), sparsity)
         fvu = standard_metrics.fraction_variance_unexplained(pca_dict, sample).item()
         pca_scores.append((sparsity, fvu))
 
-    #means = []
-    #variances = []
-    #datapoints = []
+    # means = []
+    # variances = []
+    # datapoints = []
     scores = {}
     for label, learned_dict_set in learned_dict_sets.items():
-        #points = []
+        # points = []
         scores[label] = []
         for learned_dict, hyperparams in learned_dict_set:
             learned_dict.to_device(device)
@@ -341,9 +359,9 @@ def plot_fuv_sparsity():
     legend_lines = []
     legend_names = []
     for (style, color), (label, series) in zip(settings, scores.items()):
-        #cmap = matplotlib.cm.get_cmap(color)
-        #norm = matplotlib.colors.Normalize(vmin=0, vmax=1)
-        #colors_ = [cmap(norm(mcs)) for _, _, mcs in series]
+        # cmap = matplotlib.cm.get_cmap(color)
+        # norm = matplotlib.colors.Normalize(vmin=0, vmax=1)
+        # colors_ = [cmap(norm(mcs)) for _, _, mcs in series]
         sorted_series = sorted(series, key=lambda x: x[0])
         sparsity, fvu, mcs = zip(*sorted_series)
 
@@ -362,14 +380,14 @@ def plot_fuv_sparsity():
         legend_lines.append(Line2D([0], [0], color=cmap(0.5), linestyle=style, linewidth=2))
         legend_names.append(label)
 
-        #ax.plot(sparsity, fvu, label=label, color=color, linestyle=style)
+        # ax.plot(sparsity, fvu, label=label, color=color, linestyle=style)
 
-    #pca_xs = [s for s, _ in pca_scores]
-    #pca_ys = [s for _, s in pca_scores]
-    #ax.plot(pca_xs, pca_ys, color="red", linestyle="dashed")
+    # pca_xs = [s for s, _ in pca_scores]
+    # pca_ys = [s for _, s in pca_scores]
+    # ax.plot(pca_xs, pca_ys, color="red", linestyle="dashed")
 
-    #legend_lines.append(Line2D([0], [0], color="red", linestyle="dashed"))
-    #legend_names.append("PCA")
+    # legend_lines.append(Line2D([0], [0], color="red", linestyle="dashed"))
+    # legend_names.append("PCA")
 
     ax.set_xlabel("Fraction Variance Unexplained")
     ax.set_ylabel("MCS")
@@ -379,11 +397,11 @@ def plot_fuv_sparsity():
 
     ax.legend(legend_lines, legend_names)
 
-    #ax.set_yscale("log")
+    # ax.set_yscale("log")
 
     # fix legend colors
-    #legend = ax.get_legend()
-    #for i, l in enumerate(legend.legend_handles[:-1]):
+    # legend = ax.get_legend()
+    # for i, l in enumerate(legend.legend_handles[:-1]):
     #    l.set_color(matplotlib.colormaps.get_cmap(colors[i % len(colors)])(0.8))
 
     plt.savefig("mcs_fvu.png")

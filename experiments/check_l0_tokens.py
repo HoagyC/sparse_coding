@@ -2,8 +2,8 @@
 Checking whether the directions learned by the sparse autoencoder in the residual stream at layer 0 are just the token embeddings.
 """
 
-from transformer_lens import HookedTransformer
 import torch
+from transformer_lens import HookedTransformer
 
 model = HookedTransformer.from_pretrained("EleutherAI/pythia-70m-deduped")
 
@@ -38,11 +38,12 @@ for layer in range(6):
         unembed_mcs = mcs_to_fixed(learned_dict, unembed_matrix)
         print(layer, "embed:", embed_mcs.mean(), "unembed:", unembed_mcs.mean())
         layer_data.append((embed_mcs.mean(), unembed_mcs.mean()))
-    
+
     data[layer] = layer_data
 
-# plot as two graphs
+# plot as two graphs
 import matplotlib.pyplot as plt
+
 fig, ax = plt.subplots(1, 2, figsize=(10, 5))
 for layer in range(6):
     embed, unembed = zip(*data[layer])
@@ -52,7 +53,7 @@ ax[0].set_title("Embedding")
 ax[1].set_title("Unembedding")
 ax[0].legend()
 ax[1].legend()
-# set xticks to [0.5, 1, 2, 4, 8, 16, 32]
+# set xticks to [0.5, 1, 2, 4, 8, 16, 32]
 ax[0].set_xticks(range(7))
 ax[0].set_xticklabels([0.5, 1, 2, 4, 8, 16, 32])
 ax[1].set_xticks(range(7))

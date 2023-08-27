@@ -1,15 +1,13 @@
+import copy
+from typing import List, Optional, Tuple, Type, Union
+
+import optree
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+import torchopt
 from torch import Tensor
 
-from typing import Union, Tuple, List, Optional, Type
-
-import torchopt
-import optree
-
-import copy
 
 # beg for forgiveness from the gods of OOP!
 # interfaces cower in fear of being arbitrarily
@@ -23,6 +21,7 @@ class DictSignature:
     def loss(params, buffers, batch):
         pass
 
+
 def optim_str_to_func(optim_str):
     if optim_str == "adam":
         return torchopt.adam
@@ -31,20 +30,21 @@ def optim_str_to_func(optim_str):
     else:
         raise ValueError("Unknown optimizer string: {}".format(optim_str))
 
+
 # https://github.com/pytorch/pytorch/blob/main/torch/_functorch/functional_call.py#L236
 def construct_stacked_leaf(
-    tensors: Union[Tuple[Tensor, ...], List[Tensor]], device: Optional[Union[torch.device, str]] = None
+    tensors: Union[Tuple[Tensor, ...], List[Tensor]],
+    device: Optional[Union[torch.device, str]] = None,
 ) -> Tensor:
     all_requires_grad = all(t.requires_grad for t in tensors)
     none_requires_grad = all(not t.requires_grad for t in tensors)
     if not all_requires_grad and not none_requires_grad:
-        raise RuntimeError(
-            f"Expected tensors from each model to have the same .requires_grad"
-        )
+        raise RuntimeError(f"Expected tensors from each model to have the same .requires_grad")
     result = torch.stack(tensors).to(device=device)
     if all_requires_grad:
         result = result.detach().requires_grad_()
     return result
+
 
 # now recurses! (cool)
 def stack_dict(models: list, device=None):
@@ -55,6 +55,7 @@ def stack_dict(models: list, device=None):
         tensors_.append(construct_stacked_leaf(ts, device=device))
     return optree.tree_unflatten(treespecs[0], tensors_)
 
+
 def unstack_dict(params, n_models, device=None):
     tensors, treespec = optree.tree_flatten(params)
     tensors_ = [[] for _ in range(n_models)]
@@ -63,8 +64,17 @@ def unstack_dict(params, n_models, device=None):
             tensors_[i].append(t[i].to(device=device))
     return [optree.tree_unflatten(treespec, ts) for ts in tensors_]
 
-class FunctionalEnsemble():
-    def __init__(self, models, sig: Type[DictSignature], optimizer_func, optimizer_kwargs, device=None, no_stacking=False):
+
+class FunctionalEnsemble:
+    def __init__(
+        self,
+        models,
+        sig: Type[DictSignature],
+        optimizer_func,
+        optimizer_kwargs,
+        device=None,
+        no_stacking=False,
+    ):
         if device is None:
             self.device = models[0]["encoder"].device
         else:
@@ -85,9 +95,10 @@ class FunctionalEnsemble():
         self.optim_states = torch.vmap(self.optimizer.init)(self.params)
 
         self.init_functions()
-    
+
     def init_functions(self):
         if self.no_stacking:
+
             def calc_grads_(params, buffers, batch):
                 return torch.func.grad(self.sig.loss, has_aux=True)(params, buffers, batch)
 
@@ -101,9 +112,10 @@ class FunctionalEnsemble():
                     grads.append(g)
                     auxs.append(a)
                 return stack_dict(grads), stack_dict(auxs)
-            
+
             self.calc_grads = calc_grads
         else:
+
             def calc_grads(params, buffers, batch):
                 return torch.func.grad(self.sig.loss, has_aux=True)(params, buffers, batch)
 
@@ -129,7 +141,7 @@ class FunctionalEnsemble():
         self.init_functions()
 
         return self
-    
+
     def unstack(self, device=None):
         params = unstack_dict(self.params, self.n_models, device=device)
         buffers = unstack_dict(self.buffers, self.n_models, device=device)
@@ -145,9 +157,9 @@ class FunctionalEnsemble():
             "no_stacking": self.no_stacking,
             "optimizer_func": self.optimizer_func,
             "optimizer_kwargs": self.optimizer_kwargs,
-            "optim_states": self.optim_states
+            "optim_states": self.optim_states,
         }
-    
+
     def to_device(self, device):
         self.device = device
 
@@ -159,7 +171,7 @@ class FunctionalEnsemble():
         optree.tree_map_(lambda t: t.share_memory_(), self.params)
         optree.tree_map_(lambda t: t.share_memory_(), self.buffers)
         optree.tree_map_(lambda t: t.share_memory_(), self.optim_states)
-    
+
     def step_batch(self, minibatches, expand_dims=True):
         with torch.no_grad():
             if expand_dims:
