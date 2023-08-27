@@ -50,6 +50,7 @@ def parse_args() -> dotdict:
 
     parser.add_argument("--refresh_data", type=bool, default=False)  # Whether to remake the dataset after each mini run
     parser.add_argument("--max_lines", type=int, default=100000)  # How many lines to read from the dataset
+    parser.add_argument("--center_activations", type=bool, default=False)  # Whether to center the activations before training autoencoder
 
     # interpret
     parser.add_argument("--n_feats_explain", type=int, default=10) # number of features to explain

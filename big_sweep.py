@@ -324,7 +324,13 @@ def sweep(ensemble_init_func, cfg):
         os.makedirs(cfg.iter_folder, exist_ok=True)
 
         chunk_loc = os.path.join(cfg.dataset_folder, f"{chunk_idx}.pt")
-        chunk = torch.load(chunk_loc).to(device="cpu", dtype=torch.float32)
+        chunk = torch.load(chunk_loc).to(device="cpu", dtype=torch.float32)  
+        if cfg.center_activations:
+            if i == 0:
+                print("Centring activations")
+                means = chunk.mean(dim=0)
+                torch.save(means, os.path.join(cfg.output_folder, "means.pt"))
+            chunk -= means          
 
         dispatch_job_on_chunk(
             ensembles, cfg, chunk, ensemble_train_loop
@@ -340,7 +346,7 @@ def sweep(ensemble_init_func, cfg):
             log_standard_metrics(learned_dicts, chunk, i, hyperparam_ranges, cfg)
 
         del chunk
-        if i == len(chunk_order) - 1 or i % cfg.save_every == 0:
+        if i == len(chunk_order) - 1 or (i + 1) in [2 ** j for j in range(10)]:
             torch.save(learned_dicts, os.path.join(cfg.iter_folder, "learned_dicts.pt"))
 
         print("\n")
