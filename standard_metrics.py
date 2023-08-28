@@ -447,6 +447,36 @@ def calc_feature_kurtosis(batch):
 
     return asymm_kurtosis
 
+def calc_moments_streaming(learned_dict, activations, batch_size=1000):
+    times_active = torch.zeros(learned_dict.n_feats, device=activations.device)
+    mean = torch.zeros(learned_dict.n_feats, device=activations.device)
+    m2 = torch.zeros(learned_dict.n_feats, device=activations.device)
+    m3 = torch.zeros(learned_dict.n_feats, device=activations.device)
+    m4 = torch.zeros(learned_dict.n_feats, device=activations.device)
+    
+    n = 0
+    for i in range(0, len(activations), batch_size):
+        batch = activations[i:i+batch_size]
+        feature_activations = learned_dict.encode(batch)
+        batch_mean = calc_feature_mean(feature_activations)
+        batch_m2 = (feature_activations ** 2).mean(dim=0)
+        batch_m3 = (feature_activations ** 3).mean(dim=0)
+        batch_m4 = (feature_activations ** 4).mean(dim=0)
+        
+        times_active += (batch_mean != 0).float()
+        
+        # update
+        mean = (n * mean + batch_size * batch_mean) / (n + batch_size)
+        m2 = (n * m2 + batch_size * batch_m2) / (n + batch_size)
+        m3 = (n * m3 + batch_size * batch_m3) / (n + batch_size)
+        m4 = (n * m4 + batch_size * batch_m4) / (n + batch_size)
+        
+        n += batch_size
+    
+    var = m2 - mean**2
+    skew = m3 / torch.clamp(var**1.5, min=1e-8)
+    kurtosis = m4 / torch.clamp(var**2, min=1e-8)
+    return times_active, mean, var, skew, kurtosis
  
 
 def plot_grid(scores: np.ndarray, first_tick_labels, second_tick_labels, first_label, second_label, **kwargs):

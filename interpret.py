@@ -453,9 +453,40 @@ def run_from_grouped(cfg: dotdict, results_loc: str):
 
     cfg.load_interpret_autoencoder = os.path.join("auto_interp_results", time_str)
     run_folder(cfg)
+    
+def read_transform_scores(transform_loc: str, score_mode: str, verbose: bool = False) -> Tuple[List[int], List[float]]:
+    transform_scores = []
+    transform_ndxs = []
+    # list all the features by looking for folders
+    feat_folders = [x for x in os.listdir(transform_loc) if x.startswith("feature_")]
+    if len(feat_folders) == 0:
+        return [], []
+    
+    transform = transform_loc.split('/')[-1]
+    print(f"{transform=} {len(feat_folders)=}")
+    for feature_folder in feat_folders:
+        feature_ndx = int(feature_folder.split("_")[1])
+        folder = os.path.join(transform_loc, feature_folder)
+        if not os.path.exists(folder):
+            continue
+        if not os.path.exists(os.path.join(folder, "explanation.txt")):
+            continue
+        explanation_text = open(os.path.join(folder, "explanation.txt")).read()
+        # score should be on the second line but if explanation had newlines could be on the third or below
+        # score = float(explanation_text.split("\n")[1].split(" ")[1])
+        lines = explanation_text.split("\n")
+        score = get_score(lines, score_mode)
+
+        if verbose:
+            print(f"{feature_ndx=}, {transform=}, {score=}")
+        transform_scores.append(score)
+        transform_ndxs.append(feature_ndx)
+    
+    return transform_ndxs, transform_scores
 
 
 def read_scores(results_folder: str, score_mode: str = "top") -> Dict[str, Tuple[List[int], List[float]]]:
+    assert score_mode in ["top", "random", "top_random"]
     scores: Dict[str, Tuple[List[int], List[float]]] = {}
     transforms = os.listdir(results_folder)
     transforms = [transform for transform in transforms if os.path.isdir(os.path.join(results_folder, transform))]
@@ -464,31 +495,9 @@ def read_scores(results_folder: str, score_mode: str = "top") -> Dict[str, Tuple
         transforms = ["sparse_coding"] + transforms
 
     for transform in transforms:
-        transform_scores = []
-        transform_ndxs = []
-        # list all the features by looking for folders
-        feat_folders = [x for x in os.listdir(os.path.join(results_folder, transform)) if x.startswith("feature_")]
-        if len(feat_folders) == 0:
-            continue
-        print(f"{transform=}, {len(feat_folders)=}")
-        for feature_folder in feat_folders:
-            feature_ndx = int(feature_folder.split("_")[1])
-            folder = os.path.join(results_folder, transform, feature_folder)
-            if not os.path.exists(folder):
-                continue
-            if not os.path.exists(os.path.join(folder, "explanation.txt")):
-                continue
-            explanation_text = open(os.path.join(folder, "explanation.txt")).read()
-            # score should be on the second line but if explanation had newlines could be on the third or below
-            # score = float(explanation_text.split("\n")[1].split(" ")[1])
-            lines = explanation_text.split("\n")
-            score = get_score(lines, score_mode)
-
-            print(f"{feature_ndx=}, {transform=}, {score=}")
-            transform_scores.append(score)
-            transform_ndxs.append(feature_ndx)
-
-        scores[transform] = (transform_ndxs, transform_scores)
+        transform_ndxs, transform_scores = read_transform_scores(os.path.join(results_folder, transform), score_mode)
+        if len(transform_ndxs) > 0:
+            scores[transform] = (transform_ndxs, transform_scores)
 
     return scores
 
