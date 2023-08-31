@@ -2,18 +2,19 @@ import multiprocessing as mp
 import os
 import pickle
 import sys
-from typing import List, Tuple
+from typing import List, Tuple, Optional, Dict, Any
 
 import matplotlib.pyplot as plt
 import torch
 
 LOCAL_DIR = os.path.join(os.path.dirname(__file__), "..")
-LOAD_DIR = "/mnt/ssd-cluster/bigrun0308"
+LOAD_DIR = "/mnt/ssd-cluster/longrun2408"
 PLOT_DATA_DIR = "/mnt/ssd-cluster/plot_data"
 PLOTS_DIR = "/mnt/ssd-cluster/plots"
 
 sys.path.append(LOCAL_DIR)
 
+from autoencoders.learned_dict import LearnedDict
 from standard_metrics import calc_feature_n_active
 
 
@@ -25,14 +26,23 @@ def ratio_map(ratio: int) -> float:
         return 0.5
 
 
-activation_dim_map = {"mlp": 2048, "residual": 512}
+activation_dim_map = {"mlp": 1024 * 4, "residual": 1024}
 
+def get_most_recent_dict(dicts_loc: str, start_chunks: int) -> Optional[List[Tuple[LearnedDict, Dict[str, Any]]]]:
+    n_chunks = start_chunks
+    while n_chunks >= 0:
+        if os.path.exists(os.path.join(LOAD_DIR, dicts_loc, f"_{n_chunks - 1}", "learned_dicts.pt")):
+            if n_chunks != start_chunks:
+                print(f"Loading {dicts_loc} from {n_chunks} chunks instead of {start_chunks}")
+            return torch.load(os.path.join(LOAD_DIR, dicts_loc, f"_{n_chunks - 1}", "learned_dicts.pt"))
+        n_chunks -= 1
+    
+    return None
 
 def run_for_layer(args) -> None:
-    layer, layer_loc, ratios, device, reload, tied = args
-    n_chunks = 59 if layer_loc == "mlp" else 9
+    layer, layer_loc, ratios, device, reload, n_chunks, tied = args
 
-    if reload or not os.path.exists(os.path.join(PLOT_DATA_DIR, f"n_active_ratio_{tied}_l{layer}_{layer_loc}.pkl")):
+    if reload or not os.path.exists(os.path.join(PLOT_DATA_DIR, f"n_active_big_{tied}_l{layer}_{layer_loc}_nc{n_chunks}.pkl")):
         # check that has root permission
         if os.geteuid() != 0:
             raise PermissionError("Must run as root to load the data")
@@ -43,10 +53,10 @@ def run_for_layer(args) -> None:
         for ratio in ratios:
             dicts_loc = f"{tied}_{layer_loc}_l{layer}_r{ratio}"
             print(dicts_loc)
-            if not os.path.exists(os.path.join(LOAD_DIR, dicts_loc, f"_{n_chunks}", "learned_dicts.pt")):
-                print(f"Skipping {dicts_loc}")
+            all_dicts = get_most_recent_dict(dicts_loc, n_chunks)
+            if not all_dicts:
+                print(f"Skipping {layer} {layer_loc} {ratio} because no dicts found")
                 continue
-            all_dicts = torch.load(os.path.join(LOAD_DIR, dicts_loc, f"_{n_chunks}", "learned_dicts.pt"))
             dead_feats_data_series = []
             for learned_dict, hparams in all_dicts:
                 batch_size = int(5e4 // (float(ratio) + 1))
@@ -76,7 +86,7 @@ def run_for_layer(args) -> None:
         pickle.dump(
             layer_data,
             open(
-                os.path.join(PLOT_DATA_DIR, f"n_active_ratio_{tied}_l{layer}_{layer_loc}.pkl"),
+                os.path.join(PLOT_DATA_DIR, f"n_active_big_{tied}_l{layer}_{layer_loc}_nc{n_chunks}.pkl"),
                 "wb",
             ),
         )
@@ -85,7 +95,7 @@ def run_for_layer(args) -> None:
     else:
         layer_data = pickle.load(
             open(
-                os.path.join(PLOT_DATA_DIR, f"n_active_ratio_{tied}_l{layer}_{layer_loc}.pkl"),
+                os.path.join(PLOT_DATA_DIR, f"n_active_big_{tied}_l{layer}_{layer_loc}_nc{n_chunks}.pkl"),
                 "rb",
             )
         )
@@ -112,16 +122,17 @@ def run_for_layer(args) -> None:
     ax2.set_title(f"Plot of total active features for {layer_loc} layer {layer}")
 
     os.makedirs(PLOTS_DIR, exist_ok=True)
-    plt.savefig(os.path.join(PLOTS_DIR, f"active_plot_ratio_{tied}_l{layer}_{layer_loc}.png"))
+    plt.savefig(os.path.join(PLOTS_DIR, f"active_plot_big_{tied}_l{layer}_{layer_loc}_nc{n_chunks}.png"))
     print(f"Saved layer {layer} {layer_loc} and plotted")
 
 
 if __name__ == "__main__":
     devices = ["cuda:7", "cuda:1", "cuda:4", "cuda:6", "cuda:0", "cuda:5"]
     reload = True
-    residual_ratios = ["0", "1", "2", "4", "8", "16", "32", "64", "128", "256"]
+    residual_ratios = ["2", "4", "8", "16", "32", "64", "128", "256"]
     mlp_ratios = ["0.5", "1.0", "2.0", "4.0", "8.0"]
-    layers = list(range(6))
+    layer = 2
+    n_chunks_list= [8, 16, 32, 64, 80]
 
     for layer_loc in ["residual"]:
         ratios = mlp_ratios if layer_loc == "mlp" else residual_ratios
@@ -129,5 +140,5 @@ if __name__ == "__main__":
             with mp.Pool(6) as pool:
                 pool.map(
                     run_for_layer,
-                    [(layer, layer_loc, ratios, devices[i], reload, tied) for i, layer in enumerate(layers)],
+                    [(layer, layer_loc, ratios, devices[i], reload, n_chunks, tied) for i, n_chunks in enumerate(n_chunks_list)],
                 )

@@ -128,7 +128,7 @@ if __name__ == "__main__":
     tied = "untied"
     long_tied_ratios = ["0.25", "0.5", "1.0", "2.0", "4.0", "8.0", "16"]
     # untied_ratios = ['0.25', '0.5', '1.0', '2.0', '4.0', '8.0']
-    untied_ratios = [32]
+    untied_ratios = [2,4,8,16,32,64,128,256]
     # layers = list(range(6))
     layers = [0, 1, 2, 3, 4, 5]
     with mp.Pool(6) as pool:

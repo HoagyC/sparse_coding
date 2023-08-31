@@ -2,6 +2,7 @@ import itertools
 import math
 import os
 import shutil
+import sys
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -10,6 +11,8 @@ import torch
 import tqdm
 from matplotlib.lines import Line2D
 from matplotlib.markers import MarkerStyle
+
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 import standard_metrics
 from autoencoders.pca import BatchedPCA, PCAEncoder
@@ -153,7 +156,7 @@ def generate_scores(
                 (pca.to_rotation_dict(n), {"dict_size": 512, "n": n}) for n in range(1, dataset.shape[1], 8)
             ]
 
-    sample_idxs = np.random.choice(len(dataset), 50000, replace=False)
+    sample_idxs = np.random.choice(len(dataset), 20000, replace=False)
     sample = dataset[sample_idxs]
 
     del dataset
@@ -334,52 +337,68 @@ if __name__ == "__main__":
             # ("Linear L2", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r0/_9/learned_dicts.pt"),
             # ("Linear L2", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r1/_9/learned_dicts.pt"),
             (
-                "Linear L2",
-                f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r2/_9/learned_dicts.pt",
+                "Ratio 2",
+                f"/mnt/ssd-cluster/bigrun0308/tied_residual_l2_r2/_9/learned_dicts.pt",
             ),
             (
-                "Linear L2",
-                f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r4/_9/learned_dicts.pt",
+                "Ratio 4",
+                f"/mnt/ssd-cluster/bigrun0308/tied_residual_l2_r4/_9/learned_dicts.pt",
             ),
             (
-                "Linear L2",
-                f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r8/_9/learned_dicts.pt",
+                "Ratio 8",
+                f"/mnt/ssd-cluster/bigrun0308/tied_residual_l2_r8/_9/learned_dicts.pt",
             ),
             (
-                "Linear L2",
-                f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r16/_9/learned_dicts.pt",
+                "Ratio 16",
+                f"/mnt/ssd-cluster/bigrun0308/tied_residual_l2_r16/_9/learned_dicts.pt",
+            ),
+            (
+                "Ratio 32",
+                f"/mnt/ssd-cluster/longrun2408/tied_residual_l2_r32/_15/learned_dicts.pt",
+            ),
+            (
+                "Ratio 64",
+                f"/mnt/ssd-cluster/longrun2408/tied_residual_l2_r64/_15/learned_dicts.pt",
+            ),
+            (
+                "Ratio 128",
+                f"/mnt/ssd-cluster/longrun2408/tied_residual_l2_r128/_15/learned_dicts.pt",
+            ),
+            (
+                "Ratio 256",
+                f"/mnt/ssd-cluster/longrun2408/tied_residual_l2_r256/_15/learned_dicts.pt",
             ),
             # ("Linear L2", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r32/_9/learned_dicts.pt"),
             # ("Better", f"output_thresholding/_7/learned_dicts.pt"),
         ]
 
-        layer = 3
-        files += [
-            # ("Linear L3", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r0/_9/learned_dicts.pt"),
-            # ("Linear L3", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r1/_9/learned_dicts.pt"),
-            (
-                "Linear L3",
-                f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r2/_9/learned_dicts.pt",
-            ),
-            (
-                "Linear L3",
-                f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r4/_9/learned_dicts.pt",
-            ),
-            (
-                "Linear L3",
-                f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r8/_9/learned_dicts.pt",
-            ),
-            (
-                "Linear L3",
-                f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r16/_9/learned_dicts.pt",
-            ),
-            # ("Linear L3", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r32/_9/learned_dicts.pt"),
-        ]
+        # layer = 3
+        # files += [
+        #     # ("Linear L3", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r0/_9/learned_dicts.pt"),
+        #     # ("Linear L3", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r1/_9/learned_dicts.pt"),
+        #     (
+        #         "Linear L3",
+        #         f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r2/_9/learned_dicts.pt",
+        #     ),
+        #     (
+        #         "Linear L3",
+        #         f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r4/_9/learned_dicts.pt",
+        #     ),
+        #     (
+        #         "Linear L3",
+        #         f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r8/_9/learned_dicts.pt",
+        #     ),
+        #     (
+        #         "Linear L3",
+        #         f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r16/_9/learned_dicts.pt",
+        #     ),
+        #     # ("Linear L3", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r32/_9/learned_dicts.pt"),
+        # ]
 
         title = "Area Under FVU-Sparsity Curve"
-        filename = "sparsity_fvu_layer_2_to_3_comparison"
+        filename = "sparsity_fvu_layer_2_big_dicts"
 
-        dataset_file = "activation_data/0.pt"
+        dataset_file = "/mnt/ssd-cluster/single_chunks/l2_residual/0.pt"
 
         scores = generate_scores(files, dataset_file, group_by="dict_size", device=device)
 
@@ -405,9 +424,9 @@ if __name__ == "__main__":
             "sparsity",
             "fvu",
             (0, 512),
-            (0, 1),
+            (0, 0.3),
             "Threshold Activation Perf.",
-            f"graphs/{filename}.png",
+            f"graphs/{filename}",
         )
 
         # settings = {f"Layer {layer}": {"style": "solid", "color": "Blues", "points": False}}
