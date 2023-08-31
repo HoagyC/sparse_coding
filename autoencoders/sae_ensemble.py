@@ -7,9 +7,10 @@ import torchopt
 
 from autoencoders.learned_dict import (LearnedDict, ReverseSAE, TiedSAE,
                                        UntiedSAE)
+from autoencoders.ensemble import DictSignature
 
 
-class FunctionalSAE:
+class FunctionalSAE(DictSignature):
     @staticmethod
     def init(
         activation_size,
@@ -77,7 +78,7 @@ class FunctionalSAE:
         return l_reconstruction + l_l1 + l_bias_decay, (loss_data, aux_data)
 
 
-class FunctionalTiedSAE:
+class FunctionalTiedSAE(DictSignature):
     @staticmethod
     def init(
         activation_size,
@@ -134,7 +135,7 @@ class FunctionalTiedSAE:
         return l_reconstruction + l_l1 + l_bias_decay, (loss_data, aux_data)
 
 
-class FunctionalThresholdingSAE:
+class FunctionalThresholdingSAE(DictSignature):
     @staticmethod
     def init(activation_size, n_dict_components, l1_alpha, device=None, dtype=None):
         params = {}
@@ -209,7 +210,7 @@ class ThresholdingSAE(LearnedDict):
 
 
 # allows stacking between different dict sizes
-class FunctionalMaskedTiedSAE:
+class FunctionalMaskedTiedSAE(DictSignature):
     @staticmethod
     def init(
         activation_size,
@@ -277,7 +278,7 @@ class FunctionalMaskedTiedSAE:
 
 
 # allows stacking between different dict sizes
-class FunctionalMaskedSAE:
+class FunctionalMaskedSAE(DictSignature):
     @staticmethod
     def init(
         activation_size,
@@ -347,7 +348,7 @@ class FunctionalMaskedSAE:
         return l_reconstruction + l_l1, (loss_data, aux_data)
 
 
-class FunctionalReverseSAE:
+class FunctionalReverseSAE(DictSignature):
     @staticmethod
     def init(
         activation_size,

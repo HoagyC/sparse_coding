@@ -2,14 +2,12 @@ import os
 import shutil
 from datetime import datetime
 from itertools import product
+from typing import List, Tuple, Dict
 
 import numpy as np
 import torch
-import torch.multiprocessing as mp
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.utils.data as data
 import torchopt
+import tqdm
 
 from argparser import parse_args
 from autoencoders.direct_coef_search import DirectCoefOptimizer
@@ -24,6 +22,7 @@ from autoencoders.semilinear_autoencoder import SemiLinearSAE
 from autoencoders.topk_encoder import TopKEncoder
 from big_sweep import sweep
 from cluster_runs import dispatch_job_on_chunk
+from utils import dotdict
 
 # an example function that builds a list of ensembles to run
 # you could this as a template for other experiments
@@ -34,7 +33,10 @@ from cluster_runs import dispatch_job_on_chunk
 # - a list of hyperparameters that vary between ensembles
 # - a list of hyperparameters that vary between models in the same ensemble
 # - a dict of hyperparameter ranges
-def tied_vs_not_experiment(cfg):
+
+DICT_RATIO = None
+
+def tied_vs_not_experiment(cfg: dotdict):
     l1_values = list(np.logspace(-3.5, -2, 4))
 
     bias_decays = [0.0, 0.05, 0.1]
@@ -227,12 +229,7 @@ def tied_vs_not_experiment(cfg):
     )
 
 
-DICT_RATIO = None
-
-import tqdm
-
-
-def topk_experiment(cfg):
+def topk_experiment(cfg: dotdict):
     sparsity_levels = np.arange(1, 161, 10)
     dict_ratios = [0.5, 1, 2, 4, 0.5, 1, 2, 4]
     dict_sizes = [int(cfg.activation_width * ratio) for ratio in dict_ratios]
@@ -265,7 +262,7 @@ def topk_experiment(cfg):
     )
 
 
-def synthetic_linear_range(cfg):
+def synthetic_linear_range(cfg: dotdict):
     l1_vals = np.logspace(-4, -2, 32)
     dict_ratios = [0.5, 1, 2, 4]
     dict_sizes = [int(cfg.activation_width * ratio) for ratio in dict_ratios]
@@ -294,7 +291,7 @@ def synthetic_linear_range(cfg):
     )
 
 
-def dense_l1_range_experiment(cfg):
+def dense_l1_range_experiment(cfg: dotdict):
     l1_values = np.logspace(-4, -2, 16)
     devices = [f"cuda:{i}" for i in range(8)]
 
@@ -342,7 +339,7 @@ def dense_l1_range_experiment(cfg):
     )
 
 
-def residual_denoising_experiment(cfg):
+def residual_denoising_experiment(cfg: dotdict):
     l1_values = np.logspace(-5, -3, 16)
     devices = [f"cuda:{i}" for i in range(8)]
 
@@ -380,7 +377,7 @@ def residual_denoising_experiment(cfg):
     )
 
 
-def residual_denoising_comparison(cfg):
+def residual_denoising_comparison(cfg: dotdict):
     l1_values = np.logspace(-4, -2, 16)
     devices = [f"cuda:{i}" for i in range(4)]
 
@@ -404,7 +401,7 @@ def residual_denoising_comparison(cfg):
     )
 
 
-def thresholding_experiment(cfg):
+def thresholding_experiment(cfg: dotdict):
     l1_values = np.logspace(-4, -2, 16)
     devices = [f"cuda:{i}" for i in range(4)]
 
@@ -436,7 +433,7 @@ def thresholding_experiment(cfg):
     )
 
 
-def run_thresholding():
+def run_thresholding() -> None:
     cfg = parse_args()
 
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
@@ -465,7 +462,7 @@ def run_thresholding():
     sweep(thresholding_experiment, cfg)
 
 
-def run_resid_denoise():
+def run_resid_denoise() -> None:
     cfg = parse_args()
 
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
@@ -497,7 +494,7 @@ def run_resid_denoise():
         sweep(residual_denoising_experiment, cfg)
 
 
-def zero_l1_baseline(cfg):
+def zero_l1_baseline(cfg: dotdict):
     l1_values = np.array([0.0])
     devices = ["cuda:1"]
 
@@ -544,7 +541,7 @@ def zero_l1_baseline(cfg):
     )
 
 
-def dict_ratio_experiment(cfg):
+def dict_ratio_experiment(cfg: dotdict):
     # l1_values = np.logspace(-4, -2, 12)
     dict_sizes = [int(512 * x) for x in np.linspace(1, 5, 8)]
     max_size = max(dict_sizes)
@@ -581,7 +578,7 @@ def dict_ratio_experiment(cfg):
     )
 
 
-def run_dict_ratio():
+def run_dict_ratio() -> None:
     cfg = parse_args()
 
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
@@ -621,7 +618,7 @@ def run_dict_ratio():
     sweep(dict_ratio_experiment, cfg)
 
 
-def run_dense_l1_range():
+def run_dense_l1_range() -> None:
     cfg = parse_args()
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.dataset_name = "EleutherAI/pile"
@@ -644,7 +641,7 @@ def run_dense_l1_range():
     sweep(dense_l1_range_experiment, cfg)
 
 
-def run_across_layers():
+def run_across_layers() -> None:
     cfg = parse_args()
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.dataset_name = "EleutherAI/pile"
@@ -680,7 +677,7 @@ def run_across_layers():
             shutil.rmtree(cfg.dataset_folder)
 
 
-def run_across_layers_attn():
+def run_across_layers_attn() -> None:
     cfg = parse_args()
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.dataset_name = "EleutherAI/pile"
@@ -711,7 +708,7 @@ def run_across_layers_attn():
         shutil.rmtree(cfg.dataset_folder)
 
 
-def run_across_layers_mlp_out():
+def run_across_layers_mlp_out() -> None:
     cfg = parse_args()
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.dataset_name = "EleutherAI/pile"
@@ -742,7 +739,7 @@ def run_across_layers_mlp_out():
         shutil.rmtree(cfg.dataset_folder)
 
 
-def run_across_layers_mlp_untied():
+def run_across_layers_mlp_untied() -> None:
     cfg = parse_args()
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.dataset_name = "EleutherAI/pile"
@@ -773,7 +770,7 @@ def run_across_layers_mlp_untied():
         shutil.rmtree(cfg.dataset_folder)
 
 
-def run_zero_l1_baseline():
+def run_zero_l1_baseline() -> None:
     cfg = parse_args()
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.dataset_name = "NeelNanda/pile-10k"
@@ -797,7 +794,7 @@ def run_zero_l1_baseline():
     sweep(zero_l1_baseline, cfg)
 
 
-def topk():
+def topk() -> None:
     cfg = parse_args()
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.dataset_name = "EleutherAI/pile"
@@ -820,10 +817,7 @@ def topk():
     sweep(topk_experiment, cfg)
 
 
-def synthetic_test():
-    import os
-    import shutil
-
+def synthetic_test() -> None:
     cfg = parse_args()
 
     cfg.use_synthetic_dataset = True
@@ -860,7 +854,7 @@ def synthetic_test():
         sweep(synthetic_linear_range, cfg)
 
 
-def pythia_1_4_b_dict(cfg):
+def pythia_1_4_b_dict(cfg: dotdict):
     dict_ratio = 6
     l1_values = np.logspace(-4, -2, 5)
     dict_size = int(cfg.activation_width * dict_ratio)
@@ -884,7 +878,7 @@ def pythia_1_4_b_dict(cfg):
     )
 
 
-def run_pythia_1_4_b_sweep():
+def run_pythia_1_4_b_sweep() -> None:
     cfg = parse_args()
 
     cfg.model_name = "EleutherAI/pythia-1.4B-deduped"
@@ -909,7 +903,7 @@ def run_pythia_1_4_b_sweep():
     sweep(pythia_1_4_b_dict, cfg)
 
 
-def run_zeros_only(cfg):
+def run_zeros_only(cfg: dotdict):
     l1_values = np.array([0])
     dict_size = int(cfg.activation_width * cfg.learned_dict_ratio)
     device = cfg.device
@@ -956,7 +950,7 @@ def run_zeros_only(cfg):
     )
 
 
-def long_mlp_sweep(cfg):
+def long_mlp_sweep(cfg: dotdict):
     l1_values = np.logspace(-3.5, -2.5, 5)
     l1_values = np.concatenate([[0], [1e-4], l1_values])
     device = cfg.device
@@ -1004,7 +998,7 @@ def long_mlp_sweep(cfg):
     )
 
 
-def run_across_layers_mlp_long():
+def run_across_layers_mlp_long() -> None:
     cfg = parse_args()
     # set device and layer in config through command line
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
@@ -1035,7 +1029,7 @@ def run_across_layers_mlp_long():
             cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{cfg.layer_loc}"
             sweep(long_mlp_sweep, cfg)
 
-def run_positive(cfg):
+def run_positive(cfg: dotdict):
     l1_values = np.logspace(-5, -3.5, 8)
     l1_values = np.concatenate([[0], l1_values])
     ensembles = []
@@ -1067,7 +1061,7 @@ def run_positive(cfg):
     )
 
 
-def setup_positives():
+def setup_positives() -> None:
     cfg = parse_args()
     # set device and layer in config through command line
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
@@ -1095,7 +1089,7 @@ def setup_positives():
             cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{cfg.layer_loc}"
             sweep(run_positive, cfg)
 
-def simple_setoff(cfg):
+def simple_setoff(cfg: dotdict) -> Tuple[List[Tuple[FunctionalEnsemble, dict, str]], List[str], List[str], dict]:
     l1_values = np.logspace(-4, -2, 8)
     l1_values = np.concatenate([[0], l1_values])
     ensembles = []
@@ -1142,7 +1136,7 @@ def simple_setoff(cfg):
     )
 
 
-def run_all_zeros(device, layer):
+def run_all_zeros(device: str, layer: int):
     cfg = parse_args()
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.dataset_name = "EleutherAI/pile"
@@ -1176,7 +1170,7 @@ def run_all_zeros(device, layer):
                 sweep(run_zeros_only, cfg)
 
 
-def simple_run():
+def simple_run() -> None:
     cfg = parse_args()
     cfg.model_name = "gpt2"
     cfg.dataset_name = "EleutherAI/pile"
@@ -1207,7 +1201,7 @@ def simple_run():
     sweep(simple_setoff, cfg)
 
 
-def run_single_layer():
+def run_single_layer() -> None:
     cfg = parse_args()
     cfg.model_name = "EleutherAI/pythia-410m-deduped"
     cfg.dataset_name = "openwebtext"
@@ -1240,7 +1234,7 @@ def run_single_layer():
             sweep(simple_setoff, cfg)
 
 
-def run_single_layer_gpt2():
+def run_single_layer_gpt2() -> None:
     cfg = parse_args()
     cfg.model_name = "gpt2"
     cfg.dataset_name = "openwebtext"

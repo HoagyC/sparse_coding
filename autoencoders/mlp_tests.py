@@ -1,6 +1,8 @@
 import torch
+from torch import nn
 
-from autoencoders.learned_dict import LearnedDict
+from autoencoders.learned_dict import LearnedDict, TiedSAE
+from autoencoders.ensemble import DictSignature
 
 
 class TiedPositiveSAE(LearnedDict):
@@ -34,7 +36,7 @@ class TiedPositiveSAE(LearnedDict):
 
 
 class UntiedPositiveSAE(LearnedDict):
-    def __init__(self, encoder, encoder_bias, norm_encoder=False):
+    def __init__(self, encoder, encoder_bias, decoder, norm_encoder=False):
         self.encoder = encoder
         self.encoder.data = torch.abs(self.encoder.data)
         self.decoder = decoder
@@ -63,7 +65,7 @@ class UntiedPositiveSAE(LearnedDict):
         return c
 
 
-class FunctionalPositiveTiedSAE:
+class FunctionalPositiveTiedSAE(DictSignature):
     @staticmethod
     def init(
         activation_size,

@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 
 from autoencoders.learned_dict import LearnedDict
+from autoencoders.ensemble import DictSignature
 
 
 def shrinkage(r, theta):
@@ -35,7 +36,7 @@ class LISTALayer:
         return y_, x_
 
 
-class FunctionalLISTADenoisingSAE:
+class FunctionalLISTADenoisingSAE(DictSignature):
     @staticmethod
     def init(d_activation, n_features, n_hidden_layers, l1_alpha, dtype=torch.float32):
         params = {}
@@ -135,7 +136,7 @@ class ResidualDenoisingLayer:
         return x_ + x
 
 
-class FunctionalResidualDenoisingSAE:
+class FunctionalResidualDenoisingSAE(DictSignature):
     def init(d_activation, n_features, n_hidden_layers, l1_alpha, dtype=torch.float32):
         params = {}
         params["decoder"] = torch.empty(n_features, d_activation, dtype=dtype)

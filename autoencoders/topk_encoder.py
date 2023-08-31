@@ -2,9 +2,10 @@ import torch
 import torch.nn.functional as F
 
 from autoencoders.learned_dict import LearnedDict
+from autoencoders.ensemble import DictSignature
 
 
-class TopKEncoder:
+class TopKEncoder(DictSignature):
     def init(d_activation, n_features, sparsity, dtype=torch.float32):
         params = {}
         params["dict"] = torch.randn(n_features, d_activation, dtype=dtype)
