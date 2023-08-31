@@ -7,8 +7,6 @@ from typing import List, Optional, Union
 
 import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
-from transformer_lens.loading_from_pretrained import (convert_hf_model_config,
-                                                      get_official_model_name)
 
 VAST_NUM = 4
 # DEST_ADDR = f"root@ssh{VAST_NUM}.vast.ai"

@@ -18,6 +18,8 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import wandb
+
 from baukit import Trace
 from datasets import Dataset, DatasetDict, load_dataset
 from einops import rearrange
@@ -25,9 +27,9 @@ from torch.utils.data import DataLoader
 from torchtyping import TensorType
 from tqdm import tqdm
 from transformer_lens import HookedTransformer
+from transformer_lens.loading_from_pretrained import get_official_model_name, convert_hf_model_config
 from transformers import GPT2Tokenizer, PreTrainedTokenizerBase
 
-import wandb
 from utils import *
 
 T = TypeVar("T", bound=Union[Dataset, DatasetDict])
@@ -129,7 +131,7 @@ def make_sentence_dataset(dataset_name: str, max_lines: int = 20_000, start_line
                 os.system("unzstd pile0.zst")
         dataset = Dataset.from_list(list(read_from_pile("pile0", max_lines=max_lines, start_line=start_line)))
     else:
-        dataset = load_dataset(dataset_name, split="train")
+        dataset = load_dataset(dataset_name, split=f"train[{start_line}:{start_line + max_lines}]")
     return dataset
 
 
