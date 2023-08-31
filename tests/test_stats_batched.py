@@ -19,7 +19,7 @@ class TestStatisticalFunctions(unittest.TestCase):
         exact_skew = calc_feature_skew(activations)
         exact_kurtosis = calc_feature_kurtosis(activations)
         
-        _, batch_mean, batch_var, batch_skew, batch_kurtosis = calc_moments_streaming(learned_dict, activations, batch_size=1000)
+        _, batch_mean, batch_var, batch_skew, batch_kurtosis, _ = calc_moments_streaming(learned_dict, activations, batch_size=1000)
         
         self.assertAlmostEqual(exact_mean.item(), batch_mean.item(), places=5)
         self.assertAlmostEqual(exact_var.item(), batch_var.item(), places=3)

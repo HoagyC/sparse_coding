@@ -447,6 +447,7 @@ def calc_feature_kurtosis(batch):
 
     return asymm_kurtosis
 
+
 def calc_moments_streaming(learned_dict, activations, batch_size=1000):
     times_active = torch.zeros(learned_dict.n_feats, device=activations.device)
     mean = torch.zeros(learned_dict.n_feats, device=activations.device)
@@ -476,8 +477,8 @@ def calc_moments_streaming(learned_dict, activations, batch_size=1000):
     var = m2 - mean**2
     skew = m3 / torch.clamp(var**1.5, min=1e-8)
     kurtosis = m4 / torch.clamp(var**2, min=1e-8)
-    return times_active, mean, var, skew, kurtosis
- 
+    return times_active, mean, var, skew, kurtosis, m4
+    
 
 def plot_grid(scores: np.ndarray, first_tick_labels, second_tick_labels, first_label, second_label, **kwargs):
     fig = plt.figure()
@@ -559,12 +560,31 @@ def make_one_chunk_per_layer() -> None:
                 tokenizer,
                 model,
                 dataset_name="EleutherAI/pile",
-                dataset_folder=f"/mnt/ssd-cluster/single_chunks_1m/l{layer}_{layer_loc}",
+                dataset_folder=f"/mnt/ssd-cluster/single_chunks/l{layer}_{layer_loc}",
                 layer=layer,
                 layer_loc=layer_loc,
                 n_chunks=1,
                 device=device,
                 start_line=1_000_000,
+            )
+
+def make_one_chunk_per_layer_gpt2sm() -> None:    
+    device = torch.device("cuda:4")
+    model_name = "gpt2"
+    model = HookedTransformer.from_pretrained(model_name, device=device)
+    tokenizer = model.tokenizer
+    
+    for layer_loc in ["residual"]:
+        for layer in range(12):
+            setup_data(
+                tokenizer,
+                model,
+                dataset_name="openwebtext",
+                dataset_folder=f"/mnt/ssd-cluster/single_chunks_gpt2sm/l{layer}_{layer_loc}",
+                layer=layer,
+                layer_loc=layer_loc,
+                n_chunks=1,
+                device=device,
             )
 
 def calculate_perplexity(
@@ -791,7 +811,7 @@ def run_mmcs_with_larger(learned_dicts, threshold=0.9, device: Union[str, torch.
     return av_mmcs_with_larger_dicts, feats_above_threshold, full_max_cosine_sim_for_histograms
 
 if __name__ == "__main__":
-    make_one_chunk_per_layer()
+    make_one_chunk_per_layer_gpt2sm()
 
     # dicts = torch.load("/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r4/_9/learned_dicts.pt")
     # plot_capacity_scatter(dicts, save_name="outputs/capacity_scatter_l2_r4")
