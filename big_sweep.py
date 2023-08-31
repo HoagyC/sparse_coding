@@ -343,7 +343,7 @@ def sweep(ensemble_init_func, cfg):
         chunk_order = np.tile(chunk_order, cfg.n_repetitions)
 
     for i, chunk_idx in enumerate(chunk_order):
-        print(f"Chunk {i+1}/{n_chunks}")
+        print(f"Chunk {i+1}/{len(chunk_order)}")
 
         cfg.iter_folder = os.path.join(cfg.output_folder, f"_{i}")
         os.makedirs(cfg.iter_folder, exist_ok=True)
@@ -369,7 +369,7 @@ def sweep(ensemble_init_func, cfg):
             log_standard_metrics(learned_dicts, chunk, i, hyperparam_ranges, cfg)
 
         del chunk
-        if i == len(chunk_order) - 1 or (i + 1) in [2**j for j in range(10)]:
+        if i == len(chunk_order) - 1 or (i + 1) in [2**j for j in range(3, 10)]:
             torch.save(learned_dicts, os.path.join(cfg.iter_folder, "learned_dicts.pt"))
 
         print("\n")

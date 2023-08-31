@@ -10,11 +10,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data as data
 import torchopt
-from autencoders.mlp_tests import FunctionalPositiveTiedSAE
 
 from argparser import parse_args
 from autoencoders.direct_coef_search import DirectCoefOptimizer
 from autoencoders.ensemble import FunctionalEnsemble
+from autoencoders.mlp_tests import FunctionalPositiveTiedSAE
 from autoencoders.residual_denoising_autoencoder import (
     FunctionalLISTADenoisingSAE, FunctionalResidualDenoisingSAE)
 from autoencoders.sae_ensemble import (FunctionalMaskedTiedSAE, FunctionalSAE,
@@ -1035,10 +1035,6 @@ def run_across_layers_mlp_long():
             cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{cfg.layer_loc}"
             sweep(long_mlp_sweep, cfg)
 
-    # delete the dataset
-    shutil.rmtree(cfg.dataset_folder)
-
-
 def run_positive(cfg):
     l1_values = np.logspace(-5, -3.5, 8)
     l1_values = np.concatenate([[0], l1_values])
@@ -1098,10 +1094,6 @@ def setup_positives():
             cfg.output_folder = f"positive_{cfg.layer_loc}_l{cfg.layer}_r{cfg.learned_dict_ratio}_bd{cfg.bias_decay}"
             cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{cfg.layer_loc}"
             sweep(run_positive, cfg)
-
-    # delete the dataset
-    shutil.rmtree(cfg.dataset_folder)
-
 
 def simple_setoff(cfg):
     l1_values = np.logspace(-4, -2, 8)
@@ -1217,27 +1209,27 @@ def simple_run():
 
 def run_single_layer():
     cfg = parse_args()
-    cfg.model_name = "EleutherAI/pythia-70m-deduped"
-    cfg.dataset_name = "EleutherAI/pile"
+    cfg.model_name = "EleutherAI/pythia-410m-deduped"
+    cfg.dataset_name = "openwebtext"
 
     cfg.batch_size = 1024
     cfg.use_wandb = True
     cfg.wandb_images = False
-    cfg.activation_width = 512
+    cfg.activation_width = 1024
     cfg.save_every = 5
-    cfg.n_chunks = 64
-    cfg.n_repetitions = 1
+    cfg.n_chunks = 16 
+    cfg.n_repetitions = 5
     cfg.tied_ae = True
     for layer_loc in ["residual"]:
-        cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{layer_loc}"
+        cfg.dataset_folder = f"owtchunks_pythia410_l{cfg.layer}_{layer_loc}"
         # shutil.rmtree(cfg.dataset_folder)
-        for dict_ratio in [6]:
+        for dict_ratio in [4]:
             cfg.layer_loc = layer_loc
             cfg.learned_dict_ratio = dict_ratio
 
             print(f"Running layer {cfg.layer}, layer location {layer_loc}, dict_ratio {dict_ratio}")
 
-            cfg.output_folder = f"/mnt/ssd-cluster/longrun2408/{'tied' if cfg.tied_ae else 'untied'}_{layer_loc}_l{cfg.layer}_r{int(cfg.learned_dict_ratio)}"
+            cfg.output_folder = f"/mnt/ssd-cluster/pythia410/{'tied' if cfg.tied_ae else 'untied'}_{layer_loc}_l{cfg.layer}_r{int(cfg.learned_dict_ratio)}"
 
             print(f"Output folder: {cfg.output_folder}, dataset folder: {cfg.dataset_folder}")
 
@@ -1246,9 +1238,6 @@ def run_single_layer():
             cfg.lr = 1e-3
 
             sweep(simple_setoff, cfg)
-
-        # delete the dataset to save space
-        shutil.rmtree(cfg.dataset_folder)
 
 
 def run_single_layer_gpt2():
@@ -1267,7 +1256,7 @@ def run_single_layer_gpt2():
     for layer_loc in ["residual"]:
         cfg.dataset_folder = f"pilechunks_gpt2sm_l{cfg.layer}_{layer_loc}"
         # shutil.rmtree(cfg.dataset_folder)
-        for dict_ratio in [2, 4, 8, 16]:
+        for dict_ratio in [32, 64, 96]:
             cfg.layer_loc = layer_loc
             cfg.learned_dict_ratio = dict_ratio
 
@@ -1283,9 +1272,6 @@ def run_single_layer_gpt2():
 
             sweep(simple_setoff, cfg)
 
-        # delete the dataset to save space
-        shutil.rmtree(cfg.dataset_folder)
-
 
 if __name__ == "__main__":
     # import sys
@@ -1294,4 +1280,4 @@ if __name__ == "__main__":
     # sys.argv = sys.argv[:1]
     # run_all_zeros(device, layer)
     # setup_positives()
-    run_single_layer_gpt2()
+    run_single_layer()
