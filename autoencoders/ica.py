@@ -42,7 +42,9 @@ class ICAEncoder(LearnedDict):
         return output
 
     def get_learned_dict(self):
-        return torch.tensor(self.ica.components_, dtype=torch.float32)
+        # return the components of the ICA, normalized to unit norm
+        components = torch.tensor(self.ica.components_, dtype=torch.float32)
+        return components / torch.norm(components, dim=-1, keepdim=True)
 
     def to_topk_dict(self, sparsity):
         positives = self.ica.components_.copy()
