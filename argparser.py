@@ -46,7 +46,9 @@ def parse_args() -> dotdict:
     )  # which part of the layer to extract features from, ["resid", "attn", "mlp", "mlpout"]
     parser.add_argument("--outputs_folder", type=str, default="outputs")
     parser.add_argument("--datasets_folder", type=str, default="activation_data")
+    parser.add_argument("--center_dataset", type=bool, default=False)
     parser.add_argument("--n_chunks", type=int, default=30)
+    parser.add_argument("--chunk_size_gb", type=float, default=2.)
     parser.add_argument(
         "--threshold", type=float, default=0.9
     )  # When looking for matching features across dicts, what is the threshold for a match

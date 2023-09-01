@@ -1203,7 +1203,7 @@ def simple_run() -> None:
 
 def run_single_layer() -> None:
     cfg = parse_args()
-    cfg.model_name = "EleutherAI/pythia-410m-deduped"
+    cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.dataset_name = "openwebtext"
 
     cfg.batch_size = 1024
@@ -1211,11 +1211,11 @@ def run_single_layer() -> None:
     cfg.wandb_images = False
     cfg.activation_width = 1024
     cfg.save_every = 5
-    cfg.n_chunks = 16 
+    cfg.n_chunks = 16
     cfg.n_repetitions = 5
     cfg.tied_ae = True
-    for layer_loc in ["residual"]:
-        cfg.dataset_folder = f"owtchunks_pythia410_l{cfg.layer}_{layer_loc}"
+    for layer_loc in ["mlp"]:
+        cfg.dataset_folder = f"owtchunks_centered_pythia70m_l{cfg.layer}_{layer_loc}"
         # shutil.rmtree(cfg.dataset_folder)
         for dict_ratio in [4]:
             cfg.layer_loc = layer_loc
@@ -1223,7 +1223,7 @@ def run_single_layer() -> None:
 
             print(f"Running layer {cfg.layer}, layer location {layer_loc}, dict_ratio {dict_ratio}")
 
-            cfg.output_folder = f"/mnt/ssd-cluster/pythia410/{'tied' if cfg.tied_ae else 'untied'}_{layer_loc}_l{cfg.layer}_r{int(cfg.learned_dict_ratio)}"
+            cfg.output_folder = f"/mnt/ssd-cluster/pythia70m_centered/{'tied' if cfg.tied_ae else 'untied'}_{layer_loc}_l{cfg.layer}_r{int(cfg.learned_dict_ratio)}"
 
             print(f"Output folder: {cfg.output_folder}, dataset folder: {cfg.dataset_folder}")
 
@@ -1265,7 +1265,7 @@ def run_single_layer_gpt2() -> None:
             cfg.lr = 1e-3
 
             sweep(simple_setoff, cfg)
-
+            
 
 if __name__ == "__main__":
     # import sys

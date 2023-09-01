@@ -3,6 +3,7 @@ __pycache__/**
 .DS_Store
 **.pyc
 .pre-commit-config.yaml
+tmp
 
 .env
 .config

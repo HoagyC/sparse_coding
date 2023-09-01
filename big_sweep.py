@@ -251,6 +251,8 @@ def init_model_dataset(cfg):
             layer_loc=cfg.layer_loc,
             n_chunks=cfg.n_chunks,
             device=cfg.device,
+            chunk_size_gb=cfg.chunk_size_gb,
+            center_dataset=cfg.center_dataset,
         )
         del transformer, tokenizer
     else:

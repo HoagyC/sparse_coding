@@ -276,6 +276,7 @@ def make_activation_dataset(
     n_chunks: int = 1,
     max_length: int = 256,
     model_batch_size: int = 4,
+    center_dataset: bool = False
 ) -> pd.DataFrame:
     print(f"Running model and saving activations to {dataset_folder}")
     with torch.no_grad():
@@ -304,6 +305,12 @@ def make_activation_dataset(
 
             dataset.append(mlp_activation_data)
             if len(dataset) >= actives_per_chunk:
+                if center_dataset:
+                    if n_saved_chunks == 0:
+                        chunk_mean = torch.mean(torch.cat(dataset), dim=0)
+                        chunk_std = torch.std(torch.cat(dataset), dim=0)
+                    dataset = [(x - chunk_mean) / chunk_std for x in dataset]
+                    
                 # Need to save, restart the list
                 save_activation_chunk(dataset, n_saved_chunks, dataset_folder)
                 n_saved_chunks += 1
@@ -330,6 +337,7 @@ def make_activation_dataset_hf(
     max_length: int = 256,
     model_batch_size: int = 4,
     skip_chunks: int = 0,
+    center_dataset: bool = False
 ):
     with torch.no_grad():
         chunk_size = chunk_size_gb * (2**30)  # 2GB
@@ -337,6 +345,9 @@ def make_activation_dataset_hf(
             activation_width * 2 * model_batch_size * max_length
         )  # 3072 mlp activations, 2 bytes per half, 1024 context window
         max_batches_per_chunk = int(chunk_size // activation_size)
+        if center_dataset:
+            chunk_means = {}
+            chunk_stds = {}
 
         batches_to_skip = skip_chunks * max_batches_per_chunk
 
@@ -361,6 +372,11 @@ def make_activation_dataset_hf(
 
             for layer, folder in zip(layers, dataset_folders):
                 dataset = datasets[layer]
+                if center_dataset:
+                    if chunk_idx == 0:
+                        chunk_means[layer] = torch.mean(torch.cat(dataset), dim=0)
+                        chunk_stds[layer] = torch.std(torch.cat(dataset), dim=0)
+                    dataset = [(x - chunk_means[layer]) / chunk_stds[layer] for x in dataset]
                 save_activation_chunk(dataset, chunk_idx, folder)
 
             if len(datasets[layer]) < max_batches_per_chunk:
@@ -368,6 +384,8 @@ def make_activation_dataset_hf(
                 break
             else:
                 print(f"Saved chunk {chunk_idx} of activations, total size: {(chunk_idx + 1) * batch_idx * activation_size}")
+    
+    return (chunk_means, chunk_stds) if center_dataset else None
 
 
 def save_activation_chunk(dataset, n_saved_chunks, dataset_folder):
@@ -389,6 +407,7 @@ def setup_data(
     chunk_size_gb: float = 2,
     skip_chunks: int = 0,
     device: torch.device = torch.device("cuda:0"),
+    center_dataset: bool = False,
 ):
     layers = [layer] if isinstance(layer, int) else layer
 
@@ -417,6 +436,7 @@ def setup_data(
             n_chunks=n_chunks,
             max_length=MAX_SENTENCE_LEN,
             model_batch_size=MODEL_BATCH_SIZE,
+            center_dataset=center_dataset,
         )
     else:
         dataset_folder = [dataset_folder] if isinstance(dataset_folder, str) else dataset_folder
