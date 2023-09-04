@@ -274,12 +274,12 @@ def mcs_duplicates(ground: LearnedDict, model: LearnedDict) -> TensorType["_n_di
 def mmcs(model: LearnedDict, model2: LearnedDict):
     return mcs_duplicates(model, model2).mean()
 
-def mcs_to_fixed(model: LearnedDict, truth: TensorType["_n_dict_components", "_d_activation"]):
+def mcs_to_fixed(model: LearnedDict, truth: TensorType["_n_dict_components", "_activation_size"]):
     cosine_sim = torch.einsum("md,gd->mg", model.get_learned_dict(), truth)
     max_cosine_sim = cosine_sim.max(dim=-1).values
     return max_cosine_sim
 
-def mmcs_to_fixed(model: LearnedDict, truth: TensorType["_n_dict_components", "_d_activation"]):
+def mmcs_to_fixed(model: LearnedDict, truth: TensorType["_n_dict_components", "_activation_size"]):
     return mcs_to_fixed(model, truth).mean()
 
 def mmcs_from_list(ld_list: List[LearnedDict]) -> TensorType["_n_dicts", "_n_dicts"]:
@@ -294,7 +294,7 @@ def mmcs_from_list(ld_list: List[LearnedDict]) -> TensorType["_n_dicts", "_n_dic
             mmcs_t[j, i] = mmcs_t[i, j]
     return mmcs_t
 
-def representedness(features: TensorType["_n_dict_components", "_d_activation"], model: LearnedDict):
+def representedness(features: TensorType["_n_dict_components", "_activation_size"], model: LearnedDict):
     # mmcs but other way around
     cosine_sim = torch.einsum("gd,md->gm", features, model.get_learned_dict())
     max_cosine_sim = cosine_sim.max(dim=-1).values
@@ -412,6 +412,16 @@ def calc_feature_n_active(batch):
     n_active = torch.sum(batch != 0, dim=0)
     return n_active
 
+def batched_calc_feature_n_ever_active(learned_dict: LearnedDict, activations: torch.Tensor, batch_size: int = 1000, threshold: int = 10) -> int:
+    n_active_count = torch.zeros(learned_dict.n_feats, device=activations.device)
+    for i in range(0, len(activations), batch_size):
+        batch = activations[i:i+batch_size]
+        feat_activations = learned_dict.encode(batch)
+        n_active_count += calc_feature_n_active(feat_activations)
+
+    n_active_total = int((n_active_count > threshold).sum().item())
+    return n_active_total
+
 def calc_feature_mean(batch):
     # batch: [batch_size, n_features]
     mean = torch.mean(batch, dim=0)
@@ -437,7 +447,38 @@ def calc_feature_kurtosis(batch):
 
     return asymm_kurtosis
 
- 
+
+def calc_moments_streaming(learned_dict, activations, batch_size=1000):
+    times_active = torch.zeros(learned_dict.n_feats, device=activations.device)
+    mean = torch.zeros(learned_dict.n_feats, device=activations.device)
+    m2 = torch.zeros(learned_dict.n_feats, device=activations.device)
+    m3 = torch.zeros(learned_dict.n_feats, device=activations.device)
+    m4 = torch.zeros(learned_dict.n_feats, device=activations.device)
+    
+    n = 0
+    for i in range(0, len(activations), batch_size):
+        batch = activations[i:i+batch_size]
+        feature_activations = learned_dict.encode(batch)
+        batch_mean = calc_feature_mean(feature_activations)
+        batch_m2 = (feature_activations ** 2).mean(dim=0)
+        batch_m3 = (feature_activations ** 3).mean(dim=0)
+        batch_m4 = (feature_activations ** 4).mean(dim=0)
+        
+        times_active += (batch_mean != 0).float()
+        
+        # update
+        mean = (n * mean + batch_size * batch_mean) / (n + batch_size)
+        m2 = (n * m2 + batch_size * batch_m2) / (n + batch_size)
+        m3 = (n * m3 + batch_size * batch_m3) / (n + batch_size)
+        m4 = (n * m4 + batch_size * batch_m4) / (n + batch_size)
+        
+        n += batch_size
+    
+    var = m2 - mean**2
+    skew = m3 / torch.clamp(var**1.5, min=1e-8)
+    kurtosis = m4 / torch.clamp(var**2, min=1e-8)
+    return times_active, mean, var, skew, kurtosis, m4
+    
 
 def plot_grid(scores: np.ndarray, first_tick_labels, second_tick_labels, first_label, second_label, **kwargs):
     fig = plt.figure()
@@ -495,6 +536,18 @@ def cluster_vectors(model: LearnedDict, n_clusters: int = 1000, top_clusters: in
     # nbrs = NearestNeighbors(n_neighbors=5, algorithm='ball_tree').fit(direction_vectors_tsne)
 
 
+def hierarchical_cluster_vectors(vectors: TensorType["_n_dict_components", "_activation_size"], n_clusters=100, show = True):
+    from scipy.cluster.hierarchy import dendrogram, linkage, cut_tree 
+    linkage_matrix = linkage(vectors, 'average', metric='cosine') # computes the distance matrix
+    dendrogram(linkage_matrix, labels=list(range(vectors.shape[0])), leaf_rotation=90, leaf_font_size=8)
+    if show:
+        # set backend not to be agg so that we can see the dendrogram
+        plt.switch_backend("TkAgg")
+        plt.show()
+    clusters = cut_tree(linkage_matrix, n_clusters=n_clusters)
+    return clusters
+
+
 def make_one_chunk_per_layer() -> None:
     device = torch.device("cuda:1")
     model_name = "EleutherAI/pythia-70m-deduped"
@@ -502,13 +555,32 @@ def make_one_chunk_per_layer() -> None:
     tokenizer = model.tokenizer
 
     for layer_loc in ["residual", "mlp", "mlpout", "attn"]:
-        activation_width = 2048 if layer_loc == "mlp" else 512
         for layer in range(6):
             setup_data(
                 tokenizer,
                 model,
                 dataset_name="EleutherAI/pile",
-                dataset_folder=f"single_chunks/l{layer}_{layer_loc}",
+                dataset_folder=f"/mnt/ssd-cluster/single_chunks/l{layer}_{layer_loc}",
+                layer=layer,
+                layer_loc=layer_loc,
+                n_chunks=1,
+                device=device,
+                start_line=1_000_000,
+            )
+
+def make_one_chunk_per_layer_gpt2sm() -> None:    
+    device = torch.device("cuda:4")
+    model_name = "gpt2"
+    model = HookedTransformer.from_pretrained(model_name, device=device)
+    tokenizer = model.tokenizer
+    
+    for layer_loc in ["residual"]:
+        for layer in range(12):
+            setup_data(
+                tokenizer,
+                model,
+                dataset_name="openwebtext",
+                dataset_folder=f"/mnt/ssd-cluster/single_chunks_gpt2sm/l{layer}_{layer_loc}",
                 layer=layer,
                 layer_loc=layer_loc,
                 n_chunks=1,
@@ -704,9 +776,45 @@ def calc_all_kurtosis():
 
     pickle.dump(results, open("kurtosis_data.pkl", "wb"))
 
+
+def run_mmcs_with_larger(learned_dicts, threshold=0.9, device: Union[str, torch.device] = "cpu"):
+    n_l1_coefs, n_dict_sizes = len(learned_dicts), len(learned_dicts[0])
+    av_mmcs_with_larger_dicts = np.zeros((n_l1_coefs, n_dict_sizes))
+    feats_above_threshold = np.zeros((n_l1_coefs, n_dict_sizes))
+    full_max_cosine_sim_for_histograms = np.empty((n_l1_coefs, n_dict_sizes-1), dtype=object)
+
+
+    for l1_ndx, dict_size_ndx in tqdm(list(product(range(n_l1_coefs), range(n_dict_sizes)))):
+        if dict_size_ndx == n_dict_sizes - 1:
+            continue
+        smaller_dict = learned_dicts[l1_ndx][dict_size_ndx]
+        # Clone the larger dict, because we're going to zero it out to do replacements
+        larger_dict_clone = learned_dicts[l1_ndx][dict_size_ndx + 1].clone().to(device)
+        smaller_dict_features, _ = smaller_dict.shape
+        larger_dict_features, _ = larger_dict_clone.shape
+        # Hungary algorithm
+        from scipy.optimize import linear_sum_assignment
+        # Calculate all cosine similarities and store in a 2D array
+        cos_sims = np.zeros((smaller_dict_features, larger_dict_features))
+        for idx, vector in enumerate(smaller_dict):
+            cos_sims[idx] = torch.nn.functional.cosine_similarity(vector.to(device), larger_dict_clone, dim=1).cpu().numpy()
+        # Convert to a minimization problem
+        cos_sims = 1 - cos_sims
+        # Use the Hungarian algorithm to solve the assignment problem
+        row_ind, col_ind = linear_sum_assignment(cos_sims)
+        # Retrieve the max cosine similarities and corresponding indices
+        max_cosine_similarities = 1 - cos_sims[row_ind, col_ind]
+        av_mmcs_with_larger_dicts[l1_ndx, dict_size_ndx] = max_cosine_similarities.mean().item()
+        threshold = 0.9
+        feats_above_threshold[l1_ndx, dict_size_ndx] = (max_cosine_similarities > threshold).sum().item() / smaller_dict_features * 100
+        full_max_cosine_sim_for_histograms[l1_ndx][dict_size_ndx] = max_cosine_similarities
+    return av_mmcs_with_larger_dicts, feats_above_threshold, full_max_cosine_sim_for_histograms
+
 if __name__ == "__main__":
-    dicts = torch.load("/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r4/_9/learned_dicts.pt")
-    plot_capacity_scatter(dicts, save_name="outputs/capacity_scatter_l2_r4")
+    make_one_chunk_per_layer_gpt2sm()
+
+    # dicts = torch.load("/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r4/_9/learned_dicts.pt")
+    # plot_capacity_scatter(dicts, save_name="outputs/capacity_scatter_l2_r4")
 
     # mp.set_start_method('spawn')
     # calc_all_kurtosis()

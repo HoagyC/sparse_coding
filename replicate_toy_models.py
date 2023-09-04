@@ -5,21 +5,20 @@ https://www.lesswrong.com/posts/z6QQJbtpkEAX3Aojj/interim-research-report-taking
 """
 
 import argparse
-from collections.abc import Generator
-from dataclasses import dataclass, field
-from datetime import datetime
 import itertools
 import os
 import pickle
-from typing import Union, Tuple, List, Any, Optional
+from collections.abc import Generator
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, List, Optional, Tuple, Union
 
-from matplotlib import pyplot as plt
 import numpy as np
 import numpy.typing as npt
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from matplotlib import pyplot as plt
 from torchtyping import TensorType
 from tqdm import tqdm
 
@@ -48,7 +47,9 @@ class RandomDatasetGenerator(Generator):
         self.frac_nonzero = self.feature_num_nonzero / self.n_ground_truth_components
 
         # Define the probabilities of each component being included in the data
-        self.decay = torch.tensor([self.feature_prob_decay**i for i in range(self.n_ground_truth_components)]).to(self.device)  # FIXME: 1 / i
+        self.decay = torch.tensor([self.feature_prob_decay**i for i in range(self.n_ground_truth_components)]).to(
+            self.device
+        )  # FIXME: 1 / i
 
         if self.correlated:
             self.corr_matrix = generate_corr_matrix(self.n_ground_truth_components, device=self.device)
@@ -91,8 +92,11 @@ def generate_rand_dataset(
     feature_probs: TensorType["n_ground_truth_components"],
     feats: TensorType["n_ground_truth_components", "activation_dim"],
     device: Union[torch.device, str],
-) -> Tuple[TensorType["n_ground_truth_components", "activation_dim"], TensorType["dataset_size", "n_ground_truth_components"], TensorType["dataset_size", "activation_dim"]]:
-    
+) -> Tuple[
+    TensorType["n_ground_truth_components", "activation_dim"],
+    TensorType["dataset_size", "n_ground_truth_components"],
+    TensorType["dataset_size", "activation_dim"],
+]:
     # generate random feature strengths
     feature_strengths = torch.rand((dataset_size, n_ground_truth_components), device=device)
     # only some features are activated, chosen at random
@@ -118,9 +122,16 @@ def generate_correlated_dataset(
     frac_nonzero: float,
     decay: TensorType["n_ground_truth_components"],
     device: Union[torch.device, str],
-) -> Tuple[TensorType["n_ground_truth_components", "activation_dim"], TensorType["dataset_size", "n_ground_truth_components"], TensorType["dataset_size", "activation_dim"]]:
+) -> Tuple[
+    TensorType["n_ground_truth_components", "activation_dim"],
+    TensorType["dataset_size", "n_ground_truth_components"],
+    TensorType["dataset_size", "activation_dim"],
+]:
     # Get a correlated gaussian sample
-    mvn = torch.distributions.MultivariateNormal(loc=torch.zeros(n_ground_truth_components, device=device), covariance_matrix=corr_matrix)
+    mvn = torch.distributions.MultivariateNormal(
+        loc=torch.zeros(n_ground_truth_components, device=device),
+        covariance_matrix=corr_matrix,
+    )
     corr_thresh = mvn.sample()
 
     # Take the CDF of that sample.
@@ -148,7 +159,9 @@ def generate_correlated_dataset(
     )
     # Ensure there are no datapoints w/ 0 features
     zero_sample_index = (dataset_codes.count_nonzero(dim=1) == 0).nonzero()[:, 0]
-    random_index = torch.randint(low=0, high=n_ground_truth_components, size=(zero_sample_index.shape[0],)).to(dataset_codes.device)
+    random_index = torch.randint(low=0, high=n_ground_truth_components, size=(zero_sample_index.shape[0],)).to(
+        dataset_codes.device
+    )
     dataset_codes[zero_sample_index, random_index] = 1.0
 
     # Multiply by a 2D random matrix of feature strengths
@@ -173,7 +186,9 @@ def generate_rand_feats(
     return feats_tensor
 
 
-def generate_corr_matrix(num_feats: int, device: Union[torch.device, str]) -> TensorType["n_ground_truth_components", "n_ground_truth_components"]:
+def generate_corr_matrix(
+    num_feats: int, device: Union[torch.device, str]
+) -> TensorType["n_ground_truth_components", "n_ground_truth_components"]:
     corr_mat_path = os.path.join(os.getcwd(), "data")
     corr_mat_filename = os.path.join(corr_mat_path, f"corr_mat_{num_feats}.npy")
 
@@ -221,7 +236,7 @@ def cosine_sim(
     vecs = [vecs1, vecs2]
     for i in range(len(vecs)):
         if not isinstance(vecs[i], np.ndarray):
-            vecs[i] = vecs[i].detach().cpu().numpy() # type: ignore
+            vecs[i] = vecs[i].detach().cpu().numpy()  # type: ignore
     vecs1, vecs2 = vecs
     normalize = lambda v: (v.T / np.linalg.norm(v, axis=1)).T
     vecs1_norm = normalize(vecs1)
@@ -338,7 +353,15 @@ def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]
     return mmcs, auto_encoder, n_dead_neurons, running_recon_loss
 
 
-def plot_mat(mat, l1_alphas, learned_dict_ratios, show=True, save_folder=None, save_name=None, title=None):
+def plot_mat(
+    mat,
+    l1_alphas,
+    learned_dict_ratios,
+    show=True,
+    save_folder=None,
+    save_name=None,
+    title=None,
+):
     """
     :param mmcs_mat: matrix values
     :param l1_alphas: list of l1_alphas
@@ -481,13 +504,17 @@ def main():
         cfg.learned_dict_ratio = learned_dict_ratio
         cfg.n_components_dictionary = int(cfg.n_ground_truth_components * cfg.learned_dict_ratio)
         mmcs, auto_encoder, n_dead_neurons, reconstruction_loss = run_single_go(cfg, data_generator)
-        print(f"l1_alpha: {l1_alpha} | learned_dict_ratio: {learned_dict_ratio} | mmcs: {mmcs:.3f} | n_dead_neurons: {n_dead_neurons} | reconstruction_loss: {reconstruction_loss:.3f}")
+        print(
+            f"l1_alpha: {l1_alpha} | learned_dict_ratio: {learned_dict_ratio} | mmcs: {mmcs:.3f} | n_dead_neurons: {n_dead_neurons} | reconstruction_loss: {reconstruction_loss:.3f}"
+        )
 
         mmcs_matrix[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = mmcs
         dead_neurons_matrix[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = n_dead_neurons
         recon_loss_matrix[l1_range.index(l1_alpha), learned_dict_ratios.index(learned_dict_ratio)] = reconstruction_loss
         auto_encoders[l1_range.index(l1_alpha)][learned_dict_ratios.index(learned_dict_ratio)] = auto_encoder.cpu()
-        learned_dicts[l1_range.index(l1_alpha)][learned_dict_ratios.index(learned_dict_ratio)] = auto_encoder.decoder.weight.detach().cpu().data.t()
+        learned_dicts[l1_range.index(l1_alpha)][learned_dict_ratios.index(learned_dict_ratio)] = (
+            auto_encoder.decoder.weight.detach().cpu().data.t()
+        )
 
     outputs_folder = "outputs"
     current_time = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -495,11 +522,35 @@ def main():
     os.makedirs(outputs_folder, exist_ok=True)
 
     # Save the matrices and the data generator
-    plot_mat(mmcs_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Mean Max Cosine Similarity w/ True", save_name="mmcs_matrix.png")
+    plot_mat(
+        mmcs_matrix,
+        l1_range,
+        learned_dict_ratios,
+        show=False,
+        save_folder=outputs_folder,
+        title="Mean Max Cosine Similarity w/ True",
+        save_name="mmcs_matrix.png",
+    )
     # clamp dead_neurons to 0-100 for better visualisation
     dead_neurons_matrix = np.clip(dead_neurons_matrix, 0, 100)
-    plot_mat(dead_neurons_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Dead Neurons", save_name="dead_neurons_matrix.png")
-    plot_mat(recon_loss_matrix, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Reconstruction Loss", save_name="recon_loss_matrix.png")
+    plot_mat(
+        dead_neurons_matrix,
+        l1_range,
+        learned_dict_ratios,
+        show=False,
+        save_folder=outputs_folder,
+        title="Dead Neurons",
+        save_name="dead_neurons_matrix.png",
+    )
+    plot_mat(
+        recon_loss_matrix,
+        l1_range,
+        learned_dict_ratios,
+        show=False,
+        save_folder=outputs_folder,
+        title="Reconstruction Loss",
+        save_name="recon_loss_matrix.png",
+    )
     with open(os.path.join(outputs_folder, "auto_encoders.pkl"), "wb") as f:
         pickle.dump(auto_encoders, f)
     with open(os.path.join(outputs_folder, "data_generator.pkl"), "wb") as f:
@@ -518,10 +569,20 @@ def main():
 
         max_cosine_similarities = np.zeros((smaller_dict_features))
         for i, vector in enumerate(smaller_dict):
-            max_cosine_similarities[i] = torch.nn.functional.cosine_similarity(vector.to(cfg.device), larger_dict.to(cfg.device), dim=1).max()
+            max_cosine_similarities[i] = torch.nn.functional.cosine_similarity(
+                vector.to(cfg.device), larger_dict.to(cfg.device), dim=1
+            ).max()
         av_mmcs_with_larger_dicts[l1_ndx, dict_size_ndx] = max_cosine_similarities.mean().item()
 
-    plot_mat(av_mmcs_with_larger_dicts, l1_range, learned_dict_ratios, show=False, save_folder=outputs_folder, title="Average mmcs with larger dicts", save_name="av_mmcs_with_larger_dicts.png")
+    plot_mat(
+        av_mmcs_with_larger_dicts,
+        l1_range,
+        learned_dict_ratios,
+        show=False,
+        save_folder=outputs_folder,
+        title="Average mmcs with larger dicts",
+        save_name="av_mmcs_with_larger_dicts.png",
+    )
 
 
 if __name__ == "__main__":

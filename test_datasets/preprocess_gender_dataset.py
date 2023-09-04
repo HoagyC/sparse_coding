@@ -1,10 +1,10 @@
-import sys
-import os
-from transformers import AutoTokenizer
 import csv
+import os
 import pickle
+import sys
 
 import tqdm
+from transformers import AutoTokenizer
 
 # dataset: https://archive.ics.uci.edu/dataset/591/gender+by+name
 
@@ -35,7 +35,7 @@ if __name__ == "__main__":
             name = entry[0]
 
             t = tokenizer(name_fmt.format(name=name))
-            
+
             # filter names that are more than one token
             if min_tok_len <= len(t["input_ids"]) <= max_tok_len:
                 entries.append(entry)

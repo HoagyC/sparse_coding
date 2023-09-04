@@ -1,13 +1,17 @@
-import torch
-from typing import Any, Tuple, Optional, Union, Generator
-from torchtyping import TensorType
-import numpy as np
-
 import os
-
 from dataclasses import dataclass, field
+from typing import Any, Generator, Optional, Tuple, Union
 
-n_ground_truth_components_, activation_dim_, dataset_size_ = None, None, None # for tensortype vars
+import numpy as np
+import torch
+from torchtyping import TensorType
+
+n_ground_truth_components_, activation_dim_, dataset_size_ = (
+    None,
+    None,
+    None,
+)  # for tensortype vars
+
 
 @dataclass
 class RandomDatasetGenerator(Generator):
@@ -29,7 +33,9 @@ class RandomDatasetGenerator(Generator):
         self.frac_nonzero = self.feature_num_nonzero / self.n_ground_truth_components
 
         # Define the probabilities of each component being included in the data
-        self.decay = torch.tensor([self.feature_prob_decay**i for i in range(self.n_ground_truth_components)]).to(self.device)  # FIXME: 1 / i
+        self.decay = torch.tensor([self.feature_prob_decay**i for i in range(self.n_ground_truth_components)]).to(
+            self.device
+        )  # FIXME: 1 / i
 
         if self.correlated:
             self.corr_matrix = generate_corr_matrix(self.n_ground_truth_components, device=self.device)
@@ -66,6 +72,7 @@ class RandomDatasetGenerator(Generator):
     def throw(self, type: Any = None, value: Any = None, traceback: Any = None) -> None:
         raise StopIteration
 
+
 @dataclass
 class SparseMixDataset(Generator):
     activation_dim: int
@@ -92,21 +99,24 @@ class SparseMixDataset(Generator):
                 self.n_sparse_components,
                 device=self.device,
             )
-        
+
         if self.sparse_component_covariance is None:
             print("generating covariances...")
             self.sparse_component_covariance = generate_corr_matrix(self.n_sparse_components, device=self.device)
-        
+
         if self.noise_covariance is None:
             self.noise_covariance = torch.eye(self.activation_dim, device=self.device)
-        
+
         self.frac_nonzero = self.feature_num_nonzero / self.n_sparse_components
-        self.sparse_component_probs = torch.tensor([self.feature_prob_decay**i for i in range(self.n_sparse_components)], dtype=torch.float32)
+        self.sparse_component_probs = torch.tensor(
+            [self.feature_prob_decay**i for i in range(self.n_sparse_components)],
+            dtype=torch.float32,
+        )
         self.sparse_component_probs = self.sparse_component_probs.to(self.device)
 
         if self.t_type is None:
             self.t_type = torch.float32
-    
+
     def send(self, batch_size: Optional[int]) -> TensorType["dataset_size_", "activation_dim_"]:
         _, _, sparse_data = generate_correlated_dataset(
             self.n_sparse_components,
@@ -127,9 +137,10 @@ class SparseMixDataset(Generator):
         data = sparse_data + noise_data
 
         return data.to(self.t_type)
-    
+
     def throw(self, type: Any = None, value: Any = None, traceback: Any = None) -> None:
         raise StopIteration
+
 
 def generate_noise_dataset(
     dataset_size: int,
@@ -145,13 +156,18 @@ def generate_noise_dataset(
 
     return noise
 
+
 def generate_rand_dataset(
     n_ground_truth_components: int,  #
     dataset_size: int,
     feature_probs: TensorType["n_ground_truth_components_"],
     feats: TensorType["n_ground_truth_components_", "activation_dim_"],
     device: Union[torch.device, str],
-) -> Tuple[TensorType["n_ground_truth_components_", "activation_dim_"], TensorType["dataset_size_", "n_ground_truth_components_"], TensorType["dataset_size_", "activation_dim_"]]:
+) -> Tuple[
+    TensorType["n_ground_truth_components_", "activation_dim_"],
+    TensorType["dataset_size_", "n_ground_truth_components_"],
+    TensorType["dataset_size_", "activation_dim_"],
+]:
     dataset_thresh = torch.rand(dataset_size, n_ground_truth_components, device=device)
     dataset_values = torch.rand(dataset_size, n_ground_truth_components, device=device)
 
@@ -180,9 +196,16 @@ def generate_correlated_dataset(
     frac_nonzero: float,
     decay: TensorType["n_ground_truth_components_"],
     device: Union[torch.device, str],
-) -> Tuple[TensorType["n_ground_truth_components_", "activation_dim_"], TensorType["dataset_size_", "n_ground_truth_components_"], TensorType["dataset_size_", "activation_dim_"]]:
+) -> Tuple[
+    TensorType["n_ground_truth_components_", "activation_dim_"],
+    TensorType["dataset_size_", "n_ground_truth_components_"],
+    TensorType["dataset_size_", "activation_dim_"],
+]:
     # Get a correlated gaussian sample
-    mvn = torch.distributions.MultivariateNormal(loc=torch.zeros(n_ground_truth_components, device=device), covariance_matrix=corr_matrix)
+    mvn = torch.distributions.MultivariateNormal(
+        loc=torch.zeros(n_ground_truth_components, device=device),
+        covariance_matrix=corr_matrix,
+    )
     corr_thresh = mvn.sample()
 
     # Take the CDF of that sample.
@@ -210,7 +233,9 @@ def generate_correlated_dataset(
     )
     # Ensure there are no datapoints w/ 0 features
     zero_sample_index = (dataset_codes.count_nonzero(dim=1) == 0).nonzero()[:, 0]
-    random_index = torch.randint(low=0, high=n_ground_truth_components, size=(zero_sample_index.shape[0],)).to(dataset_codes.device)
+    random_index = torch.randint(low=0, high=n_ground_truth_components, size=(zero_sample_index.shape[0],)).to(
+        dataset_codes.device
+    )
     dataset_codes[zero_sample_index, random_index] = 1.0
 
     # Multiply by a 2D random matrix of feature strengths
@@ -236,7 +261,9 @@ def generate_rand_feats(
     return feats_tensor
 
 
-def generate_corr_matrix(num_feats: int, device: Union[torch.device, str]) -> TensorType["n_ground_truth_components_", "n_ground_truth_components_"]:
+def generate_corr_matrix(
+    num_feats: int, device: Union[torch.device, str]
+) -> TensorType["n_ground_truth_components_", "n_ground_truth_components_"]:
     corr_mat_path = os.path.join(os.getcwd(), "data")
     corr_mat_filename = os.path.join(corr_mat_path, f"corr_mat_{num_feats}.npy")
 
