@@ -1,14 +1,15 @@
-import matplotlib
-import torch
-import matplotlib.pyplot as plt
-import numpy as np
-
 import os
 import shutil
 
 from itertools import product
+import matplotlib
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
 
 if __name__ == "__main__":
+    base_folder = "sparse_coding_aidan"
+    scores = torch.load(os.path.join(base_folder, "dict_scores_layer_2.pt"))
 
     scores = torch.load("dict_scores_layer_3.pt")
 
@@ -56,7 +57,7 @@ if __name__ == "__main__":
     ax.set_xlabel("No. Uncorrupted Features")
     ax.set_ylabel("KL-Divergence From Base")
 
-    #ax.set_xscale("log")
+    # ax.set_xscale("log")
 
     ax.legend(
         loc="upper right",
@@ -66,7 +67,7 @@ if __name__ == "__main__":
     #shutil.rmtree("graphs", ignore_errors=True)
     #os.mkdir("graphs", exist_ok=True)
 
-    plt.savefig("graphs/score_size.png")
+    plt.savefig(os.path.join(graph_folder, "score_size.png"))
 
     plt.close(fig)
     del fig, ax

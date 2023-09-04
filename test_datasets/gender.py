@@ -1,7 +1,7 @@
 import pickle
-import torch
 import random
 
+import torch
 from transformers import AutoTokenizer
 
 COUNT_CUTOFF = 100000
@@ -16,6 +16,7 @@ prompt_skip = 3
 
 codes_map = {"M": 0, "F": 1}
 answer_map = {"M": " he", "F": " she"}
+
 
 def generate_gender_dataset(
     tokenizer_name,

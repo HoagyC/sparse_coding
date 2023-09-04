@@ -1,21 +1,20 @@
-import torch
-from typing import Dict, List, Tuple, Any
-
-from transformer_lens import HookedTransformer
-from datasets import Dataset, load_dataset
-
-import standard_metrics
-
-from autoencoders.learned_dict import LearnedDict
-from autoencoders.pca import BatchedPCA, PCAEncoder
-
-from autoencoders.learned_dict import AddedNoise
+import itertools
+import os
+from typing import Any, Dict, List, Tuple
 
 import matplotlib.pyplot as plt
-
-import itertools
-import tqdm
 import numpy as np
+import torch
+import tqdm
+from datasets import Dataset, load_dataset
+from transformer_lens import HookedTransformer
+
+import standard_metrics
+from autoencoders.learned_dict import AddedNoise, LearnedDict
+from autoencoders.pca import BatchedPCA, PCAEncoder
+
+BASE_FOLDER = "~/sparse_coding_aidan"
+
 
 def train_pca(dataset):
     pca = BatchedPCA(dataset.shape[1], device)
@@ -27,44 +26,49 @@ def train_pca(dataset):
         j = min(i + batch_size, len(dataset))
         batch = dataset[i:j]
         pca.train_batch(batch)
-    
+
     return pca
+
 
 if __name__ == "__main__":
     model = HookedTransformer.from_pretrained("EleutherAI/pythia-70m-deduped", device="cuda:7")
 
     dataset_name = "NeelNanda/pile-10k"
-    token_amount= 256
-    token_dataset = load_dataset(dataset_name, split="train").map(
-        lambda x: model.tokenizer(x['text']),
-        batched=True,
-    ).filter(
-        lambda x: len(x['input_ids']) > token_amount
-    ).map(
-        lambda x: {'input_ids': x['input_ids'][:token_amount]}
+    token_amount = 256
+    token_dataset = (
+        load_dataset(dataset_name, split="train")
+        .map(
+            lambda x: model.tokenizer(x["text"]),
+            batched=True,
+        )
+        .filter(lambda x: len(x["input_ids"]) > token_amount)
+        .map(lambda x: {"input_ids": x["input_ids"][:token_amount]})
     )
 
     N_SENTENCES = 256
 
     device = torch.device("cuda:7")
 
-    tokens = torch.stack([torch.tensor(token_dataset[i]["input_ids"], dtype=torch.long, device="cuda:7") for i in range(N_SENTENCES)], dim=0)
+    tokens = torch.stack(
+        [torch.tensor(token_dataset[i]["input_ids"], dtype=torch.long, device="cuda:7") for i in range(N_SENTENCES)],
+        dim=0,
+    )
 
     print(tokens.shape)
 
-    dataset = torch.load("activation_data_layers/layer_2/0.pt").to(dtype=torch.float32, device=device)
+    dataset = torch.load(os.path.join(BASE_FOLDER, "activation_data_layers/layer_2/0.pt")).to(dtype=torch.float32, device=device)
     pca = train_pca(dataset)
 
     sample_idxs = np.random.choice(len(dataset), 10000, replace=False)
     sample = dataset[sample_idxs]
 
     dict_files = [
-        #"output_topk/_27/learned_dicts.pt",
+        # "output_topk/_27/learned_dicts.pt",
         "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r0/_9/learned_dicts.pt",
         "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r2/_9/learned_dicts.pt",
         "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r8/_9/learned_dicts.pt",
         "/mnt/ssd-cluster/bigrun0308/output_hoagy_dense_sweep_tied_resid_l2_r16/_9/learned_dicts.pt",
-        "output_topk/_39/learned_dicts.pt",
+        os.path.join(BASE_FOLDER, "output_topk/_39/learned_dicts.pt"),
     ]
 
     file_labels = [
@@ -89,13 +93,19 @@ if __name__ == "__main__":
             if name not in learned_dict_sets:
                 learned_dict_sets[name] = []
             learned_dict_sets[name].append((learned_dict, hyperparams))
-    
-    # baselines
-    learned_dict_sets["Added Noise"] = [(AddedNoise(mag, 512, device="cuda:7"), {"dict_size": 512}) for mag in np.linspace(0.0, 0.5, 32)]
-    learned_dict_sets["PCA (dynamic)"] = [(pca.to_learned_dict(k), {"dict_size": 512, "k": k}) for k in range(1, d_activation // 2, 8)]
-    learned_dict_sets["PCA (static)"] = [(pca.to_rotation_dict(n), {"dict_size": 512, "n": n}) for n in range(1, d_activation // 2, 8)]
 
-    scores = {}
+    # baselines
+    learned_dict_sets["Added Noise"] = [
+        (AddedNoise(mag, 512, device="cuda:7"), {"dict_size": 512}) for mag in np.linspace(0.0, 0.5, 32)
+    ]
+    learned_dict_sets["PCA (dynamic)"] = [
+        (pca.to_learned_dict(k), {"dict_size": 512, "k": k}) for k in range(1, d_activation // 2, 8)
+    ]
+    learned_dict_sets["PCA (static)"] = [
+        (pca.to_rotation_dict(n), {"dict_size": 512, "n": n}) for n in range(1, d_activation // 2, 8)
+    ]
+
+    scores: Dict[str, List[Tuple[float, float]]] = {}
     for label, learned_dict_set in learned_dict_sets.items():
         scores[label] = []
         for learned_dict, hyperparams in tqdm.tqdm(learned_dict_set):
@@ -105,7 +115,9 @@ if __name__ == "__main__":
             for i in range(0, tokens.shape[0], 16):
                 j = min(i + 16, tokens.shape[0])
                 with torch.no_grad():
-                    perplexity.append(standard_metrics.perplexity_under_reconstruction(model, learned_dict, (2, "residual"), tokens[i:j]).item())
+                    perplexity.append(
+                        standard_metrics.perplexity_under_reconstruction(model, learned_dict, (2, "residual"), tokens[i:j]).item()
+                    )
             scores[label].append((fvu, np.mean(perplexity)))
 
     """
@@ -154,4 +166,4 @@ if __name__ == "__main__":
     ax.legend()
     ax.set_ylabel("Loss")
     ax.set_xlabel("Fraction Variance Unexplained")
-    plt.savefig("pca_perplexity.png")
+    plt.savefig(os.path.join(BASE_FOLDER, "pca_perplexity.png"))

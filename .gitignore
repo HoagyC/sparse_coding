@@ -2,6 +2,8 @@ __pycache__/**
 .vscode/**
 .DS_Store
 **.pyc
+.pre-commit-config.yaml
+tmp
 
 .env
 .config
@@ -13,7 +15,6 @@ tl_simple.py
 scratchpad.py
 secrets.json
 setup.sh
-plotting
 wandb/
 saved_autoencoders
 testing

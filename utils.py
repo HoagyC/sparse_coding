@@ -2,22 +2,20 @@ import json
 import os
 import subprocess
 import sys
-from typing import Optional, Union, List
 from pathlib import Path
+from typing import List, Optional, Union
 
 import boto3
-from botocore.exceptions import NoCredentialsError, ClientError
-
-from transformer_lens.loading_from_pretrained import convert_hf_model_config, get_official_model_name
+from botocore.exceptions import ClientError, NoCredentialsError
 
 VAST_NUM = 4
 # DEST_ADDR = f"root@ssh{VAST_NUM}.vast.ai"
-DEST_ADDR = "mchorse@216.153.50.63"
+DEST_ADDR = "mchorse@198.176.96.64"
 SSH_PYTHON = "/opt/conda/bin/python"
 
 PORT = 22
 
-USER = "aidan"
+USER = "hoagy"
 
 SSH_DIRECTORY = f"sparse_coding_{USER}"
 BUCKET_NAME = "sparse-coding"
@@ -28,29 +26,34 @@ ACCESS_KEY_NAME_DICT = {
     "AKIATEQID7TUM5FUW4R5": "logan",
 }
 
+
 def sync():
     """Sync the local directory with the remote host."""
     command = f'rsync -rv --filter ":- .gitignore" --exclude ".git" -e "ssh -p {PORT}" . {DEST_ADDR}:{SSH_DIRECTORY}'
     subprocess.call(command, shell=True)
+
 
 def datasets_sync():
     """Sync .csv files with the remote host."""
     command = f'rsync -am --include "*.csv" --exclude "*" -e "ssh -p {PORT}" . {DEST_ADDR}:{SSH_DIRECTORY}'
     subprocess.call(command, shell=True)
 
+
 def autointerp_sync():
     """Sync the local directory with the remote host's auto interp results, excluding hdf files."""
-    command = f'rsync -r --exclude "*.hdf" --exclude "*.pkl" -e ssh {DEST_ADDR}:{SSH_DIRECTORY}/auto_interp_results . '
+    command = f'rsync -r --exclude "*.hdf" --exclude "*.pkl" -e ssh {DEST_ADDR}:/mnt/ssd-cluster/auto_interp_results/ ./auto_interp_results'
     print(command)
     subprocess.call(command, shell=True)
+
 
 def copy_models():
     """Copy the models from local directory to the remote host."""
     command = f"scp -P {PORT} -r models {DEST_ADDR}:{SSH_DIRECTORY}/models"
     subprocess.call(command, shell=True)
-    # also copying across a few other files
+    # also copying across a few other files
     command = f"scp -P {PORT} -r outputs/thinrun/autoencoders_cpu.pkl {DEST_ADDR}:{SSH_DIRECTORY}"
     subprocess.call(command, shell=True)
+
 
 def copy_secrets():
     """Copy the secrets.json file from local directory to the remote host."""
@@ -68,13 +71,16 @@ def copy_recent():
     command = f"scp -P {PORT} -r {DEST_ADDR}:{output} outputs"
     subprocess.call(command, shell=True)
 
+
 def copy_dotfiles():
     """Copy dotfiles into remote host and run install and deploy scripts"""
     df_dir = f"dotfiles_{USER}"
-    command = f"scp -P {PORT} -r ~/git/dotfiles {DEST_ADDR}:{df_dir}"
+    # command = f"scp -P {PORT} -r ~/git/dotfiles {DEST_ADDR}:{df_dir}"
+    command = f"rsync -rv --filter ':- .gitignore' --exclude '.git' -e 'ssh -p {PORT}' ~/git/ {DEST_ADDR}:{df_dir}"
     subprocess.call(command, shell=True)
     command = f"ssh -p {PORT} {DEST_ADDR} 'cd ~/{df_dir} && ./install.sh && ./deploy.sh'"
     subprocess.call(command, shell=True)
+
 
 def setup():
     """Sync, copy models, create venv and install requirements."""
@@ -85,7 +91,9 @@ def setup():
     # command = f"ssh -p {VAST_PORT} {dest_addr} \"cd {SSH_DIRECTORY} && echo $PATH\""
     subprocess.call(command, shell=True)
 
+
 import warnings
+
 
 class dotdict(dict):
     """Dictionary that can be accessed with dot notation."""
@@ -111,64 +119,8 @@ class dotdict(dict):
         del self[name]
 
 
-def check_use_baukit(model_name):
-    if model_name in ["nanoGPT"]:
-        return True
-    elif check_transformerlens_model(model_name):
-        return False
-    else:
-        raise NotImplementedError(f"Unknown if model {model_name} uses baukit")
-
-def get_activation_size(model_name: str, layer_loc: str):
-    assert check_transformerlens_model(model_name) or model_name == "nanoGPT", f"Model {model_name} not supported"
-    assert layer_loc in ["residual", "mlp", "attn", "mlpout"], f"Layer location {layer_loc} not supported"
-    model_cfg = convert_hf_model_config(model_name)
-    if layer_loc == "residual":
-        return model_cfg["d_model"]
-    elif layer_loc == "mlp":
-        return model_cfg["d_mlp"]
-    elif layer_loc == "attn":
-        return model_cfg["d_head"] * model_cfg["n_heads"]
-    elif layer_loc == "mlpout":
-        return model_cfg["d_model"]
-
-def check_transformerlens_model(model_name: str):
-    try:
-        get_official_model_name(model_name)
-        return True
-    except ValueError:
-        return False
-
-def make_tensor_name(layer: int, layer_loc: str, model_name: str) -> str:
-    """Make the tensor name for a given layer and model."""
-    assert layer_loc in ["residual", "mlp", "attn", "mlpout"], f"Layer location {layer_loc} not supported"
-    if layer_loc == "residual":
-        if check_transformerlens_model(model_name):
-            tensor_name = f"blocks.{layer}.hook_resid_post"
-        else:
-            raise NotImplementedError(f"Model {model_name} not supported for residual stream")
-    elif layer_loc == "mlp":
-        if check_transformerlens_model(model_name):
-            tensor_name = f"blocks.{layer}.mlp.hook_post"
-        elif model_name == "nanoGPT":
-            tensor_name = f"transformer.h.{layer}.mlp.c_fc"
-        else:
-            raise NotImplementedError(f"Model {model_name} not supported for MLP")
-    elif layer_loc == "attn":
-        if check_transformerlens_model(model_name):
-            tensor_name = f"blocks.{layer}.hook_resid_post"
-        else:
-            raise NotImplementedError(f"Model {model_name} not supported for attention stream")
-    elif layer_loc == "mlpout":
-        if check_transformerlens_model(model_name):
-            tensor_name = f"blocks.{layer}.hook_mlp_out"
-        else:
-            raise NotImplementedError(f"Model {model_name} not supported for MLP")
-
-    return tensor_name
-
 def upload_to_aws(local_file_name) -> bool:
-    """"
+    """ "
     Upload a file to an S3 bucket
     :param local_file_name: File to upload
     :param s3_file_name: S3 object name. If not specified then local_file_name is used
@@ -199,29 +151,31 @@ def upload_to_aws(local_file_name) -> bool:
     except FileNotFoundError:
         print(f"File {local_file_name} was not found")
         return False
-    except NoCredentialsError: # mypy: ignore, not sure why it doesn't think it's a valid exception class
+    except NoCredentialsError:  # mypy: ignore, not sure why it doesn't think it's a valid exception class
         print("Credentials not available")
         return False
-    
+
+
 def _upload_directory(path, s3_client):
     for root, dirs, files in os.walk(path):
         for file_name in files:
             full_file_name = os.path.join(root, file_name)
             s3_client.upload_file(str(full_file_name), BUCKET_NAME, str(full_file_name))
 
+
 def download_from_aws(files: Union[str, List[str]], force_redownload: bool = False) -> bool:
     """
     Download a file from an S3 bucket
     :param files: List of files to download
     :param force_redownload: If True, will download even if the file already exists
-    
+
     Returns:
         True if all files were downloaded successfully, False otherwise
     """
     secrets = json.load(open("secrets.json"))
     if isinstance(files, str):
         files = [files]
-    
+
     if not force_redownload:
         files = [f for f in files if not os.path.exists(f)]
 
@@ -245,7 +199,7 @@ def download_from_aws(files: Union[str, List[str]], force_redownload: bool = Fal
             all_correct = False
 
     return all_correct
-    
+
 
 if __name__ == "__main__":
     if sys.argv[1] == "sync":
