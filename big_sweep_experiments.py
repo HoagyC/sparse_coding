@@ -1284,4 +1284,5 @@ if __name__ == "__main__":
     # sys.argv = sys.argv[:1]
     # run_all_zeros(device, layer)
     # setup_positives()
-    run_single_layer()
+    #run_single_layer()
+    run_pythia_1_4_b_sweep()

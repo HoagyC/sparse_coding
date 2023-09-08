@@ -84,12 +84,28 @@ class FunctionalTiedSAE(DictSignature):
         activation_size,
         n_dict_components,
         l1_alpha,
-        bias_decay=0.0,
         device=None,
         dtype=None,
+        
+        translation=None,
+        rotation=None,
+        scaling=None,
     ):
         params = {}
         buffers = {}
+
+        if rotation is None:
+            rotation = torch.eye(activation_size, device=device, dtype=dtype)
+        
+        if translation is None:
+            translation = torch.zeros(activation_size, device=device, dtype=dtype)
+        
+        if scaling is None:
+            scaling = torch.ones(activation_size, device=device, dtype=dtype)
+        
+        buffers["center_rot"] = rotation
+        buffers["center_trans"] = translation
+        buffers["center_scale"] = scaling
 
         params["encoder"] = torch.empty((n_dict_components, activation_size), device=device, dtype=dtype)
         nn.init.xavier_uniform_(params["encoder"])
@@ -98,42 +114,117 @@ class FunctionalTiedSAE(DictSignature):
         nn.init.zeros_(params["encoder_bias"])
 
         buffers["l1_alpha"] = torch.tensor(l1_alpha, device=device, dtype=dtype)
-        buffers["bias_decay"] = torch.tensor(bias_decay, device=device, dtype=dtype)
 
         return params, buffers
 
     @staticmethod
     def to_learned_dict(params, buffers):
-        return TiedSAE(params["encoder"], params["encoder_bias"], norm_encoder=True)
+        return TiedSAE(params["encoder"], params["encoder_bias"], centering=(buffers["center_trans"], buffers["center_rot"], buffers["center_scale"]), norm_encoder=True)
+
+    @staticmethod
+    def center(buffers, batch):
+        return torch.einsum("cu,bu->bc", buffers["center_rot"], batch - buffers["center_trans"][None, :]) * buffers["center_scale"][None, :]
+    
+    @staticmethod
+    def uncenter(buffers, batch):
+        return torch.einsum("cu,bc->bu", buffers["center_rot"], batch / buffers["center_scale"][None, :]) + buffers["center_trans"][None, :]
 
     @staticmethod
     def loss(params, buffers, batch):
         decoder_norms = torch.norm(params["encoder"], 2, dim=-1)
         learned_dict = params["encoder"] / torch.clamp(decoder_norms, 1e-8)[:, None]
 
-        c = torch.einsum("nd,bd->bn", learned_dict, batch)
+        batch_centered = FunctionalTiedSAE.center(buffers, batch)
+
+        c = torch.einsum("nd,bd->bn", learned_dict, batch_centered)
         c = c + params["encoder_bias"]
         c = torch.clamp(c, min=0.0)
 
-        x_hat = torch.einsum("nd,bn->bd", learned_dict, c)
+        x_hat_centered = torch.einsum("nd,bn->bd", learned_dict, c)
+        x_hat = FunctionalTiedSAE.uncenter(buffers, x_hat_centered)
 
-        l_reconstruction = (x_hat - batch).pow(2).mean()
+        l_reconstruction = (x_hat_centered - batch_centered).pow(2).mean()
         l_l1 = buffers["l1_alpha"] * torch.norm(c, 1, dim=-1).mean()
-        l_bias_decay = buffers["bias_decay"] * torch.norm(params["encoder_bias"], 2)
-
+        
         loss_data = {
-            "loss": l_reconstruction + l_l1 + l_bias_decay,
+            "loss": l_reconstruction + l_l1,
             "l_reconstruction": l_reconstruction,
             "l_l1": l_l1,
-            "l_bias_decay": l_bias_decay,
         }
 
         aux_data = {
             "c": c,
         }
 
-        return l_reconstruction + l_l1 + l_bias_decay, (loss_data, aux_data)
+        return l_reconstruction + l_l1, (loss_data, aux_data)
 
+class FunctionalTiedCenteredSAE(DictSignature):
+    @staticmethod
+    def init(
+        activation_size,
+        n_dict_components,
+        l1_alpha,
+        center=None,
+        device=None,
+        dtype=None,
+    ):
+        params = {}
+        buffers = {}
+
+        if center is None:
+            center = torch.zeros(activation_size, device=device, dtype=dtype)
+        
+        params["center"] = center
+
+        params["encoder"] = torch.empty((n_dict_components, activation_size), device=device, dtype=dtype)
+        nn.init.xavier_uniform_(params["encoder"])
+
+        params["encoder_bias"] = torch.zeros((n_dict_components,), device=device, dtype=dtype)
+
+        buffers["l1_alpha"] = torch.tensor(l1_alpha, device=device, dtype=dtype)
+
+        return params, buffers
+    
+    
+    @staticmethod
+    def to_learned_dict(params, buffers):
+        return TiedSAE(params["encoder"], params["encoder_bias"], centering=(params["center"], None, None), norm_encoder=True)
+
+    @staticmethod
+    def center(params, batch):
+        return batch - params["center"][None, :]
+    
+    @staticmethod
+    def uncenter(params, batch):
+        return batch + params["center"][None, :]
+
+    @staticmethod
+    def loss(params, buffers, batch):
+        decoder_norms = torch.norm(params["encoder"], 2, dim=-1)
+        learned_dict = params["encoder"] / torch.clamp(decoder_norms, 1e-8)[:, None]
+
+        batch_centered = FunctionalTiedCenteredSAE.center(params, batch)
+
+        c = torch.einsum("nd,bd->bn", learned_dict, batch_centered)
+        c = c + params["encoder_bias"]
+        c = torch.clamp(c, min=0.0)
+
+        x_hat_centered = torch.einsum("nd,bn->bd", learned_dict, c)
+        
+        l_reconstruction = (x_hat_centered - batch_centered).pow(2).mean()
+        l_l1 = buffers["l1_alpha"] * torch.norm(c, 1, dim=-1).mean()
+
+        loss_data = {
+            "loss": l_reconstruction + l_l1,
+            "l_reconstruction": l_reconstruction,
+            "l_l1": l_l1,
+        }
+
+        aux_data = {
+            "c": c,
+        }
+
+        return l_reconstruction + l_l1, (loss_data, aux_data)
 
 class FunctionalThresholdingSAE(DictSignature):
     @staticmethod

@@ -242,7 +242,7 @@ def init_model_dataset(cfg):
     if len(os.listdir(cfg.dataset_folder)) == 0:
         print(f"Activations in {cfg.dataset_folder} do not exist, creating them")
         transformer, tokenizer = get_model(cfg)
-        setup_data(
+        n_datapoints = setup_data(
             tokenizer,
             transformer,
             dataset_name=cfg.dataset_name,
@@ -255,8 +255,14 @@ def init_model_dataset(cfg):
             center_dataset=cfg.center_dataset,
         )
         del transformer, tokenizer
+        return n_datapoints
     else:
         print(f"Activations in {cfg.dataset_folder} already exist, loading them")
+        n_datapoints = 0
+        n_files = len(os.listdir(cfg.dataset_folder))
+        for i in tqdm.tqdm(range(n_files)):
+            n_datapoints += torch.load(os.path.join(cfg.dataset_folder, f"{i}.pt"), map_location="cpu").shape[0]
+        return n_datapoints
 
 
 def init_synthetic_dataset(cfg):

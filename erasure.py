@@ -29,7 +29,7 @@ import standard_metrics
 import copy
 
 from test_datasets.ioi import generate_ioi_dataset
-from test_datasets.gender import generate_gender_dataset
+from test_datasets.gender import generate_gender_dataset, generate_pronoun_dataset
 from test_datasets.winobias import generate_winobias_dataset
 
 from concept_erasure import LeaceFitter, LeaceEraser
@@ -39,6 +39,8 @@ from sklearn.metrics import roc_auc_score
 from dataclasses import dataclass
 
 import os
+
+from sklearn.linear_model import LogisticRegression, LinearRegression, RidgeClassifier
 
 class NullspaceProjector:
     def __init__(self, nullspace):
@@ -350,9 +352,10 @@ def eval_hook(
     sequence_lengths: TensorType["batch"],
     location: standard_metrics.Location,
     task_score_func: Callable[[TensorType["batch", "sequence", "vocab_size"], TensorType["batch"], TensorType["batch"]], TensorType["batch"]],
-    activation_dist_func: Callable[[TensorType["batch", "d_activation"], TensorType["batch", "d_activation"]], TensorType["batch"]] = ce_distance,
+    activation_dist_func: Callable[[TensorType["batch", "sequence", "d_activation"], TensorType["batch", "sequence", "d_activation"]], TensorType["batch"]] = ce_distance,
     batch_size: int = 4,
     last_position_only: bool = False,
+    device: torch.device = torch.device("cpu"),
 ) -> Tuple[float, float, float]:
     # returns (task_score, activation_dist)
 
@@ -363,9 +366,9 @@ def eval_hook(
 
     for i in range(0, dataset.shape[0], batch_size):
         j = min(i+batch_size, dataset.shape[0])
-        batch = dataset[i:j]
-        batch_lengths = sequence_lengths[i:j]
-        batch_classes = class_labels[i:j]
+        batch = dataset[i:j].to(device)
+        batch_lengths = sequence_lengths[i:j].to(device)
+        batch_classes = class_labels[i:j].to(device)
 
         activation_dist = None
 
@@ -387,7 +390,7 @@ def eval_hook(
                 )
             else:
                 edited = hook_func(tensor, batch_classes, batch_lengths, hook=hook)
-                activation_dist = activation_dist_func(uneditied.reshape(-1, L*D), edited.reshape(-1, L*D))
+                activation_dist = activation_dist_func(uneditied, edited)
             
             return edited
 
@@ -418,13 +421,15 @@ def generate_activation_data(cfg):
     model.eval()
     model.requires_grad_(False)
 
-    prompts, classes, class_tokens, sequence_lengths, skip_tokens = generate_gender_dataset(
+    prompts, classes, _, sequence_lengths, skip_tokens = generate_gender_dataset(
         model_name,
-        model.tokenizer.pad_token_id,
         count_cutoff=cfg.count_cutoff,
-        sample_n=250,
-        randomise=False,    
+        sample_n=cfg.unique_names,
+        prompts_per_name=cfg.prompts_per_name,
+        n_few_shot=cfg.k_shot,
+        randomise=False,
     )
+
     prompts = prompts.to(device)
     classes = classes.to(device)
     sequence_lengths = sequence_lengths.to(device)
@@ -612,6 +617,131 @@ def gender_prediction(class_tokens):
         return torch.einsum("bc,bc->b",preds,labels_one_hot)
     return go
 
+def skip_tokens_distance(skip_tokens):
+    def go(unedited, edited):
+        return torch.linalg.norm(unedited[:, skip_tokens:] - edited[:, skip_tokens:], dim=(-1, -2))
+    
+    return go
+
+def eval_features_classification_positive(
+    features: TensorType["n_features", "d_activation"],
+    activations: TensorType["batch", "sequence", "d_activation"],
+    class_labels: TensorType["batch"],
+    sequence_lengths: TensorType["batch"],
+    skip_tokens: int = 0,
+):
+    N, D = features.shape
+
+    selection_mask = ablation_mask_from_seq_lengths(sequence_lengths, activations.shape[1]-skip_tokens)
+
+    expanded_class_labels = class_labels.unsqueeze(1).expand(-1, activations.shape[1]-skip_tokens)[selection_mask]
+    expanded_class_labels = expanded_class_labels.detach().cpu()
+    activations = activations[:, skip_tokens:][selection_mask]
+
+    scores = []
+
+    for feature_idx in tqdm.tqdm(range(N)):
+        projected_activations = torch.einsum("bd,d->b", activations, features[feature_idx]).reshape(-1, 1)
+        projected_activations = projected_activations.detach().cpu()
+        # train a classifier on this
+        model = LogisticRegression()
+        model.fit(projected_activations, expanded_class_labels)
+        scores.append((feature_idx, model.score(projected_activations, expanded_class_labels)))
+    
+    return sorted(scores, key=lambda x: x[1], reverse=True)
+
+class LogisticRegression(torch.nn.Module):
+    def __init__(self, input_dim):
+        super(LogisticRegression, self).__init__()
+        self.linear = torch.nn.Linear(input_dim, 1)
+    
+    def forward(self, x):
+        outputs = torch.sigmoid(self.linear(x).reshape(-1))
+        return outputs
+    
+    @staticmethod
+    def fit(x, y, iters=100):
+        torch.autograd.set_grad_enabled(True)
+
+        model = LogisticRegression(x.shape[1]).to(x.device)
+        criterion = torch.nn.BCELoss()
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+
+        for epoch in range(iters):
+            optimizer.zero_grad()
+            #idxs = np.random.choice(x.shape[0], size=batch_size, replace=False)
+            outputs = model(x)
+            #loss = -(outputs * y + (1-outputs) * (1-y)).mean()
+            loss = criterion(outputs, y)
+            loss.backward()
+            optimizer.step()
+        
+        torch.autograd.set_grad_enabled(False)
+
+        return model
+
+    def score(self, x, y):
+        outputs = self.forward(x)
+        return (outputs * y + (1-outputs) * (1-y)).mean().item()
+
+def eval_features_classification_negative(
+    features: TensorType["n_features", "d_activation"],
+    activations: TensorType["batch", "sequence", "d_activation"],
+    class_labels: TensorType["batch"],
+    sequence_lengths: TensorType["batch"],
+    skip_tokens: int = 0,
+):
+    N, D = features.shape
+
+    selection_mask = ablation_mask_from_seq_lengths(sequence_lengths, activations.shape[1]-skip_tokens)
+
+    expanded_class_labels = class_labels.unsqueeze(1).expand(-1, activations.shape[1]-skip_tokens)[selection_mask]
+    expanded_class_labels = expanded_class_labels.to(dtype=torch.float32, device=activations.device)
+    activations = activations[:, skip_tokens:][selection_mask]
+
+    scores = []
+
+    for feature_idx in tqdm.tqdm(range(N)):
+        projection = NullspaceProjector(features[feature_idx])
+        projected_activations = projection.project(activations)
+
+        # scale and shift activations to unit gaussian
+
+        projected_activations = (projected_activations - projected_activations.mean(dim=0)) / projected_activations.std(dim=0)
+
+        # linear classifier, not logistic regression
+        model = LogisticRegression.fit(projected_activations, expanded_class_labels)
+        scores.append((feature_idx, model.score(projected_activations, expanded_class_labels)))
+
+        #print(scores[-1])
+    
+    scores = sorted(scores, key=lambda x: x[1], reverse=False)
+    print(scores[:10])
+    return scores
+
+def rank_dict_features_classifier(cfg):
+    activations, class_labels, sequence_lengths, skip_tokens = torch.load(cfg.activation_filename)
+    dicts = torch.load(cfg.dict_filename.format(layer=cfg.layer))
+    
+    target_l1 = cfg.target_l1
+    target_dict_size = cfg.dict_size
+    best_dist = None
+    best_dict = None
+
+    for dict, hyperparams in dicts:
+        if hyperparams["dict_size"] == target_dict_size:
+            dist = abs(hyperparams["l1_alpha"] - target_l1)
+            if best_dist is None or dist < best_dist:
+                best_dist = dist
+                best_dict = dict
+    
+    best_dict.to_device(cfg.device)
+    features = best_dict.get_learned_dict()
+
+    scores = eval_features_classification_negative(features, activations, class_labels, sequence_lengths, skip_tokens)
+
+    torch.save(scores, f"{cfg.output_folder}/dict_feature_scores_layer_{cfg.layer}.pt")
+
 def rank_dict_features_expensive(cfg):
     model_name = cfg.model_name
     device = cfg.device
@@ -645,15 +775,17 @@ def rank_dict_features_expensive(cfg):
 
     del activations, sequence_lengths
 
-    prompts, class_labels, class_tokens, sequence_lengths, _ = generate_gender_dataset(
+    prompts, class_labels, class_tokens, sequence_lengths, skip_tokens = generate_gender_dataset(
         model_name,
         count_cutoff=cfg.count_cutoff,
-        sample_n=32,
+        sample_n=cfg.unique_names,
+        n_few_shot=cfg.k_shot,
+        prompts_per_name=1, # max name diversity
     )
 
-    prompts = prompts.to(device)
-    class_labels = class_labels.to(device)
-    sequence_lengths = sequence_lengths.to(device)
+    #prompts = prompts.to(device)
+    #class_labels = class_labels.to(device)
+    #sequence_lengths = sequence_lengths.to(device)
 
     model = HookedTransformer.from_pretrained(model_name)
     model.to(device)
@@ -674,7 +806,8 @@ def rank_dict_features_expensive(cfg):
                 return projector.project(tensor)
             else:
                 B, L, D = tensor.shape
-                return projector.project(tensor.reshape(-1, D)).reshape(tensor.shape)
+                tensor[:, skip_tokens:] = projector.project(tensor[:, skip_tokens:].reshape(-1, D)).reshape(B, L-skip_tokens, D)
+                return tensor
 
         task_score, _ = eval_hook(
             model,
@@ -684,8 +817,10 @@ def rank_dict_features_expensive(cfg):
             sequence_lengths,
             (cfg.layer, "residual"),
             task_score_func=gender_prediction(class_tokens),
-            batch_size=32,
+            batch_size=cfg.batch_size,
             last_position_only=cfg.last_position_only,
+            device=cfg.device,
+            activation_dist_func=skip_tokens_distance(skip_tokens),
         )
 
         scores.append((idx, task_score))
@@ -695,9 +830,9 @@ def rank_dict_features_expensive(cfg):
     torch.save(scores, f"{cfg.output_folder}/dict_feature_scores_layer_{cfg.layer}.pt")
     torch.save(best_dict, f"{cfg.output_folder}/best_dict_layer_{cfg.layer}.pt")
 
-TEST_N_SCORES = 10
+def evaluate_interventions(cfg, dataset_fn, dataset_name):
+    torch.autograd.set_grad_enabled(False)
 
-def evaluate_interventions(cfg):
     device = cfg.device
     model_name = cfg.model_name
     layer = cfg.layer
@@ -707,29 +842,40 @@ def evaluate_interventions(cfg):
     model.eval()
     model.requires_grad_(False)
 
-    prompts, class_labels, class_tokens, sequence_lengths, _ = generate_gender_dataset(
+    prompts, class_labels, class_tokens, sequence_lengths, skip_tokens = dataset_fn(
         model_name,
-        count_cutoff=10000,
-        sample_n=250,
+        count_cutoff=cfg.count_cutoff,
+        sample_n=cfg.unique_names,
+        prompts_per_name=cfg.prompts_per_name,
+        n_few_shot=cfg.k_shot,
         randomise=False,
     )
-    prompts = prompts.to(device)
-    class_labels = class_labels.to(device)
-    sequence_lengths = sequence_lengths.to(device)
-    
+
+    dict_scores = []
+
+    #base_logits = model(prompts, return_type="logits")
+
+    sum_base_performance = 0.0
+
+    for i in tqdm.tqdm(range(0, prompts.shape[0], cfg.batch_size)):
+        j = min(i+cfg.batch_size, prompts.shape[0])
+        batch = prompts[i:j].to(device)
+        batch_lengths = sequence_lengths[i:j].to(device)
+        batch_classes = class_labels[i:j].to(device)
+
+        batch_logits = model(batch, return_type="logits")
+
+        sum_base_performance += gender_prediction(class_tokens)(batch_logits, batch_classes, batch_lengths).sum().item()
+
+    base_score = sum_base_performance / prompts.shape[0]
+    print(f"base score: {base_score}")
+
     best_dict = torch.load(f"{cfg.output_folder}/best_dict_layer_{cfg.layer}.pt")
     best_dict.to_device(device)
     best_dict_scores = torch.load(f"{cfg.output_folder}/dict_feature_scores_layer_{cfg.layer}.pt")
     best_dict_scores = best_dict_scores[:cfg.test_n_scores]
 
-    dict_scores = []
-
-    base_logits = model(prompts, return_type="logits")
-
-    base_score = gender_prediction(class_tokens)(base_logits, class_labels, sequence_lengths).mean().item()
-    print(f"base score: {base_score}")
-
-    for feat_idx, sep in best_dict_scores:
+    for feat_idx, _ in best_dict_scores:
         feature = best_dict.get_learned_dict()[feat_idx].to(device)
 
         projector = NullspaceProjector(feature)
@@ -739,7 +885,8 @@ def evaluate_interventions(cfg):
                 return projector.project(tensor)
             else:
                 B, L, D = tensor.shape
-                return projector.project(tensor.reshape(-1, D)).reshape(tensor.shape)
+                tensor[:, skip_tokens:] = projector.project(tensor[:, skip_tokens:].reshape(-1, D)).reshape(B, L-skip_tokens, D)
+                return tensor
         
         task_score, activation_dist = eval_hook(
             model,
@@ -749,21 +896,24 @@ def evaluate_interventions(cfg):
             sequence_lengths,
             (layer, "residual"),
             task_score_func=gender_prediction(class_tokens),
-            batch_size=32,
+            batch_size=cfg.batch_size,
             last_position_only=cfg.last_position_only,
+            device=cfg.device,
+            activation_dist_func=skip_tokens_distance(skip_tokens),
         )
 
         dict_scores.append((feat_idx, task_score, activation_dist))
         print(f"feat: {feat_idx}, score: {task_score}, dist: {activation_dist}")
     
-    leace_eraser = torch.load(f"{cfg.output_folder}/leace_eraser_layer_{cfg.layer}.pt")
+    leace_eraser = torch.load(f"{cfg.output_folder}/leace_eraser_layer_{cfg.layer}.pt", map_location=device)
 
     def leace_hook(tensor, class_labels, seq_lengths, hook=None):
         if cfg.last_position_only:
-            return leace_eraser(tensor)
+            return projector.project(tensor)
         else:
             B, L, D = tensor.shape
-            return leace_eraser(tensor.reshape(-1, D)).reshape(tensor.shape)
+            tensor[:, skip_tokens:] = leace_eraser(tensor[:, skip_tokens:].reshape(-1, D)).reshape(B, L-skip_tokens, D)
+            return tensor
 
     leace_score, leace_dist = eval_hook(
         model,
@@ -773,20 +923,23 @@ def evaluate_interventions(cfg):
         sequence_lengths,
         (layer, "residual"),
         task_score_func=gender_prediction(class_tokens),
-        batch_size=32,
+        batch_size=cfg.batch_size,
         last_position_only=cfg.last_position_only,
+        device=cfg.device,
+        activation_dist_func=skip_tokens_distance(skip_tokens),
     )
 
     print(f"leace score: {leace_score}, dist: {leace_dist}")
 
-    means_eraser = torch.load(f"{cfg.output_folder}/means_eraser_layer_{cfg.layer}.pt")
+    means_eraser = torch.load(f"{cfg.output_folder}/means_eraser_layer_{cfg.layer}.pt", map_location=device)
 
     def means_hook(tensor, class_labels, seq_lengths, hook=None):
         if cfg.last_position_only:
-            return means_eraser.project(tensor)
+            return projector.project(tensor)
         else:
             B, L, D = tensor.shape
-            return means_eraser.project(tensor.reshape(-1, D)).reshape(tensor.shape)
+            tensor[:, skip_tokens:] = means_eraser.project(tensor[:, skip_tokens:].reshape(-1, D)).reshape(B, L-skip_tokens, D)
+            return tensor
 
     means_score, means_dist = eval_hook(
         model,
@@ -796,8 +949,10 @@ def evaluate_interventions(cfg):
         sequence_lengths,
         (layer, "residual"),
         task_score_func=gender_prediction(class_tokens),
-        batch_size=32,
+        batch_size=cfg.batch_size,
         last_position_only=cfg.last_position_only,
+        device=cfg.device,
+        activation_dist_func=skip_tokens_distance(skip_tokens),
     )
 
     print(f"means score: {means_score}, dist: {means_dist}")
@@ -807,112 +962,95 @@ def evaluate_interventions(cfg):
         "means": (means_score, means_dist),
         "dict": dict_scores,
         "base": base_score},
-    f"{cfg.output_folder}/eval_layer_{cfg.layer}.pt")
+    f"{cfg.output_folder}/eval_layer_{cfg.layer}_{dataset_name}.pt")
 
-def eval_on_winobias(cfg):
-    device = cfg.device
-    model_name = cfg.model_name
-    layer = cfg.layer
-    
-    model = HookedTransformer.from_pretrained(model_name)
-    model.to(device)
-    model.eval()
-    model.requires_grad_(False)
-
-    prompts, class_labels, class_tokens, sequence_lengths = generate_winobias_dataset(
-        model_name,
-    )
-    prompts = prompts.to(device)
-    class_labels = class_labels.to(device)
-    sequence_lengths = sequence_lengths.to(device)
-
-    best_dict = torch.load(f"{cfg.output_folder}/best_dict_layer_{cfg.layer}.pt")
-    best_dict.to_device(device)
-    best_dict_scores = torch.load(f"{cfg.output_folder}/dict_feature_scores_layer_{cfg.layer}.pt")
-    best_dict_scores = best_dict_scores[:cfg.test_n_scores]
-
-    dict_scores = []
-
-    base_logits = model(prompts, return_type="logits")
-
-    base_score = gender_prediction(class_tokens)(base_logits, class_labels, sequence_lengths).mean().item()
-    print(f"base score: {base_score}")
-
-    for feat_idx, sep in best_dict_scores:
-        feature = best_dict.get_learned_dict()[feat_idx].to(device)
-
-        def hook(tensor, hook=None):
-            B, L, D = tensor.shape
-            return tensor - (torch.einsum("bd,d->b", tensor.reshape(B*L, D), feature).unsqueeze(1) @ feature.unsqueeze(0)).reshape(tensor.shape)
-        
-        task_score, activation_dist = eval_hook(
-            model,
-            hook,
-            prompts,
-            class_labels,
-            sequence_lengths,
-            (layer, "residual"),
-            task_score_func=gender_prediction(class_tokens),
-            batch_size=32,
-        )
-
-        dict_scores.append((feat_idx, task_score, activation_dist))
-        print(f"feat: {feat_idx}, score: {task_score}, dist: {activation_dist}")
-    
-    means_eraser = torch.load(f"{cfg.output_folder}/means_eraser_layer_{cfg.layer}.pt")
-
-    def means_hook(tensor, hook=None):
-        B, L, D = tensor.shape
-        return means_eraser.project(tensor.reshape(B*L, D)).reshape(tensor.shape)
-    
-    means_score, means_dist = eval_hook(
-        model,
-        means_hook,
-        prompts,
-        class_labels,
-        sequence_lengths,
-        (layer, "residual"),
-        task_score_func=gender_prediction(class_tokens),
-        batch_size=32,
-    )
-
-    print(f"means score: {means_score}, dist: {means_dist}")
-
-    torch.save({
-        "dict": dict_scores,
-        "base": base_score,
-        "means": (means_score, means_dist),
-    }, f"{cfg.output_folder}/eval_winobias_layer_{cfg.layer}.pt")
-
-def gender_prediction_everything():
+def gender_prediction_everything(layer, device, done_flag=None):
     from utils import dotdict
 
     cfg = dotdict({
-        "model_name": "EleutherAI/pythia-70m-deduped",
-        "device": "cuda:4",
-        "layer": None,
-        "count_cutoff": 10000,
-        "output_folder": "output_erasure",
-        "activation_filename": "activation_data_erasure.pt",
-        "dict_filename": "/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r4/_9/learned_dicts.pt",
+        "model_name": "EleutherAI/pythia-410m-deduped",
+        "device": device,
+        "layer": layer,
+        "count_cutoff": 100000,
+        "k_shot": 3,
+        "unique_names": 100,
+        "prompts_per_name": 5,
+        "output_folder": "output_erasure_410m",
+        "activation_filename": f"activation_data_erasure_410m_l{layer}.pt",
+        "dict_filename": f"/mnt/ssd-cluster/pythia410/tied_residual_l{layer}_r4/_79/learned_dicts.pt",
         "target_l1": 8e-4,
-        "dict_size": 2048,
+        "dict_size": 4096,
         "feature_freq_threshold": 0.05,
-        "test_n_scores": 10,
+        "test_n_scores": 2,
+        "estimation_sample_n": 16,
         "last_position_only": False,
+        "batch_size": 32,
     })
 
-    layers = [0, 1, 2, 3, 4, 5]
+    #layers = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22]
 
     os.makedirs(cfg.output_folder, exist_ok=True)
 
-    for layer in layers:
-        cfg.layer = layer
-        generate_activation_data(cfg)
-        fit_leace_eraser(cfg)
-        fit_means_eraser(cfg)
-        rank_dict_features_expensive(cfg)
-        evaluate_interventions(cfg)
+    generate_activation_data(cfg)
+    fit_leace_eraser(cfg)
+    fit_means_eraser(cfg)
+    #rank_dict_features_expensive(cfg)
+    rank_dict_features_classifier(cfg)
+    evaluate_interventions(cfg, generate_gender_dataset, "gender")
+    evaluate_interventions(cfg, generate_pronoun_dataset, "pronoun")
+
+    if done_flag is not None:
+        done_flag.value = 1
+
+def gender_prediction_everything_multigpu():
+    layers = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22]
+    free_gpus = ["cuda:0", "cuda:1", "cuda:2", "cuda:3"]
+
+    import torch.multiprocessing as mp
+    import time
+    mp.set_start_method("spawn")
+
+    processes = []
+
+    # while some gpus are still free
+    while True:
+        new_processes = []
+        for process, gpu, done_flag in processes:
+            if done_flag.value == 1:
+                process.join()
+                free_gpus.append(gpu)
+                print(f"finished layer {process} on gpu {gpu}")
+            else:
+                new_processes.append((process, gpu, done_flag))
+        
+        processes = new_processes
+
+        if len(processes) == 0 and len(layers) == 0:
+            break
+
+        if len(free_gpus) == 0:
+            time.sleep(0.1)
+            continue
+
+        if len(layers) == 0:
+            time.sleep(0.1)
+            continue
+        
+        layer = layers.pop(0)
+        gpu = free_gpus.pop(0)
+
+        print(f"starting layer {layer} on gpu {gpu}")
+
+        done_flag = mp.Value("i", 0)
+
+        process = mp.Process(
+            target=gender_prediction_everything,
+            args=(layer, gpu, done_flag),
+        )
+
+        process.start()
+
+        processes.append((process, gpu, done_flag))
 
 def winobias_prediction_everything():
     from utils import dotdict
@@ -943,7 +1081,7 @@ if __name__ == "__main__":
     from sys import argv
 
     if argv[1] == "gender":
-        gender_prediction_everything()
+        gender_prediction_everything_multigpu()
     elif argv[1] == "winobias":
         winobias_prediction_everything()
     elif argv[1] == "pca":

@@ -31,9 +31,19 @@ class LearnedDict(ABC):
         x_hat = torch.einsum("nd,bn->bd", learned_dict, code)
         return x_hat
 
+    def center(self, batch: TensorType["_batch_size", "_activation_size"]) -> TensorType["_batch_size", "_activation_size"]:
+        # overloadable method to center the batch for the (otherwise) linear model
+        return batch
+    
+    def uncenter(self, batch: TensorType["_batch_size", "_activation_size"]) -> TensorType["_batch_size", "_activation_size"]:
+        # inverse of `center`
+        return batch
+
     def predict(self, batch: TensorType["_batch_size", "_activation_size"]) -> TensorType["_batch_size", "_activation_size"]:
-        c = self.encode(batch)
-        x_hat = self.decode(c)
+        batch_centered = self.center(batch)
+        c = self.encode(batch_centered)
+        x_hat_centered = self.decode(c)
+        x_hat = self.uncenter(x_hat_centered)
         return x_hat
 
     def n_dict_components(self):
@@ -122,19 +132,56 @@ class UntiedSAE(LearnedDict):
 
 
 class TiedSAE(LearnedDict):
-    def __init__(self, encoder, encoder_bias, norm_encoder=False):
+    def __init__(self, encoder, encoder_bias, centering=(None, None, None), norm_encoder=False):
         self.encoder = encoder
         self.encoder_bias = encoder_bias
         self.norm_encoder = norm_encoder
         self.n_feats, self.activation_size = self.encoder.shape
+
+        center_trans, center_rot, center_scale = centering
+
+        if center_trans is None:
+            center_trans = torch.zeros(self.activation_size)
+        
+        if center_rot is None:
+            center_rot = torch.eye(self.activation_size)
+        
+        if center_scale is None:
+            center_scale = torch.ones(self.activation_size)
+        
+        self.center_trans = center_trans
+        self.center_rot = center_rot
+        self.center_scale = center_scale
+
+    def initialize_missing(self):
+        if not hasattr(self, "center_trans"):
+            self.center_trans = torch.zeros(self.activation_size, device=self.encoder.device)
+        
+        if not hasattr(self, "center_rot"):
+            self.center_rot = torch.eye(self.activation_size, device=self.encoder.device)
+        
+        if not hasattr(self, "center_scale"):
+            self.center_scale = torch.ones(self.activation_size, device=self.encoder.device)
+
+    def center(self, batch):
+        return torch.einsum("cu,bu->bc", self.center_rot, batch - self.center_trans[None, :]) * self.center_scale[None, :]
+    
+    def uncenter(self, batch):
+        return torch.einsum("cu,bc->bu", self.center_rot, batch / self.center_scale[None, :]) + self.center_trans[None, :]
 
     def get_learned_dict(self):
         norms = torch.norm(self.encoder, 2, dim=-1)
         return self.encoder / torch.clamp(norms, 1e-8)[:, None]
 
     def to_device(self, device):
+        self.initialize_missing()
+
         self.encoder = self.encoder.to(device)
         self.encoder_bias = self.encoder_bias.to(device)
+
+        self.center_trans = self.center_trans.to(device)
+        self.center_rot = self.center_rot.to(device)
+        self.center_scale = self.center_scale.to(device)
 
     def encode(self, batch):
         if self.norm_encoder:

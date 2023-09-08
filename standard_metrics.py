@@ -301,7 +301,8 @@ def representedness(features: TensorType["_n_dict_components", "_activation_size
     return max_cosine_sim
 
 def mean_nonzero_activations(model: LearnedDict, batch: TensorType["_batch_size", "_activation_size"]):
-    c = model.encode(batch)
+    batch_centered = model.center(batch)
+    c = model.encode(batch_centered)
     return (c != 0).float().mean(dim=0)
 
 def fraction_variance_unexplained(model: LearnedDict, batch: TensorType["_batch_size", "_activation_size"]):
@@ -309,6 +310,34 @@ def fraction_variance_unexplained(model: LearnedDict, batch: TensorType["_batch_
     residuals = (batch - x_hat).pow(2).mean()
     total = (batch - batch.mean(dim=0)).pow(2).mean()
     return residuals / total
+
+def fraction_variance_unexplained_top_activating(model: LearnedDict, batch: TensorType["_batch_size", "_activation_size"], n_top = 2):
+    # get the fvu of the top-activating neurons for each datapoint,
+    # and the fvu for the rest of the neurons
+
+    c = model.encode(model.center(batch))
+
+    # calculate the mean activation for each neuron
+    mean_activation = c.mean(dim=0)
+    idxs = torch.argsort(mean_activation, descending=True)
+    top_n_idxs = idxs[:n_top]
+    rest_idxs = idxs[n_top:]
+
+    c_top = torch.zeros_like(c)
+    c_top[:, top_n_idxs] = c[:, top_n_idxs]
+
+    c_rest = torch.zeros_like(c)
+    c_rest[:, rest_idxs] = c[:, rest_idxs]
+
+    x_hat_top = model.center(model.decode(c_top))
+    x_hat_rest = model.center(model.decode(c_rest))
+
+    residuals_top = (batch - x_hat_top).pow(2).mean()
+    residuals_rest = (batch - x_hat_rest).pow(2).mean()
+
+    variance = (batch - batch.mean(dim=0)).pow(2).mean()
+
+    return residuals_top / variance, residuals_rest / variance
 
 def r_squared(model: LearnedDict, batch: TensorType["_batch_size", "_activation_size"]):
     return 1.0 - fraction_variance_unexplained(model, batch)

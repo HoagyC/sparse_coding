@@ -131,7 +131,7 @@ def make_sentence_dataset(dataset_name: str, max_lines: int = 20_000, start_line
                 os.system("unzstd pile0.zst")
         dataset = Dataset.from_list(list(read_from_pile("pile0", max_lines=max_lines, start_line=start_line)))
     else:
-        dataset = load_dataset(dataset_name, split=f"train[{start_line}:{start_line + max_lines}]")
+        dataset = load_dataset(dataset_name, split="train")#, split=f"train[{start_line}:{start_line + max_lines}]")
     return dataset
 
 
@@ -353,6 +353,8 @@ def make_activation_dataset_hf(
 
         dataset_iterator = iter(sentence_dataset)
 
+        n_activations = 0
+
         for _ in range(batches_to_skip):
             dataset_iterator.__next__()
 
@@ -365,6 +367,8 @@ def make_activation_dataset_hf(
                     tensor_name = make_tensor_name(layer, tensor_loc, model.cfg.model_name)
                     activation_data = cache[tensor_name].to(torch.float16)
                     activation_data = rearrange(activation_data, "b s n -> (b s) n")
+                    if layer == layers[0]:
+                        n_activations += activation_data.shape[0]
                     datasets[layer].append(activation_data)
 
                 if batch_idx >= max_batches_per_chunk:
@@ -385,8 +389,8 @@ def make_activation_dataset_hf(
             else:
                 print(f"Saved chunk {chunk_idx} of activations, total size: {(chunk_idx + 1) * batch_idx * activation_size}")
     
-    return (chunk_means, chunk_stds) if center_dataset else None
-
+    #return ((chunk_means, chunk_stds) if center_dataset else None, n_activations)
+    return n_activations
 
 def save_activation_chunk(dataset, n_saved_chunks, dataset_folder):
     dataset_t = torch.cat(dataset, dim=0).to("cpu")
@@ -440,7 +444,7 @@ def setup_data(
         )
     else:
         dataset_folder = [dataset_folder] if isinstance(dataset_folder, str) else dataset_folder
-        make_activation_dataset_hf(
+        n_datapoints = make_activation_dataset_hf(
             sentence_dataset=token_loader,
             model=model,
             activation_width=activation_width,
@@ -454,8 +458,7 @@ def setup_data(
             model_batch_size=MODEL_BATCH_SIZE,
             skip_chunks=skip_chunks,
         )
-    n_lines = len(sentence_dataset)
-    return n_lines
+        return n_datapoints
 
 
 def setup_token_data(cfg, tokenizer, model):

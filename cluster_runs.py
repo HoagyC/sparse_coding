@@ -35,6 +35,67 @@ def job_wrapper(job, ensemble_state_dict, cfg, args, tag, dataset, done_flag, pr
 
     done_flag.value = 1
 
+def job_wrapper_lite(ensemble_state_dict, cfg, args, tag, done_flag, progress_counter, job):
+    if not sys.warnoptions:
+        import warnings
+
+        warnings.filterwarnings("ignore")
+
+    ensemble = FunctionalEnsemble.from_state(ensemble_state_dict)
+
+    job(ensemble, cfg, args, tag, progress_counter)
+
+    done_flag.value = 1
+
+def dispatch_lite(cfg, ensemble, args, name, job):
+    ensemble.to_shared_memory()
+
+    finished = mp.Value("i", 0)
+    progress = mp.Value("f", 0)
+
+    p = mp.Process(
+        target=job_wrapper_lite,
+        args=(ensemble.state_dict(), cfg, args, name, finished, progress, job),
+    )
+
+    p.start()
+
+    return p, finished, progress
+
+def statusbar_lite(processes, n_points=1000):
+    # initialize progress bar
+    bar = progressbar.ProgressBar(
+        widgets=[
+            progressbar.Bar(),
+            " ",
+            progressbar.AdaptiveETA(),
+            " | ",
+            progressbar.Timer(),
+            " | ",
+            *[progressbar.Variable(tag, precision=0, width=1, format="{formatted_value}") for (_, _, _), _, tag in processes],
+        ],
+        max_value=n_points,
+    )
+
+    return bar
+
+def update_statusbar_lite(bar, processes, n_points=1000):
+    sum_progress = sum(progress.value for (_, _, progress), _, _ in processes)
+    mean_progress = sum_progress / len(processes)
+    progress_count = int(mean_progress * n_points)
+
+    bar.update(progress_count, **{tag: done.value for (_, done, _), _, tag in processes})
+
+def collect_lite(processes):
+    all_done = all(done.value == 1 for (_, done, _), _, _ in processes)
+
+    if all_done:
+        for (p, _, _), _, _ in processes:
+            p.join()
+
+        return True
+    else:
+        return False
 
 def dispatch_job_on_chunk(ensembles, cfg, dataset, job):
     dataset.pin_memory()
