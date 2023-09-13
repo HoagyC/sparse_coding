@@ -146,8 +146,8 @@ def plot_scores_across_depth(both_datasets=True):
 
     print(best_dict_scores)
 
-    do_dataset_plot(files, [x[0] for x in best_dict_scores], "gender", layers, "Concept Erasure on the Gender Prediction Task")
-    do_dataset_plot(transfer_files, [x[1] for x in best_dict_scores], "pronoun", layers, "Concept Erasure on the Pronoun Prediction Task")
+    do_dataset_plot(files, [x[0] for x in best_dict_scores], "gender", layers, "Concept Erasure on the Primary Task")
+    do_dataset_plot(transfer_files, [x[1] for x in best_dict_scores], "pronoun", layers, "Transferred Concept Erasure on the Secondary Task")
 
 def do_dataset_plot(files, best_dict_scores, name, layers, title):
     from matplotlib.legend_handler import HandlerTuple
@@ -173,7 +173,7 @@ def do_dataset_plot(files, best_dict_scores, name, layers, title):
     ax1.axhline(y=0.5, color="grey", linestyle="dashed", label="Majority")
 
     #ax1.set_xlabel("Layer")
-    ax1.set_ylabel("Prediction Ability")
+    ax1.set_ylabel("Model Prediction Ability")
 
     leace_edits = [files[l]["leace"][1] for l in range(len(layers))]
     mean_edits = [files[l]["means"][1] for l in range(len(layers))]
