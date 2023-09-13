@@ -146,10 +146,10 @@ def plot_scores_across_depth(both_datasets=True):
 
     print(best_dict_scores)
 
-    do_dataset_plot(files, [x[0] for x in best_dict_scores], "gender", layers)
-    do_dataset_plot(transfer_files, [x[1] for x in best_dict_scores], "pronoun", layers)
+    do_dataset_plot(files, [x[0] for x in best_dict_scores], "gender", layers, "Concept Erasure on the Gender Prediction Task")
+    do_dataset_plot(transfer_files, [x[1] for x in best_dict_scores], "pronoun", layers, "Concept Erasure on the Pronoun Prediction Task")
 
-def do_dataset_plot(files, best_dict_scores, name, layers):
+def do_dataset_plot(files, best_dict_scores, name, layers, title):
     from matplotlib.legend_handler import HandlerTuple
 
     leace_scores = [files[l]["leace"][0] for l in range(len(layers))]
@@ -162,8 +162,8 @@ def do_dataset_plot(files, best_dict_scores, name, layers):
     ax1.grid(True, alpha=0.5, linestyle="dashed")
     ax1.set_axisbelow(True)
 
-    ax1.plot(leace_scores, label="LEACE", marker=".")
-    ax1.plot(mean_scores, label="Mean", marker=".")
+    ax1.plot(leace_scores, label="LEACE", marker="+")
+    ax1.plot(mean_scores, label="Mean", marker="x")
     ax1.plot(max_dict_scores, label="Dict. Feature", marker=".")
 
     ax1.set_xticks(range(len(layers)))
@@ -182,8 +182,8 @@ def do_dataset_plot(files, best_dict_scores, name, layers):
     ax2.grid(True, alpha=0.5, linestyle="dashed")
     ax2.set_axisbelow(True)
 
-    ax2.plot(leace_edits, label="LEACE", marker=".")
-    ax2.plot(mean_edits, label="Mean", marker=".")
+    ax2.plot(leace_edits, label="LEACE", marker="+")
+    ax2.plot(mean_edits, label="Mean", marker="x")
     ax2.plot(max_dict_edits, label="Dict Feature", marker=".")
 
     ax2.set_xticks(range(len(layers)))
@@ -197,13 +197,15 @@ def do_dataset_plot(files, best_dict_scores, name, layers):
     ax2.set_ylim(bottom=0)
 
     handles, labels = ax1.get_legend_handles_labels()
-    fig.legend(
+    ax2.legend(
         handles,
         labels,
         loc='upper center',
         facecolor="white",
         framealpha=1,
     )
+
+    fig.suptitle(title)
 
     plt.savefig(f"graphs/erasure_across_depth_410m_{name}.png")
 
@@ -247,6 +249,8 @@ def plot_kl_div_across_depth():
     ax1.set_xlabel("Layer")
     ax1.set_ylabel("KL-Divergence")
 
+    fig.suptitle("KL-Divergence From Base Model Under Erasure")
+
     handles, labels = ax1.get_legend_handles_labels()
 
     ax1.legend(
@@ -254,7 +258,7 @@ def plot_kl_div_across_depth():
         labels,
         facecolor="white",
         framealpha=1,
-        loc="upper center"
+        loc="upper left"
     )
 
     fig.tight_layout()

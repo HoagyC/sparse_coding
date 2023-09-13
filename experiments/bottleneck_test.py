@@ -407,7 +407,7 @@ def acdc_test(
         ],
         float,
     ],
-    threshold: float = 0.05,
+    thresholds: List[float] = [0.05],
     base_logits: Optional[TensorType["_batch", "_sequence", "_vocab_size"]] = None,
     ablation_type: Literal["ablation", "reconstruction"] = "reconstruction",
     ablation_handicap: bool = False,
@@ -419,15 +419,19 @@ def acdc_test(
         ],
         TensorType["_batch"],
     ] = scaled_distance_to_clean,
-) -> Tuple[List[int], float, float]:
-    remaining_directions = list(range(lens.n_dict_components()))
-    ablated_directions: List[int] = []
+    initial_directions: Optional[List[int]] = None,
+) -> List[Tuple[List[int], float, float]]:
+    if initial_directions is None:
+        initial_directions = list(range(lens.n_dict_components()))
+
+    ablated_directions = [x for x in range(lens.n_dict_components()) if x not in initial_directions]
+    remaining_directions = list(initial_directions)
 
     corrupted_residuals, corrupted_codes, corrupted_activation, _ = activation_info(
         model, lens, location, corrupted_tokens, ablation_type=ablation_type
     )
 
-    clean_residuals, _, clean_activation, reconstruction_logits = activation_info(
+    clean_residuals, _, clean_activation, _ = activation_info(
         model,
         lens,
         location,
@@ -440,38 +444,93 @@ def acdc_test(
     if ablation_handicap:
         handicap = corrupted_residuals - clean_residuals
 
+    reconstruction_logits, _ = resample_ablation(
+        model,
+        lens,
+        location,
+        clean_tokens,
+        corrupted_codes=corrupted_codes,
+        features_to_ablate=ablated_directions,
+        return_type="logits",
+        ablation_type=ablation_type,
+        handicap=handicap,
+    )
+
     if base_logits is None:
         base_logits = reconstruction_logits
 
     prev_divergence = logit_metric(reconstruction_logits, base_logits)
 
-    idxs = np.arange(lens.n_dict_components())
-    np.random.shuffle(idxs)
+    scores = []
 
-    for i in tqdm.tqdm(idxs):
-        logits, activation = resample_ablation(
-            model,
-            lens,
-            location,
-            clean_tokens,
-            corrupted_codes=corrupted_codes,
-            features_to_ablate=ablated_directions + [i],
-            return_type="logits",
-            ablation_type=ablation_type,
-            handicap=handicap,
-        )
+    #print(ablated_directions, remaining_directions)
 
-        divergence = logit_metric(logits, base_logits)
+    for tau in sorted(thresholds):
+        if len(remaining_directions) > 0:
+            activation = None
 
-        if divergence - prev_divergence < threshold:
-            prev_divergence = divergence
-            ablated_directions.append(i)
-            remaining_directions.remove(i)
+            assert len(ablated_directions) + len(remaining_directions) == lens.n_dict_components()
 
-    distance = distance_metric(clean_activation, corrupted_activation, activation)
+            for i in tqdm.tqdm(remaining_directions.copy()):
+                logits, activation = resample_ablation(
+                    model,
+                    lens,
+                    location,
+                    clean_tokens,
+                    corrupted_codes=corrupted_codes,
+                    features_to_ablate=ablated_directions + [i],
+                    return_type="logits",
+                    ablation_type=ablation_type,
+                    handicap=handicap,
+                )
 
-    return remaining_directions, prev_divergence, distance.mean().item()
+                divergence = logit_metric(logits, base_logits)
 
+                if divergence - prev_divergence < tau:
+                    prev_divergence = divergence
+                    ablated_directions.append(i)
+                    remaining_directions.remove(i)
+
+            distance = distance_metric(clean_activation, corrupted_activation, activation)
+            scores.append((remaining_directions.copy(), prev_divergence, distance.mean().item()))
+
+            print(f"graph size: {len(remaining_directions)} div: {prev_divergence} edit: {distance.mean().item()}")
+    
+    zero_logits, zero_activation = resample_ablation(
+        model,
+        lens,
+        location,
+        clean_tokens,
+        corrupted_codes=corrupted_codes,
+        features_to_ablate=list(range(lens.n_dict_components())),
+        return_type="logits",
+        ablation_type=ablation_type,
+        handicap=handicap,
+    )
+
+    zero_divergence = logit_metric(zero_logits, base_logits)
+    zero_distance = distance_metric(clean_activation, corrupted_activation, zero_activation)
+
+    scores.append(([], zero_divergence, zero_distance.mean().item()))
+
+    full_logits, full_activation = resample_ablation(
+        model,
+        lens,
+        location,
+        clean_tokens,
+        corrupted_codes=corrupted_codes,
+        features_to_ablate=[],
+        return_type="logits",
+        ablation_type=ablation_type,
+        handicap=handicap,
+    )
+
+    full_divergence = logit_metric(full_logits, base_logits)
+    full_distance = distance_metric(clean_activation, corrupted_activation, full_activation)
+
+    scores.append((list(range(lens.n_dict_components())), full_divergence, full_distance.mean().item()))
+
+    return scores
 
 def diff_mean_activation_editing(
     model: HookedTransformer,
@@ -726,23 +785,71 @@ def least_squares_erasure(
 
     return score, distance.mean().item(), eraser
 
+def clean_logits_and_activations(
+    model: HookedTransformer,
+    location: standard_metrics.Location,
+    dataset: TensorType["_batch", "_sequence"],
+):
+    base_logits, activation_cache = model.run_with_cache(
+        dataset,
+        names_filter=lambda name: name == standard_metrics.get_model_tensor_name(location),
+        return_type="logits",
+    )
+    return base_logits, activation_cache[standard_metrics.get_model_tensor_name(location)]
 
-def new_bottleneck_test():
+def filter_active_components(
+    activations: TensorType["_batch", "_sequence", "_d_activation"],
+    dict: LearnedDict,
+    threshold: float = 0.01,
+):
+    B, L, D = activations.shape
+    activations_flattened = activations.reshape(B * L, D)
+    codes = dict.encode(activations_flattened)
+    print(codes.shape)
+    codes_nz = codes.count_nonzero(dim=0).float() / codes.shape[0]
+    # get indexes of components that are active in at least threshold of the dataset
+    active_components = torch.where(codes_nz > threshold)[0]
+
+    components = list(active_components.cpu().numpy())
+    print(f"Found {len(components)} active components")
+
+    return components
+
+def new_bottleneck_test(cfg, layer, device, done_flag):
     torch.autograd.set_grad_enabled(False)
 
-    model = HookedTransformer.from_pretrained("EleutherAI/pythia-70m-deduped")
+    # Train PCA
 
-    device = "cuda:7"
+    activation_dataset = torch.load(f"activation_data/layer_{layer}/0.pt")
+    activation_dataset = activation_dataset.to(device, dtype=torch.float32)
+
+    pca = BatchedPCA(n_dims=activation_dataset.shape[-1], device=device)
+    batch_size = 2048
+
+    print("training pca")
+    for i in tqdm.trange(0, activation_dataset.shape[0], batch_size):
+        j = min(i + batch_size, activation_dataset.shape[0])
+        pca.train_batch(activation_dataset[i:j])
+
+    pca_dict = pca.to_rotation_dict(activation_dataset.shape[-1])
+
+    pca_dict.to_device(device)
+
+    del activation_dataset
+
+    # Load model
+
+    model = HookedTransformer.from_pretrained(cfg.model_name)
 
     model.to(device)
 
-    ioi_clean_full, ioi_corrupted_full = generate_ioi_dataset(model.tokenizer, 50, 50)
+    ioi_clean_full, ioi_corrupted_full = generate_ioi_dataset(model.tokenizer, cfg.dataset_size, cfg.dataset_size)
     ioi_clean = ioi_clean_full[:, :-1].to(device)
     ioi_corrupted = ioi_corrupted_full[:, :-1].to(device)
     ioi_correct = ioi_clean_full[:, -1].to(device)
     ioi_incorrect = ioi_corrupted_full[:, -1].to(device)
 
-    base_logits = model(ioi_clean, return_type="logits")
+    base_logits, base_activations = clean_logits_and_activations(model, (layer, "residual"), ioi_clean)
 
     def divergence_metric(new_logits, base_logits):
         B, L, V = base_logits.shape
@@ -756,112 +863,123 @@ def new_bottleneck_test():
         incorrect = new_logits[:, -1, ioi_incorrect]
         return -(correct - incorrect).mean().item()
 
-    layer = 3
-    activation_dataset = torch.load(os.path.join(BASE_FOLDER, f"activation_data/layer_3/0.pt"))
-    activation_dataset = activation_dataset.to(device, dtype=torch.float32)
-
-    # diff_mean_scores = diff_mean_activation_editing(
-    #    model,
-    #    (layer, "residual"),
-    #    ioi_clean,
-    #    ioi_corrupted,
-    #    divergence_metric,
-    #    n_points=100,
-    #    scale_range=(-10.0, 100.0),
-    # )
-
-    pca = BatchedPCA(n_dims=activation_dataset.shape[-1], device=device)
-    batch_size = 4096
-
-    print("training pca")
-    for i in tqdm.trange(0, activation_dataset.shape[0], batch_size):
-        j = min(i + batch_size, activation_dataset.shape[0])
-        pca.train_batch(activation_dataset[i:j])
-
-    pca_dict = pca.to_rotation_dict(activation_dataset.shape[-1])
-
-    pca_dict.to_device(device)
-
-    max_fvus = [0.2, 0.1, 0.05]
+    l1_alphas = [1e-3, 3e-4, 1e-4]
+    name_fmt = "learned_r{ratio}_{l1_alpha:.0e}"
     best_dicts = {}
     ratios = [4]
     dict_sets = [
         (
             ratio,
-            "learned_{max_fvu:.2f}",
-            torch.load(f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r{ratio}/_9/learned_dicts.pt"),
+            torch.load(f"/mnt/ssd-cluster/pythia410/tied_residual_l{layer}_r{ratio}/_79/learned_dicts.pt"),
         )
         for ratio in ratios
     ]
-    dict_sets += [
-        (
-            4,
-            "zero_l1_baseline",
-            torch.load(os.path.join(BASE_FOLDER, "output_zero_b_4/_7/learned_dicts.pt")),
-        )
-    ]
 
     print("evaluating dicts")
-    for max_fvu in max_fvus:
-        for ratio, label, dicts in tqdm.tqdm(dict_sets):
+    for l1_alpha in l1_alphas:
+        for ratio, dicts in tqdm.tqdm(dict_sets):
+            best_approx_dist = float("inf")
+            best_dict = None
             for dict, hyperparams in dicts:
-                dict.to_device(device)
-                sample_idxs = np.random.choice(activation_dataset.shape[0], size=50000, replace=False)
-                fvu = standard_metrics.fraction_variance_unexplained(dict, activation_dataset[sample_idxs]).item()
-                if fvu < max_fvu:
-                    name = label.format(max_fvu=max_fvu, dict_size=hyperparams["dict_size"])
-
-                    if name not in best_dicts:
-                        best_dicts[name] = (fvu, hyperparams, dict)
-                    else:
-                        if fvu > best_dicts[name][0]:
-                            best_dicts[name] = (fvu, hyperparams, dict)
+                dist = abs(hyperparams["l1_alpha"] - l1_alpha)
+                if dist < best_approx_dist:
+                    best_approx_dist = dist
+                    best_dict = (dict, hyperparams)
+            
+            best_dicts[name_fmt.format(ratio=ratio, l1_alpha=l1_alpha)] = best_dict
 
     print("found satisfying dicts:", list(best_dicts.keys()))
 
-    del activation_dataset
-
     dictionaries = {}
     dictionaries["pca"] = (pca_dict, {"pca": True})
-    for name, (_, hyperparams, dict) in best_dicts.items():
+    for name, (dict, hyperparams) in best_dicts.items():
         dictionaries[name] = (dict, hyperparams)
 
-    tau_values = np.logspace(-6.5, -1.5, 10)
+    tau_values = list(np.logspace(cfg.tau_min, cfg.tau_max, cfg.tau_n))
 
     scores: Dict[str, List] = {}
 
     for name, (dict, _) in dictionaries.items():
-        scores[name] = []
+        dict.to_device(device)
         print("evaluating", name)
-        for i, tau in enumerate(tau_values):
-            graph, div, corruption = acdc_test(
-                model,
-                dict,
-                (layer, "residual"),
-                ioi_clean,
-                ioi_corrupted,
-                divergence_metric,
-                threshold=tau,
-                ablation_type="ablation",
-                base_logits=base_logits,
-                ablation_handicap=True,
-                distance_metric=scaled_distance_to_clean,
-            )
-            scores[name].append((tau, graph, div, corruption))
-            print(
-                f"tau: {tau:.3e} ({i+1}/{len(tau_values)}), graph size: {len(graph)}, div: {div:.3e}, corruption: {corruption:.2f}"
-            )
 
-    torch.save(scores, os.path.join(BASE_FOLDER, f"dict_scores_layer_{layer}.pt"))
-    torch.save(dictionaries, os.path.join(BASE_FOLDER, f"dictionaries_layer_{layer}.pt"))
+        active_components = filter_active_components(base_activations, dict, threshold=cfg.activity_threshold)
+        scores[name] = acdc_test(
+            model,
+            dict,
+            (layer, "residual"),
+            ioi_clean,
+            ioi_corrupted,
+            divergence_metric,
+            thresholds=tau_values,
+            ablation_type="ablation",
+            base_logits=base_logits,
+            ablation_handicap=True,
+            distance_metric=scaled_distance_to_clean,
+            initial_directions=active_components,
+        )
+
+    torch.save(scores, f"{cfg.output_dir}/dict_scores_layer_{layer}.pt")
+    torch.save(dictionaries, f"{cfg.output_dir}/dictionaries_layer_{layer}.pt")
+
+    done_flag.value = 1
 
     # torch.save(diff_mean_scores, os.path.join(BASE_FOLDER, f"diff_mean_scores_layer_{layer}.pt"))
 
+def bottleneck_everything_multigpu(cfg):
+    layers = [4, 6, 8, 10, 12, 14, 16, 18]
+    free_gpus = ["cuda:0", "cuda:1", "cuda:2", "cuda:3", "cuda:4", "cuda:5", "cuda:6", "cuda:7"]
+
+    import torch.multiprocessing as mp
+    import time
+    mp.set_start_method("spawn")
+
+    processes = []
+
+    # while some gpus are still free
+    while True:
+        new_processes = []
+        for process, gpu, done_flag in processes:
+            if done_flag.value == 1:
+                process.join()
+                free_gpus.append(gpu)
+                print(f"finished layer {process} on gpu {gpu}")
+            else:
+                new_processes.append((process, gpu, done_flag))
+        
+        processes = new_processes
+
+        if len(processes) == 0 and len(layers) == 0:
+            break
+
+        if len(free_gpus) == 0:
+            time.sleep(0.1)
+            continue
+
+        if len(layers) == 0:
+            time.sleep(0.1)
+            continue
+        
+        layer = layers.pop(0)
+        gpu = free_gpus.pop(0)
+
+        print(f"starting layer {layer} on gpu {gpu}")
+
+        done_flag = mp.Value("i", 0)
+
+        process = mp.Process(
+            target=new_bottleneck_test,
+            args=(cfg, layer, gpu, done_flag),
+        )
+
+        process.start()
+
+        processes.append((process, gpu, done_flag))
 
 def erasure_test():
     torch.autograd.set_grad_enabled(False)
 
-    model_name = "EleutherAI/pythia-70m-deduped"
+    model_name = "EleutherAI/pythia-410m-deduped"
 
     model = HookedTransformer.from_pretrained(model_name)
 
@@ -884,7 +1002,7 @@ def erasure_test():
         pred = torch.einsum("bc,bc->b", probs, class_one_hot).mean()
         return torch.abs(pred - 0.5).item() + 0.5
 
-    layer = 2
+    layer = 12
     activation_dataset = torch.load(os.path.join(BASE_FOLDER, f"activation_data/layer_{layer}/0.pt"))
     activation_dataset = activation_dataset.to(device, dtype=torch.float32)
 
@@ -894,7 +1012,8 @@ def erasure_test():
     dict_sets = [
         (
             ratio,
-            torch.load(f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r{ratio}/_9/learned_dicts.pt"),
+            #torch.load(f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r{ratio}/_9/learned_dicts.pt"),
+            torch.load(f"/mnt/ssd-cluster/pythia410/tied_residual_l{layer}_r{ratio}/_79/learned_dicts.pt"),
         )
         for ratio in ratios
     ]
@@ -963,4 +1082,18 @@ def erasure_test():
 
 
 if __name__ == "__main__":
-    erasure_test()
+    from utils import dotdict
+
+    cfg = dotdict({
+        "model_name": "EleutherAI/pythia-410m-deduped",
+        "dataset_size": 50,
+        "tau_min": -6,
+        "tau_max": -1,
+        "tau_n": 30,
+        "activity_threshold": 0.01,
+        "output_dir": "bottleneck_410m"
+    })
+
+    os.makedirs(cfg.output_dir, exist_ok=True)
+
+    bottleneck_everything_multigpu(cfg)

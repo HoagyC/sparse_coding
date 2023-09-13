@@ -738,9 +738,64 @@ def rank_dict_features_classifier(cfg):
     best_dict.to_device(cfg.device)
     features = best_dict.get_learned_dict()
 
-    scores = eval_features_classification_negative(features, activations, class_labels, sequence_lengths, skip_tokens)
+    erasure_scores = eval_features_classification_negative(features, activations, class_labels, sequence_lengths, skip_tokens)
+
+    erasure_scores = sorted(erasure_scores, key=lambda x: x[1])
+
+    filtered_idxs = [idx for idx, _ in erasure_scores[:cfg.test_n_scores]]
+
+    del activations, class_labels, sequence_lengths, skip_tokens
+
+    prompts, class_labels, class_tokens, sequence_lengths, skip_tokens = generate_gender_dataset(
+        cfg.model_name,
+        count_cutoff=cfg.count_cutoff,
+        sample_n=cfg.unique_names,
+        n_few_shot=cfg.k_shot,
+        prompts_per_name=1, # max name diversity
+    )
+
+    model = HookedTransformer.from_pretrained(cfg.model_name)
+    model.to(cfg.device)
+    model.eval()
+    model.requires_grad_(False)
+
+    scores = []
+
+    base_logits = model(prompts, return_type="logits")
+
+    for idx in tqdm.tqdm(filtered_idxs):
+        feature = best_dict.get_learned_dict()[idx].to(cfg.device)
+
+        projector = NullspaceProjector(feature)
+
+        def hook(tensor, class_labels, seq_lengths, hook=None):
+            if cfg.last_position_only:
+                return projector.project(tensor)
+            else:
+                B, L, D = tensor.shape
+                tensor[:, skip_tokens:] = projector.project(tensor[:, skip_tokens:].reshape(-1, D)).reshape(B, L-skip_tokens, D)
+                return tensor
+
+        task_score, _ = eval_hook(
+            model,
+            hook,
+            prompts,
+            class_labels,
+            sequence_lengths,
+            (cfg.layer, "residual"),
+            task_score_func=gender_prediction(class_tokens),
+            batch_size=cfg.batch_size,
+            last_position_only=cfg.last_position_only,
+            device=cfg.device,
+            activation_dist_func=skip_tokens_distance(skip_tokens),
+        )
+
+        scores.append((idx, task_score))
+
+    scores = sorted(scores, key=lambda x: x[1])
 
     torch.save(scores, f"{cfg.output_folder}/dict_feature_scores_layer_{cfg.layer}.pt")
+    torch.save(best_dict, f"{cfg.output_folder}/best_dict_layer_{cfg.layer}.pt")
 
 def rank_dict_features_expensive(cfg):
     model_name = cfg.model_name
@@ -873,7 +928,8 @@ def evaluate_interventions(cfg, dataset_fn, dataset_name):
     best_dict = torch.load(f"{cfg.output_folder}/best_dict_layer_{cfg.layer}.pt")
     best_dict.to_device(device)
     best_dict_scores = torch.load(f"{cfg.output_folder}/dict_feature_scores_layer_{cfg.layer}.pt")
-    best_dict_scores = best_dict_scores[:cfg.test_n_scores]
+    #best_dict_scores = best_dict_scores[:cfg.test_n_scores]
+    best_dict_scores = best_dict_scores[:1]
 
     for feat_idx, _ in best_dict_scores:
         feature = best_dict.get_learned_dict()[feat_idx].to(device)
@@ -981,7 +1037,7 @@ def gender_prediction_everything(layer, device, done_flag=None):
         "target_l1": 8e-4,
         "dict_size": 4096,
         "feature_freq_threshold": 0.05,
-        "test_n_scores": 2,
+        "test_n_scores": 4,
         "estimation_sample_n": 16,
         "last_position_only": False,
         "batch_size": 32,
@@ -1004,7 +1060,7 @@ def gender_prediction_everything(layer, device, done_flag=None):
 
 def gender_prediction_everything_multigpu():
     layers = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22]
-    free_gpus = ["cuda:0", "cuda:1", "cuda:2", "cuda:3"]
+    free_gpus = ["cuda:0", "cuda:1", "cuda:2", "cuda:3", "cuda:4", "cuda:5"]
 
     import torch.multiprocessing as mp
     import time
