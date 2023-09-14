@@ -558,10 +558,10 @@ def interpret_across_baselines(n_gpus: int = 3):
             cfg.layer = layer
             cfg.layer_loc = layer_loc
             cfg.save_loc = os.path.join(save_dir, folder, baseline_file[:-3])
-            cfg.n_feats_explain = 50
-            if not ("identity" in baseline_file or "random" in baseline_file):
+            cfg.n_feats_explain = 150
+            if not cfg.layer_loc == "residual":
                 continue
-            if not cfg.layer_loc == "mlp":
+            if "nmf" in baseline_file:
                 continue
             learned_dict = torch.load(
                 os.path.join(baselines_dir, folder, baseline_file),
@@ -585,6 +585,8 @@ def interpret_across_big_sweep(l1_val: float, n_gpus: int = 1):
     base_cfg = parse_args()
     base_dir = "/mnt/ssd-cluster/bigrun0308"
     save_dir = "/mnt/ssd-cluster/auto_interp_results/"
+    
+    n_chunks_training = 10
     os.makedirs(save_dir, exist_ok=True)
 
     all_folders = os.listdir(base_dir)
@@ -597,20 +599,18 @@ def interpret_across_big_sweep(l1_val: float, n_gpus: int = 1):
         except:
             continue
         print(f"{tied}, {layer_loc=}, {layer=}, {ratio=}")
-        if layer_loc != "mlp":
+        if layer_loc != "residual":
             continue
-        if ratio != 1:
+        if tied != "tied":
             continue
-        # if layer != 4:
-        #     continue
-        if extra_str != "long":
+        if ratio != 2:
             continue
-        if tied != "untied":
+        if extra_str != "":
             continue
 
         cfg = copy.deepcopy(base_cfg)
         autoencoders = torch.load(
-            os.path.join(base_dir, folder, "_59", "learned_dicts.pt"),
+            os.path.join(base_dir, folder, f"_{n_chunks_training - 1}", "learned_dicts.pt"),
             map_location=cfg.device,
         )
         # find ae with matching l1_val
@@ -621,20 +621,20 @@ def interpret_across_big_sweep(l1_val: float, n_gpus: int = 1):
 
         # save the learned dict
         save_str = f"l{layer}_{layer_loc}/{tied}_r{ratio}_l1a{l1_val:.2}"
-        os.makedirs(os.path.join(save_dir, save_str), exist_ok=True)
-        torch.save(matching_encoder, os.path.join(save_dir, save_str, "learned_dict.pt"))
+        # os.makedirs(os.path.join(save_dir, save_str), exist_ok=True)
+        # torch.save(matching_encoder, os.path.join(save_dir, save_str, "learned_dict.pt"))
 
         # run the interpretation
         cfg.load_interpret_autoencoder = os.path.join(save_dir, save_str, "learned_dict.pt")
         cfg.layer = layer
         cfg.layer_loc = layer_loc
         cfg.save_loc = os.path.join(save_dir, save_str)
-        cfg.n_feats_explain = 200
+        cfg.n_feats_explain = 150
         if n_gpus == 1:
             run(matching_encoder, cfg)
         else:
             cfg.device = f"cuda:{len(job_queue) % n_gpus}"
-            job_queue.append((LearnedDict, cfg))
+            job_queue.append((matching_encoder, cfg))
 
     if n_gpus > 1:
         with mp.Pool(n_gpus) as p:
@@ -682,7 +682,7 @@ def interpret_across_chunks(l1_val: float, n_gpus: int = 1):
                 run(matching_encoder, cfg)
             else:
                 cfg.device = f"cuda:{len(job_queue) % n_gpus}"
-                job_queue.append((LearnedDict, cfg))
+                job_queue.append((matching_encoder, cfg))
 
     if n_gpus > 1:
         with mp.Pool(n_gpus) as p:
@@ -798,11 +798,11 @@ if __name__ == "__main__":
     elif len(sys.argv) > 1 and sys.argv[1] == "big_sweep":
         sys.argv.pop(1)
         # l1_val = 0.00018478
-        # l1_val = 0.0008577 # 8e-4 in logspace(-4, -2, 16)
+        l1_val = 0.0008577 # 8e-4 in logspace(-4, -2, 16)
         # l1_val = 0.00083768 # 8e-4 in logspace(-4, -2, 14)
         # l1_val = 0.0007197 # 8e-4 in logspace(-4, -2, 8)
         # l1_val = 1e-3
-        l1_val = 0.000316  # early one for mlp??
+        # l1_val = 0.000316  # early one for mlp??
         interpret_across_big_sweep(l1_val)
 
     elif len(sys.argv) > 1 and sys.argv[1] == "all_baselines":

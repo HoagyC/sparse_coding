@@ -1214,10 +1214,11 @@ def run_single_layer() -> None:
     cfg.n_chunks = 16
     cfg.n_repetitions = 5
     cfg.tied_ae = True
-    for layer_loc in ["mlp"]:
-        cfg.dataset_folder = f"owtchunks_centered_pythia70m_l{cfg.layer}_{layer_loc}"
+    cfg.center_dataset = True
+    for layer_loc in ["residual"]:
+        cfg.dataset_folder = f"owtchunks_zeromean_pythia70m_l{cfg.layer}_{layer_loc}"
         # shutil.rmtree(cfg.dataset_folder)
-        for dict_ratio in [4]:
+        for dict_ratio in [4, 8, 16, 32]:
             cfg.layer_loc = layer_loc
             cfg.learned_dict_ratio = dict_ratio
 
