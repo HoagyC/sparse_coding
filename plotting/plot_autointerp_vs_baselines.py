@@ -59,7 +59,7 @@ def read_all_layers(score_mode: str, layer_loc: str) -> None:
     if score_mode == "random":
         top = 0.2
     else:
-        top = 0.4
+        top = 0.35
     plt.ylim(bottom=0, top=top)
     # add horizontal grid lines every 0.1
     plt.yticks(np.arange(0, top, 0.1))
@@ -128,7 +128,15 @@ def read_all_layers(score_mode: str, layer_loc: str) -> None:
     transform_names = []
     for i, transform in enumerate(transforms):
         if "tied" in transform:
-            transform_names.append(f"{i+1}: sparse coding")
+            transform_names.append(f"Sparse Coding")
+        elif transform == "ica":
+            transform_names.append("ICA")
+        elif transform == "pca":
+            transform_names.append("PCA")
+        elif "identity" in transform:
+            transform_names.append("Identity ReLU")
+        elif transform == "random":
+            transform_names.append("Random")   
         else:
             transform_names.append(f"{i+1}: {transform.replace('_', ' ')}")
     plt.legend(transform_names, loc="upper right")
@@ -141,15 +149,15 @@ def read_all_layers(score_mode: str, layer_loc: str) -> None:
 
     plt.axhline(y=0, linestyle="-", color="black", linewidth=1)
     plt.tight_layout()
-    save_path = os.path.join(plots_folder, f"{layer_loc}_{score_mode}_means_and_cis.png")
+    save_path = os.path.join(plots_folder, f"{layer_loc}_{score_mode}_means_and_cis_new.png")
     print(f"Saving means and cis graph to {save_path}")
     plt.savefig(save_path)
 
 
 if __name__ == "__main__":
-    # # read_all_layers("top", "residual")
-    # read_all_layers("random", "residual")
-    # read_all_layers("top_random", "residual")
+    read_all_layers("top", "residual")
+    read_all_layers("random", "residual")
+    read_all_layers("top_random", "residual")
     # read_all_layers("top", "mlp")
-    read_all_layers("random", "mlp")
-    read_all_layers("top_random", "mlp")
+    # read_all_layers("random", "mlp")
+    # read_all_layers("top_random", "mlp")
