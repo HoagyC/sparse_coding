@@ -96,9 +96,22 @@ def read_all_layers(score_mode: str, layer_loc: str) -> None:
     transform_names = []
     for i, transform in enumerate(transforms):
         if "tied" in transform:
-            transform_names.append(f"{i+1}: sparse coding")
+            transform_names.append(f"Sparse Coding")
+        elif transform == "ica":
+            transform_names.append("ICA")
+        elif transform == "ica_topk":
+            transform_names.append("ICA Top-k")
+        elif transform == "pca":
+            transform_names.append("PCA")
+        elif transform == "pca_topk":
+            transform_names.append("PCA Top-k")
+        elif "identity" in transform:
+            transform_names.append("Identity ReLU")
+        elif transform == "random":
+            transform_names.append("Random")   
         else:
-            transform_names.append(f"{i+1}: {transform.replace('_', ' ')}")
+            transform_names.append(transform.replace('_', ' '))
+
     plt.legend(transform_names, loc="upper right")
 
     plt.axhline(y=0, linestyle="-", color="black", linewidth=1)
@@ -108,15 +121,15 @@ def read_all_layers(score_mode: str, layer_loc: str) -> None:
     elif score_mode == "top_random":
         plt.title("Top-and-random scoring")
     plt.tight_layout()
-    save_path = os.path.join(plots_folder, f"{layer_loc}_{score_mode}_topk_means_and_cis.png")
+    save_path = os.path.join(plots_folder, f"{layer_loc}_{score_mode}_topk_means_and_cis_new.png")
     print(f"Saving means and cis graph to {save_path}")
     plt.savefig(save_path)
 
 
 if __name__ == "__main__":
-    # read_all_layers("top", "residual")
-    # read_all_layers("random", "residual")
-    # read_all_layers("top_random", "residual")
+    read_all_layers("top", "residual")
+    read_all_layers("random", "residual")
+    read_all_layers("top_random", "residual")
     # read_all_layers("top", "mlp")
-    read_all_layers("random", "mlp")
-    read_all_layers("top_random", "mlp")
+    # read_all_layers("random", "mlp")
+    # read_all_layers("top_random", "mlp")
