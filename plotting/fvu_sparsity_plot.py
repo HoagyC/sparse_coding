@@ -338,9 +338,7 @@ if __name__ == "__main__":
 
     for _ in range(1):
         layer = 2
-        files = [
-            ("No Centering", "outputs_sphere/no_centering_9.pt"),
-            ("Mean Centered", "outputs_sphere/mean_centered_9.pt"),
+        files = [ 
             #("Learned Center (zero init)", "outputs_sphere/learned_centered_10.pt"),
             #("Learned Center (mean init)", "outputs_sphere/learned_centered_mean_init_10.pt"),
             #("Sphered", "outputs_sphere/sphered_7.pt")

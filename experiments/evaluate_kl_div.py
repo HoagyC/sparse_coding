@@ -152,6 +152,8 @@ def eval_kl_div(cfg, layers):
         base_logits[-1].pin_memory()
 
     for layer in layers:
+        print(f"Layer {layer}")
+
         scores = {}
 
         eraser = torch.load(f"{cfg.output_dict}/leace_eraser_layer_{layer}.pt", map_location=cfg.device)
@@ -201,6 +203,32 @@ def eval_kl_div(cfg, layers):
         )
 
         print(f"Scores Dict: {scores['dict']}")
+
+        rand_dict = torch.load(f"{cfg.output_dict}/random_dict_layer_{layer}.pt")
+        rand_feature_scores = torch.load(f"{cfg.output_dict}/random_dict_feature_scores_layer_{layer}.pt")
+
+        rand_feature_idx = min(rand_feature_scores, key=lambda x: x[1])
+        print(f"Best feature: {rand_feature_idx}")
+        rand_feature_idx = rand_feature_idx[0]
+        rand_feature = rand_dict.get_learned_dict()[rand_feature_idx].to(cfg.device)
+        rand_feature_proj = NullspaceProjector(rand_feature)
+
+        def rand_feature_hook(tensor, hook=None):
+            B, L, D = tensor.shape
+            return rand_feature_proj.project(tensor.reshape(-1, D)).reshape(tensor.shape)
+        
+        scores["random"] = eval_hook(
+            model,
+            rand_feature_hook,
+            token_tensors,
+            (layer, "residual"),
+            base_logits,
+            max_batches=n_batches,
+            batch_size=batch_size,
+            device=device,
+        )
+
+        print(f"Scores Random: {scores['random']}")
 
         means_eraser = torch.load(f"{cfg.output_dict}/means_eraser_layer_{layer}.pt", map_location=cfg.device)
 

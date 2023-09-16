@@ -141,20 +141,17 @@ def plot_scores_across_depth(both_datasets=True):
         for layer in layers
     ]
 
-    all_dict_scores = [list(zip(files[l]["dict"], transfer_files[l]["dict"])) for l in range(len(layers))]
-    best_dict_scores = [min(l, key=lambda x: x[0][1]) for l in all_dict_scores]
+    do_dataset_plot(files, "gender", layers, "Concept Erasure on the Primary Task")
+    do_dataset_plot(transfer_files, "pronoun", layers, "Transferred Concept Erasure on the Secondary Task")
 
-    print(best_dict_scores)
-
-    do_dataset_plot(files, [x[0] for x in best_dict_scores], "gender", layers, "Concept Erasure on the Primary Task")
-    do_dataset_plot(transfer_files, [x[1] for x in best_dict_scores], "pronoun", layers, "Transferred Concept Erasure on the Secondary Task")
-
-def do_dataset_plot(files, best_dict_scores, name, layers, title):
+def do_dataset_plot(files, name, layers, title):
     from matplotlib.legend_handler import HandlerTuple
 
     leace_scores = [files[l]["leace"][0] for l in range(len(layers))]
     mean_scores = [files[l]["means"][0] for l in range(len(layers))]
-    max_dict_scores = [best_dict_scores[l][1] for l in range(len(layers))]
+    max_dict_scores = [files[l]["dict"][0][1] for l in range(len(layers))]
+    max_rand_scores = [files[l]["random"][0][1] for l in range(len(layers))]
+
     base_score = files[0]["base"]
 
     fig, (ax2, ax1) = plt.subplots(2, 1, sharex=True)
@@ -165,6 +162,7 @@ def do_dataset_plot(files, best_dict_scores, name, layers, title):
     ax1.plot(leace_scores, label="LEACE", marker="+")
     ax1.plot(mean_scores, label="Mean", marker="x")
     ax1.plot(max_dict_scores, label="Dict. Feature", marker=".")
+    ax1.plot(max_rand_scores, label="Rand. Feature", marker=".")
 
     ax1.set_xticks(range(len(layers)))
     ax1.set_xticklabels(layers)
@@ -177,7 +175,8 @@ def do_dataset_plot(files, best_dict_scores, name, layers, title):
 
     leace_edits = [files[l]["leace"][1] for l in range(len(layers))]
     mean_edits = [files[l]["means"][1] for l in range(len(layers))]
-    max_dict_edits = [best_dict_scores[l][2] for l in range(len(layers))]
+    max_dict_edits = [files[l]["dict"][0][2] for l in range(len(layers))]
+    max_rand_edits = [files[l]["random"][0][2] for l in range(len(layers))]
 
     ax2.grid(True, alpha=0.5, linestyle="dashed")
     ax2.set_axisbelow(True)
@@ -185,6 +184,7 @@ def do_dataset_plot(files, best_dict_scores, name, layers, title):
     ax2.plot(leace_edits, label="LEACE", marker="+")
     ax2.plot(mean_edits, label="Mean", marker="x")
     ax2.plot(max_dict_edits, label="Dict Feature", marker=".")
+    ax2.plot(max_rand_edits, label="Rand. Feature", marker=".")
 
     ax2.set_xticks(range(len(layers)))
     ax2.set_xticklabels(layers)
@@ -203,6 +203,7 @@ def do_dataset_plot(files, best_dict_scores, name, layers, title):
         loc='upper center',
         facecolor="white",
         framealpha=1,
+        ncol=2,
     )
 
     fig.suptitle(title)
@@ -222,15 +223,17 @@ def plot_kl_div_across_depth():
     leace_scores = [files[l]["LEACE"][0] for l in range(len(layers))]
     mean_scores = [files[l]["means"][0] for l in range(len(layers))]
     max_dict_scores = [files[l]["dict"][0] for l in range(len(layers))]
+    max_rand_scores = [files[l]["random"][0] for l in range(len(layers))]
 
     fig, ax1 = plt.subplots(1, 1, sharex=True, figsize=(6, 3))
 
     ax1.grid(True, alpha=0.5, linestyle="dashed")
     ax1.set_axisbelow(True)
 
-    ax1.plot(leace_scores, label="LEACE", marker=".")
-    ax1.plot(mean_scores, label="Mean", marker=".")
+    ax1.plot(leace_scores, label="LEACE", marker="+")
+    ax1.plot(mean_scores, label="Mean", marker="x")
     ax1.plot(max_dict_scores, label="Dict. Feature", marker=".")
+    ax1.plot(max_rand_scores, label="Rand. Feature", marker=".")
 
     #ax1.plot([4, 5], [mean_scores[4], 1], color="#ff7f0e", linestyle="dashed")
     #ax1.scatter([5], [0.2], marker="^", color="#ff7f0e")

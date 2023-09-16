@@ -19,7 +19,7 @@ import tqdm
 
 from transformer_lens import HookedTransformer
 
-from autoencoders.learned_dict import LearnedDict
+from autoencoders.learned_dict import LearnedDict, RandomDict
 from autoencoders.pca import BatchedPCA
 
 from activation_dataset import setup_data
@@ -738,11 +738,18 @@ def rank_dict_features_classifier(cfg):
     best_dict.to_device(cfg.device)
     features = best_dict.get_learned_dict()
 
+    random_dict = RandomDict(features.shape[1], features.shape[0])
+    random_dict.to_device(cfg.device)
+    random_features = random_dict.get_learned_dict()
+
     erasure_scores = eval_features_classification_negative(features, activations, class_labels, sequence_lengths, skip_tokens)
+    random_erasure_scores = eval_features_classification_negative(random_features, activations, class_labels, sequence_lengths, skip_tokens)
 
     erasure_scores = sorted(erasure_scores, key=lambda x: x[1])
+    random_erasure_scores = sorted(random_erasure_scores, key=lambda x: x[1])
 
     filtered_idxs = [idx for idx, _ in erasure_scores[:cfg.test_n_scores]]
+    random_filtered_idxs = [idx for idx, _ in random_erasure_scores[:cfg.test_n_scores]]
 
     del activations, class_labels, sequence_lengths, skip_tokens
 
@@ -759,12 +766,12 @@ def rank_dict_features_classifier(cfg):
     model.eval()
     model.requires_grad_(False)
 
-    scores = []
-
     base_logits = model(prompts, return_type="logits")
 
+    scores = []
+
     for idx in tqdm.tqdm(filtered_idxs):
-        feature = best_dict.get_learned_dict()[idx].to(cfg.device)
+        feature = features[idx].to(cfg.device)
 
         projector = NullspaceProjector(feature)
 
@@ -794,8 +801,42 @@ def rank_dict_features_classifier(cfg):
 
     scores = sorted(scores, key=lambda x: x[1])
 
+    random_scores = []
+
+    for idx in tqdm.tqdm(random_filtered_idxs):
+        feature = random_features[idx].to(cfg.device)
+
+        projector = NullspaceProjector(feature)
+
+        def hook(tensor, class_labels, seq_lengths, hook=None):
+            if cfg.last_position_only:
+                return projector.project(tensor)
+            else:
+                B, L, D = tensor.shape
+                tensor[:, skip_tokens:] = projector.project(tensor[:, skip_tokens:].reshape(-1, D)).reshape(B, L-skip_tokens, D)
+                return tensor
+
+        task_score, _ = eval_hook(
+            model,
+            hook,
+            prompts,
+            class_labels,
+            sequence_lengths,
+            (cfg.layer, "residual"),
+            task_score_func=gender_prediction(class_tokens),
+            batch_size=cfg.batch_size,
+            last_position_only=cfg.last_position_only,
+            device=cfg.device,
+            activation_dist_func=skip_tokens_distance(skip_tokens),
+        )
+
+        random_scores.append((idx, task_score))
+
     torch.save(scores, f"{cfg.output_folder}/dict_feature_scores_layer_{cfg.layer}.pt")
     torch.save(best_dict, f"{cfg.output_folder}/best_dict_layer_{cfg.layer}.pt")
+
+    torch.save(random_scores, f"{cfg.output_folder}/random_dict_feature_scores_layer_{cfg.layer}.pt")
+    torch.save(random_dict, f"{cfg.output_folder}/random_dict_layer_{cfg.layer}.pt")
 
 def rank_dict_features_expensive(cfg):
     model_name = cfg.model_name
@@ -961,6 +1002,45 @@ def evaluate_interventions(cfg, dataset_fn, dataset_name):
         dict_scores.append((feat_idx, task_score, activation_dist))
         print(f"feat: {feat_idx}, score: {task_score}, dist: {activation_dist}")
     
+    random_dict = torch.load(f"{cfg.output_folder}/random_dict_layer_{cfg.layer}.pt")
+    random_dict.to_device(device)
+    random_dict_scores = torch.load(f"{cfg.output_folder}/random_dict_feature_scores_layer_{cfg.layer}.pt")
+    #best_dict_scores = best_dict_scores[:cfg.test_n_scores]
+    random_dict_scores = random_dict_scores[:1]
+
+    random_dict_scores_out = []
+
+    for feat_idx, _ in random_dict_scores:
+        feature = random_dict.get_learned_dict()[feat_idx].to(device)
+
+        projector = NullspaceProjector(feature)
+
+        def hook(tensor, class_labels, seq_lengths, hook=None):
+            if cfg.last_position_only:
+                return projector.project(tensor)
+            else:
+                B, L, D = tensor.shape
+                tensor[:, skip_tokens:] = projector.project(tensor[:, skip_tokens:].reshape(-1, D)).reshape(B, L-skip_tokens, D)
+                return tensor
+        
+        task_score, activation_dist = eval_hook(
+            model,
+            hook,
+            prompts,
+            class_labels,
+            sequence_lengths,
+            (layer, "residual"),
+            task_score_func=gender_prediction(class_tokens),
+            batch_size=cfg.batch_size,
+            last_position_only=cfg.last_position_only,
+            device=cfg.device,
+            activation_dist_func=skip_tokens_distance(skip_tokens),
+        )
+
+        random_dict_scores_out.append((feat_idx, task_score, activation_dist))
+        print(f"random feat: {feat_idx}, score: {task_score}, dist: {activation_dist}")
+    
+
     leace_eraser = torch.load(f"{cfg.output_folder}/leace_eraser_layer_{cfg.layer}.pt", map_location=device)
 
     def leace_hook(tensor, class_labels, seq_lengths, hook=None):
@@ -1017,6 +1097,7 @@ def evaluate_interventions(cfg, dataset_fn, dataset_name):
         "leace": (leace_score, leace_dist),
         "means": (means_score, means_dist),
         "dict": dict_scores,
+        "random": random_dict_scores_out,
         "base": base_score},
     f"{cfg.output_folder}/eval_layer_{cfg.layer}_{dataset_name}.pt")
 
