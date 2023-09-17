@@ -32,7 +32,6 @@ from activation_dataset import setup_data
 import standard_metrics
 
 import copy
-
 from test_datasets.ioi import generate_ioi_dataset
 from test_datasets.gender import generate_gender_dataset
 

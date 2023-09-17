@@ -9,7 +9,6 @@ import torch
 
 BASE_FOLDER = "~/sparse_coding_aidan"
 
-
 def plot_bottleneck_scores():
     graphs_folder = os.path.join(BASE_FOLDER, "graphs")
     shutil.rmtree(graphs_folder, ignore_errors=True)

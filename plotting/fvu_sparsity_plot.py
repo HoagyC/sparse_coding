@@ -17,7 +17,6 @@ sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 import standard_metrics
 from autoencoders.pca import BatchedPCA, PCAEncoder
 
-
 def score_dict(score, label, hyperparams, learned_dict, dataset, ground_truth=None):
     if score == "mcs":
         return standard_metrics.mmcs_to_fixed(learned_dict, ground_truth).item()

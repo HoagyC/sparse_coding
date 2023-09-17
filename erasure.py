@@ -1039,7 +1039,6 @@ def evaluate_interventions(cfg, dataset_fn, dataset_name):
 
         random_dict_scores_out.append((feat_idx, task_score, activation_dist))
         print(f"random feat: {feat_idx}, score: {task_score}, dist: {activation_dist}")
-    
 
     leace_eraser = torch.load(f"{cfg.output_folder}/leace_eraser_layer_{cfg.layer}.pt", map_location=device)
 
