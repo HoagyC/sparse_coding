@@ -867,6 +867,14 @@ def pythia_1_4_b_dict(cfg: dotdict):
         device = devices.pop()
         ensemble = FunctionalEnsemble(models, FunctionalTiedSAE, torchopt.adam, {"lr": cfg.lr}, device=device)
         args = {"batch_size": cfg.batch_size, "device": device, "dict_size": dict_size}
+        ensemble = FunctionalEnsemble(
+            models, FunctionalTiedSAE,
+            torchopt.adam, {
+                "lr": cfg.lr
+            },
+            device=device
+        )
+        args = {"batch_size": cfg.batch_size, "device": device, "dict_size": dict_size}
         name = f"l1_{i}"
         ensembles.append((ensemble, args, name))
 
@@ -892,8 +900,10 @@ def run_pythia_1_4_b_sweep() -> None:
     cfg.wandb_images = False
     cfg.use_synthetic_dataset = False
 
-    cfg.activation_width = 512
+    cfg.device = "cuda:1"
     cfg.n_chunks = 30
+
+    cfg.n_repetitions = 10
 
     cfg.layer = 6
     cfg.layer_loc = "residual"
@@ -1275,4 +1285,5 @@ if __name__ == "__main__":
     # sys.argv = sys.argv[:1]
     # run_all_zeros(device, layer)
     # setup_positives()
-    run_single_layer()
+    #run_single_layer()
+    run_pythia_1_4_b_sweep()

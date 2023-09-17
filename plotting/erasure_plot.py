@@ -9,7 +9,6 @@ import torch
 
 BASE_FOLDER = "~/sparse_coding_aidan"
 
-
 def plot_bottleneck_scores():
     graphs_folder = os.path.join(BASE_FOLDER, "graphs")
     shutil.rmtree(graphs_folder, ignore_errors=True)
@@ -128,7 +127,147 @@ def plot_erasure_scores():
 
     plt.savefig(os.path.join(graphs_folder, "erasure_by_kl_div.png"))
 
+def plot_scores_across_depth(both_datasets=True):
+    layers = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 22]
+
+    files = [
+        torch.load(f"output_erasure_410m/eval_layer_{layer}_gender.pt")
+        for layer in layers
+    ]
+
+    transfer_files = [
+        torch.load(f"output_erasure_410m/eval_layer_{layer}_pronoun.pt")
+        for layer in layers
+    ]
+
+    do_dataset_plot(files, "gender", layers, "Concept Erasure on the Primary Task")
+    do_dataset_plot(transfer_files, "pronoun", layers, "Transferred Concept Erasure on the Secondary Task")
+
+def do_dataset_plot(files, name, layers, title):
+    from matplotlib.legend_handler import HandlerTuple
+
+    leace_scores = [files[l]["leace"][0] for l in range(len(layers))]
+    mean_scores = [files[l]["means"][0] for l in range(len(layers))]
+    max_dict_scores = [files[l]["dict"][0][1] for l in range(len(layers))]
+    max_rand_scores = [files[l]["random"][0][1] for l in range(len(layers))]
+
+    base_score = files[0]["base"]
+
+    fig, (ax2, ax1) = plt.subplots(2, 1, sharex=True)
+
+    ax1.grid(True, alpha=0.5, linestyle="dashed")
+    ax1.set_axisbelow(True)
+
+    ax1.plot(leace_scores, label="LEACE", marker="+")
+    ax1.plot(mean_scores, label="Mean", marker="x")
+    ax1.plot(max_dict_scores, label="Dict. Feature", marker=".")
+    ax1.plot(max_rand_scores, label="Rand. Feature", marker=".")
+
+    ax1.set_xticks(range(len(layers)))
+    ax1.set_xticklabels(layers)
+
+    ax1.axhline(y=base_score, color="red", linestyle="dashed", label="Base Perf.")
+    ax1.axhline(y=0.5, color="grey", linestyle="dashed", label="Majority")
+
+    #ax1.set_xlabel("Layer")
+    ax1.set_ylabel("Model Prediction Ability")
+
+    leace_edits = [files[l]["leace"][1] for l in range(len(layers))]
+    mean_edits = [files[l]["means"][1] for l in range(len(layers))]
+    max_dict_edits = [files[l]["dict"][0][2] for l in range(len(layers))]
+    max_rand_edits = [files[l]["random"][0][2] for l in range(len(layers))]
+
+    ax2.grid(True, alpha=0.5, linestyle="dashed")
+    ax2.set_axisbelow(True)
+
+    ax2.plot(leace_edits, label="LEACE", marker="+")
+    ax2.plot(mean_edits, label="Mean", marker="x")
+    ax2.plot(max_dict_edits, label="Dict Feature", marker=".")
+    ax2.plot(max_rand_edits, label="Rand. Feature", marker=".")
+
+    ax2.set_xticks(range(len(layers)))
+    ax2.set_xticklabels(layers)
+
+    ax2.set_xlabel("Layer")
+    ax2.set_ylabel("Mean Edit Magnitude")
+
+    #ax.set_yscale("log")
+
+    ax2.set_ylim(bottom=0)
+
+    handles, labels = ax1.get_legend_handles_labels()
+    ax2.legend(
+        handles,
+        labels,
+        loc='upper center',
+        facecolor="white",
+        framealpha=1,
+        ncol=2,
+    )
+
+    fig.suptitle(title)
+
+    plt.savefig(f"graphs/erasure_across_depth_410m_{name}.png")
+
+def plot_kl_div_across_depth():
+    layers = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22]
+
+    files = [
+        torch.load(f"output_erasure_410m/kl_div_scores_layer_{layer}.pt")
+        for layer in layers
+    ]
+
+    from matplotlib.legend_handler import HandlerTuple
+
+    leace_scores = [files[l]["LEACE"][0] for l in range(len(layers))]
+    mean_scores = [files[l]["means"][0] for l in range(len(layers))]
+    max_dict_scores = [files[l]["dict"][0] for l in range(len(layers))]
+    max_rand_scores = [files[l]["random"][0] for l in range(len(layers))]
+
+    fig, ax1 = plt.subplots(1, 1, sharex=True, figsize=(6, 3))
+
+    ax1.grid(True, alpha=0.5, linestyle="dashed")
+    ax1.set_axisbelow(True)
+
+    ax1.plot(leace_scores, label="LEACE", marker="+")
+    ax1.plot(mean_scores, label="Mean", marker="x")
+    ax1.plot(max_dict_scores, label="Dict. Feature", marker=".")
+    ax1.plot(max_rand_scores, label="Rand. Feature", marker=".")
+
+    #ax1.plot([4, 5], [mean_scores[4], 1], color="#ff7f0e", linestyle="dashed")
+    #ax1.scatter([5], [0.2], marker="^", color="#ff7f0e")
+    #ax1.text(5, 0.185, f"{mean_scores[-1]:.1f}", va="center", ha="center")
+
+    #ax1.set_ylim(-0.01, 0.21)
+
+    ax1.set_xticks(range(len(layers)))
+    ax1.set_xticklabels(layers)
+
+    ax1.set_yscale("log")
+
+    #ax1.axhline(y=base_score, color="red", linestyle="dashed", label="Base Perf.")
+    #ax1.axhline(y=0, color="grey", linestyle="dashed")
+
+    ax1.set_xlabel("Layer")
+    ax1.set_ylabel("KL-Divergence")
+
+    fig.suptitle("KL-Divergence From Base Model Under Erasure")
+
+    handles, labels = ax1.get_legend_handles_labels()
+
+    ax1.legend(
+        handles,
+        labels,
+        facecolor="white",
+        framealpha=1,
+        loc="upper left"
+    )
+
+    fig.tight_layout()
+
+    plt.savefig("graphs/kl_across_depth.png")
 
 if __name__ == "__main__":
     # plot_bottleneck_scores()
-    plot_erasure_scores()
+    plot_scores_across_depth()
+    plot_kl_div_across_depth()

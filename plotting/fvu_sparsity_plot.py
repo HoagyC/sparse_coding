@@ -17,7 +17,6 @@ sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 import standard_metrics
 from autoencoders.pca import BatchedPCA, PCAEncoder
 
-
 def score_dict(score, label, hyperparams, learned_dict, dataset, ground_truth=None):
     if score == "mcs":
         return standard_metrics.mmcs_to_fixed(learned_dict, ground_truth).item()
@@ -31,6 +30,11 @@ def score_dict(score, label, hyperparams, learned_dict, dataset, ground_truth=No
         return -np.log(hyperparams["l1_alpha"])
     elif score == "dict_size":
         return hyperparams["dict_size"]
+    elif score == "top_fvu":
+        return standard_metrics.fraction_variance_unexplained_top_activating(learned_dict, dataset)[0].item()
+    elif score == "rest_fvu":
+        return standard_metrics.fraction_variance_unexplained_top_activating(learned_dict, dataset)[1].item()
+
 
 
 def area_under_fvu_sparsity_curve(learned_dict_files, dataset_file=None, generator_file=None, device="cuda:7"):
@@ -333,43 +337,10 @@ if __name__ == "__main__":
 
     for _ in range(1):
         layer = 2
-        files = [
-            # ("Linear L2", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r0/_9/learned_dicts.pt"),
-            # ("Linear L2", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r1/_9/learned_dicts.pt"),
-            (
-                "Ratio 2",
-                f"/mnt/ssd-cluster/bigrun0308/tied_residual_l2_r2/_9/learned_dicts.pt",
-            ),
-            (
-                "Ratio 4",
-                f"/mnt/ssd-cluster/bigrun0308/tied_residual_l2_r4/_9/learned_dicts.pt",
-            ),
-            (
-                "Ratio 8",
-                f"/mnt/ssd-cluster/bigrun0308/tied_residual_l2_r8/_9/learned_dicts.pt",
-            ),
-            (
-                "Ratio 16",
-                f"/mnt/ssd-cluster/bigrun0308/tied_residual_l2_r16/_9/learned_dicts.pt",
-            ),
-            (
-                "Ratio 32",
-                f"/mnt/ssd-cluster/longrun2408/tied_residual_l2_r32/_15/learned_dicts.pt",
-            ),
-            (
-                "Ratio 64",
-                f"/mnt/ssd-cluster/longrun2408/tied_residual_l2_r64/_15/learned_dicts.pt",
-            ),
-            (
-                "Ratio 128",
-                f"/mnt/ssd-cluster/longrun2408/tied_residual_l2_r128/_15/learned_dicts.pt",
-            ),
-            (
-                "Ratio 256",
-                f"/mnt/ssd-cluster/longrun2408/tied_residual_l2_r256/_15/learned_dicts.pt",
-            ),
-            # ("Linear L2", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r32/_9/learned_dicts.pt"),
-            # ("Better", f"output_thresholding/_7/learned_dicts.pt"),
+        files = [ 
+            #("Learned Center (zero init)", "outputs_sphere/learned_centered_10.pt"),
+            #("Learned Center (mean init)", "outputs_sphere/learned_centered_mean_init_10.pt"),
+            #("Sphered", "outputs_sphere/sphered_7.pt")
         ]
 
         # layer = 3
@@ -395,12 +366,14 @@ if __name__ == "__main__":
         #     # ("Linear L3", f"/mnt/ssd-cluster/bigrun0308/tied_residual_l{layer}_r32/_9/learned_dicts.pt"),
         # ]
 
-        title = "Area Under FVU-Sparsity Curve"
-        filename = "sparsity_fvu_layer_2_big_dicts"
+        title = "FVU Top-2 vs FVU Rest"
+        filename = "fvu_top"
 
-        dataset_file = "/mnt/ssd-cluster/single_chunks/l2_residual/0.pt"
+        dataset_file = "activation_data_sphere/0.pt"
 
-        scores = generate_scores(files, dataset_file, group_by="dict_size", device=device)
+        scores = generate_scores(files, dataset_file, y_score="top_fvu", group_by="dict_size", device=device)
+
+        print(scores)
 
         # for chunk in range(0, 10):
         #    file = "output_dict_ratio/_" + str(chunk) + "/learned_dicts.pt"
@@ -422,9 +395,9 @@ if __name__ == "__main__":
             scores,
             settings,
             "sparsity",
-            "fvu",
+            "top-fvu",
             (0, 512),
-            (0, 0.3),
+            (0, 1),
             "Threshold Activation Perf.",
             f"graphs/{filename}",
         )

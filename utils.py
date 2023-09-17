@@ -15,7 +15,7 @@ SSH_PYTHON = "/opt/conda/bin/python"
 
 PORT = 22
 
-USER = "hoagy"
+USER = "aidan"
 
 SSH_DIRECTORY = f"sparse_coding_{USER}"
 BUCKET_NAME = "sparse-coding"

@@ -21,4 +21,10 @@ testing
 auto_interp_results
 
 *.csv
+*.test
 *.png
+*.pkl
+*.pt
+
+# ideally would load autointerp as a module but can't get it working so just cloning and ignoring
+neuron_explainer
