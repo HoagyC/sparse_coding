@@ -87,6 +87,7 @@ class FunctionalTiedSAE(DictSignature):
         device=None,
         dtype=None,
         
+        bias_decay=0.0,
         translation=None,
         rotation=None,
         scaling=None,
@@ -114,6 +115,7 @@ class FunctionalTiedSAE(DictSignature):
         nn.init.zeros_(params["encoder_bias"])
 
         buffers["l1_alpha"] = torch.tensor(l1_alpha, device=device, dtype=dtype)
+        
 
         return params, buffers
 
@@ -145,9 +147,10 @@ class FunctionalTiedSAE(DictSignature):
 
         l_reconstruction = (x_hat_centered - batch_centered).pow(2).mean()
         l_l1 = buffers["l1_alpha"] * torch.norm(c, 1, dim=-1).mean()
+        l_bias_decay = buffers["bias_decay"] * torch.norm(params["encoder_bias"], 2)
         
         loss_data = {
-            "loss": l_reconstruction + l_l1,
+            "loss": l_reconstruction + l_l1 + l_bias_decay,
             "l_reconstruction": l_reconstruction,
             "l_l1": l_l1,
         }
@@ -156,7 +159,7 @@ class FunctionalTiedSAE(DictSignature):
             "c": c,
         }
 
-        return l_reconstruction + l_l1, (loss_data, aux_data)
+        return l_reconstruction + l_l1 + l_bias_decay, (loss_data, aux_data)
 
 class FunctionalTiedCenteredSAE(DictSignature):
     @staticmethod
