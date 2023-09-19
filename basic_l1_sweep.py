@@ -12,8 +12,18 @@ import tqdm
 
 from utils import dotdict
 
-class ProgressBarCursed:
+class ProgressBar:
     def __init__(self, total, chunk_idx, n_chunks, epoch_idx, n_repetitions):
+        """
+        Initialize the progress bar.
+
+        Parameters:
+        - total (int): Total progress count.
+        - chunk_idx (int): Current chunk index.
+        - n_chunks (int): Total number of chunks.
+        - epoch_idx (int): Current epoch index.
+        - n_repetitions (int): Total number of repetitions (epochs).
+        """
         if n_repetitions > 1:
             desc = "Epoch {}/{} - Chunk {}/{}".format(epoch_idx+1, n_repetitions, chunk_idx+1, n_chunks)
         else:
@@ -24,10 +34,12 @@ class ProgressBarCursed:
     
     @property
     def value(self):
+        """Get the current progress value."""
         return self._value
     
     @value.setter
     def value(self, v):
+        """Set the progress value and update the progress bar."""
         self.bar.update(v - self._value)
         self._value = v
 
@@ -85,7 +97,7 @@ def basic_l1_sweep(
                 drop_last=False,
             )
 
-            bar = ProgressBarCursed(len(sampler), chunk_idx, n_chunks, epoch_idx, n_repetitions)
+            bar = ProgressBar(len(sampler), chunk_idx, n_chunks, epoch_idx, n_repetitions)
 
             cfg = dotdict({
                 "use_wandb": False,
