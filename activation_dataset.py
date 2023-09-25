@@ -54,6 +54,7 @@ def get_activation_size(model_name: str, layer_loc: str):
         "residual",
         "mlp",
         "attn",
+        "attn_concat",
         "mlpout",
     ], f"Layer location {layer_loc} not supported"
     model_cfg = convert_hf_model_config(model_name)
@@ -65,6 +66,8 @@ def get_activation_size(model_name: str, layer_loc: str):
         return model_cfg["d_head"] * model_cfg["n_heads"]
     elif layer_loc == "mlpout":
         return model_cfg["d_model"]
+    elif layer_loc == "attn_concat":
+        return model_cfg["d_head"] * model_cfg["n_heads"]
 
 
 def check_transformerlens_model(model_name: str):
@@ -81,6 +84,7 @@ def make_tensor_name(layer: int, layer_loc: str, model_name: str) -> str:
         "residual",
         "mlp",
         "attn",
+        "attn_concat",
         "mlpout",
     ], f"Layer location {layer_loc} not supported"
     if layer_loc == "residual":
@@ -88,6 +92,11 @@ def make_tensor_name(layer: int, layer_loc: str, model_name: str) -> str:
             tensor_name = f"blocks.{layer}.hook_resid_post"
         else:
             raise NotImplementedError(f"Model {model_name} not supported for residual stream")
+    elif layer_loc == "attn_concat":
+        if check_transformerlens_model(model_name):
+            tensor_name = f"blocks.{layer}.attn.hook_z"
+        else:
+            raise NotImplementedError(f"Model {model_name} not supported for attention output")
     elif layer_loc == "mlp":
         if check_transformerlens_model(model_name):
             tensor_name = f"blocks.{layer}.mlp.hook_post"
@@ -366,7 +375,10 @@ def make_activation_dataset_hf(
                 for layer in layers:
                     tensor_name = make_tensor_name(layer, tensor_loc, model.cfg.model_name)
                     activation_data = cache[tensor_name].to(torch.float16)
-                    activation_data = rearrange(activation_data, "b s n -> (b s) n")
+                    if tensor_loc == "attn_concat":
+                        activation_data = rearrange(activation_data, "b s n d -> (b s) (n d)")
+                    else:
+                        activation_data = rearrange(activation_data, "b s n -> (b s) n")
                     if layer == layers[0]:
                         n_activations += activation_data.shape[0]
                     datasets[layer].append(activation_data)

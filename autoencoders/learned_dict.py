@@ -132,7 +132,7 @@ class UntiedSAE(LearnedDict):
 
 
 class TiedSAE(LearnedDict):
-    def __init__(self, encoder, encoder_bias, centering=(None, None, None), norm_encoder=False):
+    def __init__(self, encoder, encoder_bias, centering=(None, None, None), norm_encoder=True):
         self.encoder = encoder
         self.encoder_bias = encoder_bias
         self.norm_encoder = norm_encoder
@@ -145,6 +145,7 @@ class TiedSAE(LearnedDict):
         
         if center_rot is None:
             center_rot = torch.eye(self.activation_size)
+            print(center_rot)
         
         if center_scale is None:
             center_scale = torch.ones(self.activation_size)

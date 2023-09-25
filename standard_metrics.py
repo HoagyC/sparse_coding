@@ -60,6 +60,8 @@ def get_model_tensor_name(location: Location) -> str:
         return f"blocks.{location[0]}.hook_resid_post"
     elif location[1] == "mlp":
         return f"blocks.{location[0]}.mlp.hook_post"
+    elif location[1] == "attn_concat":
+        return f"blocks.{location[0]}.attn.hook_z"
     else:
         raise ValueError(f"Location '{location[1]}' not supported")
 

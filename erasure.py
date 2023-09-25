@@ -584,6 +584,34 @@ def fit_leace_eraser(cfg):
 
     torch.save(eraser, f"{cfg.output_folder}/leace_eraser_layer_{cfg.layer}.pt")
 
+def fit_general_eraser(cfg, output_file, **kwargs):
+    device = cfg.device
+
+    activations, class_labels, sequence_lengths, skip_tokens = torch.load(cfg.activation_filename)
+
+    
+    B, L, D = activations.shape
+
+    if cfg.last_position_only:
+        eraser = LeaceEraser.fit(
+            activations[torch.arange(sequence_lengths.shape[0]), sequence_lengths-1],
+            class_labels,
+            **kwargs,
+        )
+    else:
+        mask = ablation_mask_from_seq_lengths(sequence_lengths, L-skip_tokens)
+
+        activations = activations[:, skip_tokens:][mask]
+        class_labels = class_labels.unsqueeze(1).expand(-1, L-skip_tokens)[mask]
+
+        eraser = LeaceEraser.fit(
+            activations,
+            class_labels,
+            **kwargs,
+        )
+
+    torch.save(eraser, f"{cfg.output_folder}/{output_file}_layer_{cfg.layer}.pt")
+
 def fit_means_eraser(cfg):
     device = cfg.device
 
@@ -838,6 +866,57 @@ def rank_dict_features_classifier(cfg):
     torch.save(random_scores, f"{cfg.output_folder}/random_dict_feature_scores_layer_{cfg.layer}.pt")
     torch.save(random_dict, f"{cfg.output_folder}/random_dict_layer_{cfg.layer}.pt")
 
+def rank_dict_features_cosim(cfg):
+    model_name = cfg.model_name
+    device = cfg.device
+
+    means_eraser = torch.load(f"{cfg.output_folder}/means_eraser_layer_{cfg.layer}.pt")
+
+    activations, _, sequence_lengths, _ = torch.load(cfg.activation_filename)
+
+    dicts = torch.load(cfg.dict_filename.format(layer=cfg.layer))
+
+    target_l1 = cfg.target_l1
+    target_dict_size = cfg.dict_size
+    best_dist = None
+    best_dict = None
+
+    for dict, hyperparams in dicts:
+        if hyperparams["dict_size"] == target_dict_size:
+            dist = abs(hyperparams["l1_alpha"] - target_l1)
+            if best_dist is None or dist < best_dist:
+                best_dist = dist
+                best_dict = dict
+    
+    best_dict.to_device(device)
+
+    filtered_idxs = filter_activation_threshold(
+        best_dict,
+        activations,
+        sequence_lengths,
+        batch_size=32,
+        activation_proportion_threshold=cfg.feature_freq_threshold,
+        last_position_only=cfg.last_position_only,
+    )
+
+    del activations, sequence_lengths
+
+    # for each feature, compute the cosine similarity between the feature and the diff-means direction
+
+    features = best_dict.get_learned_dict()
+
+    feats = []
+
+    csims = torch.einsum("nd,d->n", features, means_eraser.nullspace)
+
+    for i in filtered_idxs:
+        feats.append((i, csims[i].item()))
+    
+    feats = sorted(feats, key=lambda x: x[1], reverse=True)
+
+    torch.save(feats, f"{cfg.output_folder}/dict_feature_scores_layer_{cfg.layer}.pt")
+    torch.save(best_dict, f"{cfg.output_folder}/best_dict_layer_{cfg.layer}.pt")
+
 def rank_dict_features_expensive(cfg):
     model_name = cfg.model_name
     device = cfg.device
@@ -1044,7 +1123,9 @@ def evaluate_interventions(cfg, dataset_fn, dataset_name):
 
     def leace_hook(tensor, class_labels, seq_lengths, hook=None):
         if cfg.last_position_only:
-            return projector.project(tensor)
+            B, L, D = tensor.shape
+            tensor[:, -1] = leace_eraser(tensor[:, -1])
+            return tensor
         else:
             B, L, D = tensor.shape
             tensor[:, skip_tokens:] = leace_eraser(tensor[:, skip_tokens:].reshape(-1, D)).reshape(B, L-skip_tokens, D)
@@ -1100,6 +1181,76 @@ def evaluate_interventions(cfg, dataset_fn, dataset_name):
         "base": base_score},
     f"{cfg.output_folder}/eval_layer_{cfg.layer}_{dataset_name}.pt")
 
+def evaluate_general_erasers(cfg, eraser_names, dataset_fn, dataset_name):
+    torch.autograd.set_grad_enabled(False)
+
+    device = cfg.device
+    model_name = cfg.model_name
+    layer = cfg.layer
+    
+    model = HookedTransformer.from_pretrained(model_name)
+    model.to(device)
+    model.eval()
+    model.requires_grad_(False)
+
+    prompts, class_labels, class_tokens, sequence_lengths, skip_tokens = dataset_fn(
+        model_name,
+        count_cutoff=cfg.count_cutoff,
+        sample_n=cfg.unique_names,
+        prompts_per_name=cfg.prompts_per_name,
+        n_few_shot=cfg.k_shot,
+        randomise=False,
+    )
+
+    sum_base_performance = 0.0
+
+    for i in tqdm.tqdm(range(0, prompts.shape[0], cfg.batch_size)):
+        j = min(i+cfg.batch_size, prompts.shape[0])
+        batch = prompts[i:j].to(device)
+        batch_lengths = sequence_lengths[i:j].to(device)
+        batch_classes = class_labels[i:j].to(device)
+
+        batch_logits = model(batch, return_type="logits")
+
+        sum_base_performance += gender_prediction(class_tokens)(batch_logits, batch_classes, batch_lengths).sum().item()
+
+    base_score = sum_base_performance / prompts.shape[0]
+    print(f"base score: {base_score}")
+
+    scores = {}
+    scores["base"] = base_score
+
+    for eraser_name in eraser_names:
+        leace_eraser = torch.load(f"{cfg.output_folder}/{eraser_name}_layer_{cfg.layer}.pt", map_location=device)
+
+        def leace_hook(tensor, class_labels, seq_lengths, hook=None):
+            if cfg.last_position_only:
+                return leace_eraser(tensor)
+            else:
+                B, L, D = tensor.shape
+                tensor[:, skip_tokens:] = leace_eraser(tensor[:, skip_tokens:].reshape(-1, D)).reshape(B, L-skip_tokens, D)
+                return tensor
+
+        leace_score, leace_dist = eval_hook(
+            model,
+            leace_hook,
+            prompts,
+            class_labels,
+            sequence_lengths,
+            (layer, "residual"),
+            task_score_func=gender_prediction(class_tokens),
+            batch_size=cfg.batch_size,
+            last_position_only=cfg.last_position_only,
+            device=cfg.device,
+            activation_dist_func=skip_tokens_distance(skip_tokens),
+        )
+
+        scores[eraser_name] = (leace_score, leace_dist)
+
+        print(f"{eraser_name} score: {leace_score}, dist: {leace_dist}")
+    
+    torch.save(scores, f"{cfg.output_folder}/general_{cfg.layer}_{dataset_name}.pt")
+
 def gender_prediction_everything(layer, device, done_flag=None):
     from utils import dotdict
 
@@ -1116,7 +1267,7 @@ def gender_prediction_everything(layer, device, done_flag=None):
         "dict_filename": f"/mnt/ssd-cluster/pythia410/tied_residual_l{layer}_r4/_79/learned_dicts.pt",
         "target_l1": 8e-4,
         "dict_size": 4096,
-        "feature_freq_threshold": 0.05,
+        "feature_freq_threshold": 0.01,
         "test_n_scores": 4,
         "estimation_sample_n": 16,
         "last_position_only": False,
@@ -1131,7 +1282,8 @@ def gender_prediction_everything(layer, device, done_flag=None):
     fit_leace_eraser(cfg)
     fit_means_eraser(cfg)
     #rank_dict_features_expensive(cfg)
-    rank_dict_features_classifier(cfg)
+    #rank_dict_features_classifier(cfg)
+    rank_dict_features_cosim(cfg)
     evaluate_interventions(cfg, generate_gender_dataset, "gender")
     evaluate_interventions(cfg, generate_pronoun_dataset, "pronoun")
 
@@ -1188,6 +1340,90 @@ def gender_prediction_everything_multigpu():
 
         processes.append((process, gpu, done_flag))
 
+def leace_everything(layer, device, done_flag=None):
+    from utils import dotdict
+
+    cfg = dotdict({
+        "model_name": "EleutherAI/pythia-410m-deduped",
+        "device": device,
+        "layer": layer,
+        "count_cutoff": 100000,
+        "k_shot": 3,
+        "unique_names": 100,
+        "prompts_per_name": 5,
+        "output_folder": "output_erasure_410m",
+        "activation_filename": f"activation_data_erasure_410m_l{layer}.pt",
+        "dict_filename": f"/mnt/ssd-cluster/pythia410/tied_residual_l{layer}_r4/_79/learned_dicts.pt",
+        "target_l1": 8e-4,
+        "dict_size": 4096,
+        "feature_freq_threshold": 0.05,
+        "test_n_scores": 4,
+        "estimation_sample_n": 16,
+        "last_position_only": True,
+        "batch_size": 32,
+    })
+
+    os.makedirs(cfg.output_folder, exist_ok=True)
+
+    generate_activation_data(cfg)
+    fit_general_eraser(cfg, "leace")
+    fit_general_eraser(cfg, "mean", method="orth", affine=False)
+    fit_general_eraser(cfg, "mean_affine", method="orth", affine=True)
+    evaluate_general_erasers(cfg, ["leace", "mean", "mean_affine"], generate_gender_dataset, "gender")
+
+    if done_flag is not None:
+        done_flag.value = 1
+
+def leace_everything_multigpu():
+    layers = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 23]
+    free_gpus = ["cuda:0", "cuda:1", "cuda:2", "cuda:3", "cuda:4", "cuda:5"]
+
+    import torch.multiprocessing as mp
+    import time
+    mp.set_start_method("spawn")
+
+    processes = []
+
+    # while some gpus are still free
+    while True:
+        new_processes = []
+        for process, gpu, done_flag in processes:
+            if done_flag.value == 1:
+                process.join()
+                free_gpus.append(gpu)
+                print(f"finished layer {process} on gpu {gpu}")
+            else:
+                new_processes.append((process, gpu, done_flag))
+        
+        processes = new_processes
+
+        if len(processes) == 0 and len(layers) == 0:
+            break
+
+        if len(free_gpus) == 0:
+            time.sleep(0.1)
+            continue
+
+        if len(layers) == 0:
+            time.sleep(0.1)
+            continue
+        
+        layer = layers.pop(0)
+        gpu = free_gpus.pop(0)
+
+        print(f"starting layer {layer} on gpu {gpu}")
+
+        done_flag = mp.Value("i", 0)
+
+        process = mp.Process(
+            target=leace_everything,
+            args=(layer, gpu, done_flag),
+        )
+
+        process.start()
+
+        processes.append((process, gpu, done_flag))
+
 def winobias_prediction_everything():
     from utils import dotdict
 
@@ -1218,6 +1454,8 @@ if __name__ == "__main__":
 
     if argv[1] == "gender":
         gender_prediction_everything_multigpu()
+    elif argv[1] == "leace_test":
+        leace_everything_multigpu()
     elif argv[1] == "winobias":
         winobias_prediction_everything()
     elif argv[1] == "pca":

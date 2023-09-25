@@ -8,12 +8,12 @@ from typing import List, Optional, Union
 import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
 
-VAST_NUM = 4
-# DEST_ADDR = f"root@ssh{VAST_NUM}.vast.ai"
-DEST_ADDR = "mchorse@198.176.96.64"
+VAST_NUM = 5
+DEST_ADDR = f"root@ssh{VAST_NUM}.vast.ai"
+# DEST_ADDR = "mchorse@198.176.96.64"
 SSH_PYTHON = "/opt/conda/bin/python"
 
-PORT = 22
+PORT = 14184
 
 USER = "aidan"
 
