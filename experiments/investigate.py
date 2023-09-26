@@ -10,7 +10,7 @@ import torch
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
-from argparser import parse_args
+from config import InvestigateArgs
 from standard_metrics import run_mmcs_with_larger
 
 
@@ -105,6 +105,5 @@ def main(cfg):
 
 
 if __name__ == "__main__":
-    cfg = parse_args()
-    main(cfg)
+    cfg = InvestigateArgs()
     test_diversity_of_random_features()

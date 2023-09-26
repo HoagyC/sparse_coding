@@ -11,13 +11,12 @@ import torch
 import torchopt
 import wandb
 
-from argparser import parse_args
+from config import TrainArgs
 from autoencoders.sae_ensemble import FunctionalSAE, FunctionalTiedSAE
 from autoencoders.ensemble import FunctionalEnsemble
 from big_sweep import sweep
-from utils import dotdict
 
-def single_setoff(cfg: dotdict):
+def single_setoff(cfg):
     l1_values = np.array([1e-3])
     l1_values = np.concatenate([[0], l1_values])
     ensembles = []
@@ -67,7 +66,7 @@ def single_setoff(cfg: dotdict):
 # make unittest
 class TestEndToEnd(unittest.TestCase):
     def test_end_to_end(self):
-        cfg = parse_args()
+        cfg = TrainArgs()
         cfg.model_name = "pythia-70m-deduped"
         cfg.dataset_name = "NeelNanda/pile-10k"
 

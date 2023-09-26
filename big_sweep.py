@@ -4,6 +4,7 @@ import os
 import pickle
 import sys
 from itertools import chain, product
+import yaml
 
 import numpy as np
 import torch
@@ -353,9 +354,6 @@ def sweep(ensemble_init_func, cfg):
     for i, chunk_idx in enumerate(chunk_order):
         print(f"Chunk {i+1}/{len(chunk_order)}")
 
-        cfg.iter_folder = os.path.join(cfg.output_folder, f"_{i}")
-        os.makedirs(cfg.iter_folder, exist_ok=True)
-
         chunk_loc = os.path.join(cfg.dataset_folder, f"{chunk_idx}.pt")
         chunk = torch.load(chunk_loc).to(device="cpu", dtype=torch.float32)
         if cfg.center_activations:
@@ -378,6 +376,11 @@ def sweep(ensemble_init_func, cfg):
 
         del chunk
         if i == len(chunk_order) - 1 or (i + 1) in [2**j for j in range(3, 10)]:
+            cfg.iter_folder = os.path.join(cfg.output_folder, f"_{i}")
+            os.makedirs(cfg.iter_folder, exist_ok=True)
             torch.save(learned_dicts, os.path.join(cfg.iter_folder, "learned_dicts.pt"))
+            # save the config as a yaml file
+            with open(os.path.join(cfg.iter_folder, "config.yaml"), "w") as f:
+                yaml.dump(dict(cfg), f)
 
         print("\n")

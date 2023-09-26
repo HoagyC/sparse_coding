@@ -9,7 +9,7 @@ import torch
 import torchopt
 import tqdm
 
-from argparser import parse_args
+from config import EnsembleArgs
 from autoencoders.direct_coef_search import DirectCoefOptimizer
 from autoencoders.ensemble import FunctionalEnsemble
 from autoencoders.mlp_tests import FunctionalPositiveTiedSAE
@@ -22,7 +22,8 @@ from autoencoders.semilinear_autoencoder import SemiLinearSAE
 from autoencoders.topk_encoder import TopKEncoder
 from big_sweep import sweep
 from cluster_runs import dispatch_job_on_chunk
-from utils import dotdict
+
+from config import EnsembleArgs, SyntheticEnsembleArgs
 
 # an example function that builds a list of ensembles to run
 # you could this as a template for other experiments
@@ -36,7 +37,7 @@ from utils import dotdict
 
 DICT_RATIO = None
 
-def tied_vs_not_experiment(cfg: dotdict):
+def tied_vs_not_experiment(cfg: EnsembleArgs):
     l1_values = list(np.logspace(-3.5, -2, 4))
 
     bias_decays = [0.0, 0.05, 0.1]
@@ -229,7 +230,7 @@ def tied_vs_not_experiment(cfg: dotdict):
     )
 
 
-def topk_experiment(cfg: dotdict):
+def topk_experiment(cfg: EnsembleArgs):
     sparsity_levels = np.arange(1, 161, 10)
     dict_ratios = [0.5, 1, 2, 4, 0.5, 1, 2, 4]
     dict_sizes = [int(cfg.activation_width * ratio) for ratio in dict_ratios]
@@ -262,7 +263,7 @@ def topk_experiment(cfg: dotdict):
     )
 
 
-def synthetic_linear_range(cfg: dotdict):
+def synthetic_linear_range(cfg: EnsembleArgs):
     l1_vals = np.logspace(-4, -2, 32)
     dict_ratios = [0.5, 1, 2, 4]
     dict_sizes = [int(cfg.activation_width * ratio) for ratio in dict_ratios]
@@ -291,7 +292,7 @@ def synthetic_linear_range(cfg: dotdict):
     )
 
 
-def dense_l1_range_experiment(cfg: dotdict):
+def dense_l1_range_experiment(cfg: EnsembleArgs):
     l1_values = np.logspace(-4, -2, 16)
     devices = [f"cuda:{i}" for i in range(8)]
 
@@ -339,7 +340,7 @@ def dense_l1_range_experiment(cfg: dotdict):
     )
 
 
-def residual_denoising_experiment(cfg: dotdict):
+def residual_denoising_experiment(cfg: EnsembleArgs):
     l1_values = np.logspace(-5, -3, 16)
     devices = [f"cuda:{i}" for i in range(8)]
 
@@ -347,7 +348,7 @@ def residual_denoising_experiment(cfg: dotdict):
     for i in range(4):
         # print(f"cuda:{i}", torch.cuda.memory_reserved(i) - torch.cuda.memory_allocated(i))
         cfgs = l1_values[i * 4 : (i + 1) * 4]
-        dict_size = int(cfg.activation_width * DICT_RATIO)
+        dict_size = int(cfg.activation_width * cfg.learned_dict_ratio)
         models = [
             FunctionalLISTADenoisingSAE.init(cfg.activation_width, dict_size, 3, l1_alpha, dtype=cfg.dtype) for l1_alpha in cfgs
         ]
@@ -377,7 +378,7 @@ def residual_denoising_experiment(cfg: dotdict):
     )
 
 
-def residual_denoising_comparison(cfg: dotdict):
+def residual_denoising_comparison(cfg: EnsembleArgs):
     l1_values = np.logspace(-4, -2, 16)
     devices = [f"cuda:{i}" for i in range(4)]
 
@@ -385,7 +386,7 @@ def residual_denoising_comparison(cfg: dotdict):
     for i in range(4):
         # print(f"cuda:{i}", torch.cuda.memory_reserved(i) - torch.cuda.memory_allocated(i))
         cfgs = l1_values[i * 4 : (i + 1) * 4]
-        dict_size = int(cfg.activation_width * DICT_RATIO)
+        dict_size = int(cfg.activation_width * cfg.learned_dict_ratio)
         models = [FunctionalTiedSAE.init(cfg.activation_width, dict_size, l1_alpha, dtype=cfg.dtype) for l1_alpha in cfgs]
         device = devices.pop()
         ensemble = FunctionalEnsemble(models, FunctionalTiedSAE, torchopt.adam, {"lr": cfg.lr}, device=device)
@@ -401,7 +402,7 @@ def residual_denoising_comparison(cfg: dotdict):
     )
 
 
-def thresholding_experiment(cfg: dotdict):
+def thresholding_experiment(cfg: EnsembleArgs):
     l1_values = np.logspace(-4, -2, 16)
     devices = [f"cuda:{i}" for i in range(4)]
 
@@ -434,7 +435,7 @@ def thresholding_experiment(cfg: dotdict):
 
 
 def run_thresholding() -> None:
-    cfg = parse_args()
+    cfg = SyntheticEnsembleArgs()
 
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.layer = 2
@@ -458,12 +459,13 @@ def run_thresholding() -> None:
     cfg.wandb_images = False
 
     cfg.dtype = torch.float32
+    
 
     sweep(thresholding_experiment, cfg)
 
 
 def run_resid_denoise() -> None:
-    cfg = parse_args()
+    cfg = SyntheticEnsembleArgs()
 
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.layer = 2
@@ -494,7 +496,7 @@ def run_resid_denoise() -> None:
         sweep(residual_denoising_experiment, cfg)
 
 
-def zero_l1_baseline(cfg: dotdict):
+def zero_l1_baseline(cfg: EnsembleArgs):
     l1_values = np.array([0.0])
     devices = ["cuda:1"]
 
@@ -541,7 +543,7 @@ def zero_l1_baseline(cfg: dotdict):
     )
 
 
-def dict_ratio_experiment(cfg: dotdict):
+def dict_ratio_experiment(cfg: EnsembleArgs):
     # l1_values = np.logspace(-4, -2, 12)
     dict_sizes = [int(512 * x) for x in np.linspace(1, 5, 8)]
     max_size = max(dict_sizes)
@@ -579,7 +581,7 @@ def dict_ratio_experiment(cfg: dotdict):
 
 
 def run_dict_ratio() -> None:
-    cfg = parse_args()
+    cfg = SyntheticEnsembleArgs()
 
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.dataset_name = "NeelNanda/pile-10k"
@@ -607,7 +609,7 @@ def run_dict_ratio() -> None:
     cfg.wandb_images = False
     cfg.dtype = torch.float32
 
-    cfg.n_repetitions = 1
+    cfg.n_epochs = 1
 
     cfg.dataset_folder = "activation_data"
     cfg.output_folder = "output_dict_ratio"
@@ -619,7 +621,7 @@ def run_dict_ratio() -> None:
 
 
 def run_dense_l1_range() -> None:
-    cfg = parse_args()
+    cfg = EnsembleArgs()
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.dataset_name = "EleutherAI/pile"
 
@@ -636,13 +638,13 @@ def run_dense_l1_range() -> None:
     cfg.dtype = torch.float32
     cfg.lr = 1e-3
     cfg.n_chunks = 20
-    cfg.n_repetitions = 15
+    cfg.n_epochs = 15
 
     sweep(dense_l1_range_experiment, cfg)
 
 
 def run_across_layers() -> None:
-    cfg = parse_args()
+    cfg = EnsembleArgs()
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.dataset_name = "EleutherAI/pile"
 
@@ -651,7 +653,7 @@ def run_across_layers() -> None:
     cfg.activation_width = 512
     cfg.save_every = 5
     cfg.n_chunks = 20
-    cfg.n_repetitions = 20
+    cfg.n_epochs = 20
     cfg.tied_ae = True
     for layer in [0, 1, 2, 3, 4, 5]:
         for layer_loc in ["residual"]:
@@ -678,7 +680,7 @@ def run_across_layers() -> None:
 
 
 def run_across_layers_attn() -> None:
-    cfg = parse_args()
+    cfg = EnsembleArgs()
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.dataset_name = "EleutherAI/pile"
 
@@ -709,7 +711,7 @@ def run_across_layers_attn() -> None:
 
 
 def run_across_layers_mlp_out() -> None:
-    cfg = parse_args()
+    cfg = EnsembleArgs()
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.dataset_name = "EleutherAI/pile"
 
@@ -740,7 +742,7 @@ def run_across_layers_mlp_out() -> None:
 
 
 def run_across_layers_mlp_untied() -> None:
-    cfg = parse_args()
+    cfg = EnsembleArgs()
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.dataset_name = "EleutherAI/pile"
 
@@ -771,20 +773,20 @@ def run_across_layers_mlp_untied() -> None:
 
 
 def run_zero_l1_baseline() -> None:
-    cfg = parse_args()
+    cfg = EnsembleArgs()
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.dataset_name = "NeelNanda/pile-10k"
     cfg.layer = 3
     cfg.layer_loc = "residual"
     cfg.tied_ae = True
-    cfg.dict_ratio = 4
+    cfg.learned_dict_ratio = 4
 
     cfg.use_wandb = False
 
     cfg.batch_size = 2048
     cfg.activation_width = 512
 
-    cfg.output_folder = f"output_zero_b_{cfg.dict_ratio}"
+    cfg.output_folder = f"output_zero_b_{cfg.learned_dict_ratio}"
     cfg.dataset_folder = f"activation_data/layer_3"
     cfg.use_synthetic_dataset = False
     cfg.dtype = torch.float32
@@ -795,30 +797,25 @@ def run_zero_l1_baseline() -> None:
 
 
 def topk() -> None:
-    cfg = parse_args()
+    cfg = EnsembleArgs()
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.dataset_name = "EleutherAI/pile"
-
     cfg.batch_size = 1024
     cfg.activation_width = 512
-
-    cfg.use_residual = True
-
     cfg.wandb_images = False
-
     cfg.output_folder = f"output_topk"
     cfg.dataset_folder = f"activation_data"
     cfg.use_synthetic_dataset = False
     cfg.dtype = torch.float32
     cfg.lr = 1e-3
     cfg.n_chunks = 10
-    cfg.n_repetitions = 5
+    cfg.n_epochs = 5
 
     sweep(topk_experiment, cfg)
 
 
 def synthetic_test() -> None:
-    cfg = parse_args()
+    cfg = SyntheticEnsembleArgs()
 
     cfg.use_synthetic_dataset = True
 
@@ -854,7 +851,7 @@ def synthetic_test() -> None:
         sweep(synthetic_linear_range, cfg)
 
 
-def pythia_1_4_b_dict(cfg: dotdict):
+def pythia_1_4_b_dict(cfg: EnsembleArgs):
     dict_ratio = 6
     l1_values = np.logspace(-4, -2, 5)
     dict_size = int(cfg.activation_width * dict_ratio)
@@ -887,7 +884,7 @@ def pythia_1_4_b_dict(cfg: dotdict):
 
 
 def run_pythia_1_4_b_sweep() -> None:
-    cfg = parse_args()
+    cfg = EnsembleArgs()
 
     cfg.model_name = "EleutherAI/pythia-1.4B-deduped"
     cfg.dataset_name = "NeelNanda/pile-10k"
@@ -903,7 +900,7 @@ def run_pythia_1_4_b_sweep() -> None:
     cfg.device = "cuda:1"
     cfg.n_chunks = 30
 
-    cfg.n_repetitions = 10
+    cfg.n_epochs = 10
 
     cfg.layer = 6
     cfg.layer_loc = "residual"
@@ -913,7 +910,7 @@ def run_pythia_1_4_b_sweep() -> None:
     sweep(pythia_1_4_b_dict, cfg)
 
 
-def run_zeros_only(cfg: dotdict):
+def run_zeros_only(cfg: EnsembleArgs):
     l1_values = np.array([0])
     dict_size = int(cfg.activation_width * cfg.learned_dict_ratio)
     device = cfg.device
@@ -960,7 +957,7 @@ def run_zeros_only(cfg: dotdict):
     )
 
 
-def long_mlp_sweep(cfg: dotdict):
+def long_mlp_sweep(cfg: EnsembleArgs):
     l1_values = np.logspace(-3.5, -2.5, 5)
     l1_values = np.concatenate([[0], [1e-4], l1_values])
     device = cfg.device
@@ -1009,7 +1006,7 @@ def long_mlp_sweep(cfg: dotdict):
 
 
 def run_across_layers_mlp_long() -> None:
-    cfg = parse_args()
+    cfg = EnsembleArgs()
     # set device and layer in config through command line
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.dataset_name = "EleutherAI/pile"
@@ -1023,7 +1020,7 @@ def run_across_layers_mlp_long() -> None:
     cfg.dtype = torch.float32
     cfg.lr = 1e-3
     cfg.n_chunks = 20
-    cfg.n_repetitions = 3
+    cfg.n_epochs = 3
     cfg.activation_width = 2048
 
     cfg.layer_loc = "mlp"
@@ -1039,7 +1036,7 @@ def run_across_layers_mlp_long() -> None:
             cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{cfg.layer_loc}"
             sweep(long_mlp_sweep, cfg)
 
-def run_positive(cfg: dotdict):
+def run_positive(cfg: EnsembleArgs):
     l1_values = np.logspace(-5, -3.5, 8)
     l1_values = np.concatenate([[0], l1_values])
     ensembles = []
@@ -1072,7 +1069,7 @@ def run_positive(cfg: dotdict):
 
 
 def setup_positives() -> None:
-    cfg = parse_args()
+    cfg = EnsembleArgs()
     # set device and layer in config through command line
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.dataset_name = "EleutherAI/pile"
@@ -1086,7 +1083,7 @@ def setup_positives() -> None:
     cfg.dtype = torch.float32
     cfg.lr = 1e-3
     cfg.n_chunks = 20
-    cfg.n_repetitions = 15
+    cfg.n_epochs = 15
     cfg.activation_width = 2048
     cfg.layer_loc = "mlp"
 
@@ -1099,7 +1096,7 @@ def setup_positives() -> None:
             cfg.dataset_folder = f"pilechunks_l{cfg.layer}_{cfg.layer_loc}"
             sweep(run_positive, cfg)
 
-def simple_setoff(cfg: dotdict) -> Tuple[List[Tuple[FunctionalEnsemble, dict, str]], List[str], List[str], dict]:
+def simple_setoff(cfg: EnsembleArgs) -> Tuple[List[Tuple[FunctionalEnsemble, dict, str]], List[str], List[str], dict]:
     l1_values = np.logspace(-4, -2, 8)
     l1_values = np.concatenate([[0], l1_values])
     ensembles = []
@@ -1147,7 +1144,7 @@ def simple_setoff(cfg: dotdict) -> Tuple[List[Tuple[FunctionalEnsemble, dict, st
 
 
 def run_all_zeros(device: str, layer: int):
-    cfg = parse_args()
+    cfg = EnsembleArgs()
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.dataset_name = "EleutherAI/pile"
 
@@ -1167,10 +1164,10 @@ def run_all_zeros(device: str, layer: int):
             for dict_ratio in [0.5, 1, 2, 4, 8, 16, 32]:
                 if layer_loc == "mlp":
                     cfg.n_chunks = 20
-                    cfg.n_repetitions = 3
+                    cfg.n_epochs = 3
                 else:
                     cfg.n_chunks = 10
-                    cfg.n_repetitions = 1
+                    cfg.n_epochs = 1
                 cfg.tied_ae = tied_ae
                 cfg.layer_loc = layer_loc
                 cfg.layer = layer
@@ -1181,7 +1178,7 @@ def run_all_zeros(device: str, layer: int):
 
 
 def simple_run() -> None:
-    cfg = parse_args()
+    cfg = EnsembleArgs()
     cfg.model_name = "gpt2"
     cfg.dataset_name = "EleutherAI/pile"
 
@@ -1193,7 +1190,7 @@ def simple_run() -> None:
     cfg.dtype = torch.float32
     cfg.lr = 1e-3
     cfg.n_chunks = 40
-    cfg.n_repetitions = 10
+    cfg.n_epochs = 10
     cfg.activation_width = 2048
     cfg.layer = 6
 
@@ -1212,7 +1209,7 @@ def simple_run() -> None:
 
 
 def run_single_layer() -> None:
-    cfg = parse_args()
+    cfg = EnsembleArgs()
     cfg.model_name = "EleutherAI/pythia-70m-deduped"
     cfg.dataset_name = "openwebtext"
 
@@ -1222,7 +1219,7 @@ def run_single_layer() -> None:
     cfg.activation_width = 1024
     cfg.save_every = 5
     cfg.n_chunks = 16
-    cfg.n_repetitions = 5
+    cfg.n_epochs = 5
     cfg.tied_ae = True
     cfg.center_dataset = True
     for layer_loc in ["residual"]:
@@ -1246,7 +1243,7 @@ def run_single_layer() -> None:
 
 
 def run_single_layer_gpt2() -> None:
-    cfg = parse_args()
+    cfg = EnsembleArgs()
     cfg.model_name = "gpt2"
     cfg.dataset_name = "openwebtext"
 
@@ -1256,7 +1253,7 @@ def run_single_layer_gpt2() -> None:
     cfg.activation_width = 768
     cfg.save_every = 5
     cfg.n_chunks = 10
-    cfg.n_repetitions = 4
+    cfg.n_epochs = 4
     cfg.tied_ae = True
     for layer_loc in ["residual"]:
         cfg.dataset_folder = f"pilechunks_gpt2sm_l{cfg.layer}_{layer_loc}"

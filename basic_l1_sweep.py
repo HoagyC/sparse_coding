@@ -1,16 +1,16 @@
+from dataclasses import dataclass
+import os
+import tqdm
+
 import torch
 import torchopt
 import numpy as np
 
-from big_sweep import ensemble_train_loop, unstacked_to_learned_dicts
 
 from autoencoders.sae_ensemble import FunctionalTiedSAE
 from autoencoders.ensemble import FunctionalEnsemble
-
-import os
-import tqdm
-
-from utils import dotdict
+from big_sweep import ensemble_train_loop, unstacked_to_learned_dicts
+from config import TrainArgs, EnsembleArgs
 
 class ProgressBar:
     def __init__(self, total, chunk_idx, n_chunks, epoch_idx, n_repetitions):
@@ -99,9 +99,8 @@ def basic_l1_sweep(
 
             bar = ProgressBar(len(sampler), chunk_idx, n_chunks, epoch_idx, n_repetitions)
 
-            cfg = dotdict({
-                "use_wandb": False,
-            })
+            cfg = TrainArgs()
+            cfg.use_wandb = False
 
             ensemble_train_loop(ensemble, cfg, args, "ensemble", sampler, dataset, bar)
 
@@ -115,24 +114,23 @@ def basic_l1_sweep(
         
             torch.save(learned_dicts, os.path.join(output_dir, f"learned_dicts_epoch_{epoch_idx}.pt"))
 
+
+@dataclass
+class SweepArgs(EnsembleArgs):
+    dataset_dir: str = "data"
+    output_dir: str = "sweep_outputs"
+    l1_value_min: float = -4
+    l1_value_max: float = -2
+    l1_value_n: int = 16
+    ratio: float = 1.0
+    n_repetitions: int = 1
+    save_after_every: bool = False
+    adam_lr: float = 1e-3
+    
+    
+
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Train an ensemble of SAEs with different L1 penalties.")
-
-    parser.add_argument("--dataset_dir", type=str, help="Path to directory containing dataset chunks.")
-    parser.add_argument("--output_dir", type=str, help="Path to directory to save learned dictionaries.")
-    parser.add_argument("--ratio", type=float, help="Ratio of latent to activation dimension.")
-    parser.add_argument("--l1_value_min", type=float, default=-4, help="Minimum L1 penalty value (log base 10).")
-    parser.add_argument("--l1_value_max", type=float, default=-2, help="Maximum L1 penalty value (log base 10).")
-    parser.add_argument("--l1_value_n", type=int, default=16, help="Number of L1 penalty values to try.")
-    parser.add_argument("--batch_size", type=int, default=256, help="Batch size.")
-    parser.add_argument("--device", type=str, default="cuda", help="Device to use.")
-    parser.add_argument("--adam_lr", type=float, default=1e-3, help="Adam learning rate.")
-    parser.add_argument("--n_repetitions", type=int, default=1, help="Number of epochs to train for.")
-    parser.add_argument("--save_after_every", action="store_true", help="Save learned dictionaries after every chunk instead of every epoch.")
-
-    args = parser.parse_args()
+    args = SweepArgs()
 
     l1_values = np.logspace(args.l1_value_min, args.l1_value_max, args.l1_value_n)
 

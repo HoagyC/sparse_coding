@@ -22,7 +22,7 @@ from matplotlib import pyplot as plt
 from torchtyping import TensorType
 from tqdm import tqdm
 
-from utils import dotdict
+from config import ToyArgs
 
 n_ground_truth_components, activation_dim, dataset_size = None, None, None
 
@@ -276,7 +276,7 @@ def analyse_result(result):
     get_n_dead_neurons(result)
 
 
-def run_single_go(cfg: dotdict, data_generator: Optional[RandomDatasetGenerator]):
+def run_single_go(cfg: ToyArgs, data_generator: Optional[RandomDatasetGenerator]):
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     if not data_generator:
@@ -444,31 +444,7 @@ def recalculate_results(auto_encoder, data_generator):
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--activation_dim", type=int, default=256)
-    parser.add_argument("--n_ground_truth_components", type=int, default=512)
-    parser.add_argument("--learned_dict_ratio", type=float, default=1.0)
-
-    parser.add_argument("--batch_size", type=int, default=256)
-    parser.add_argument("--noise_std", type=float, default=0.1)
-    parser.add_argument("--l1_alpha", type=float, default=0.1)
-    parser.add_argument("--lr", type=float, default=0.001)
-    parser.add_argument("--epochs", type=int, default=20000)
-    parser.add_argument("--noise_level", type=float, default=0.0)
-
-    parser.add_argument("--feature_prob_decay", type=float, default=0.99)
-    parser.add_argument("--feature_num_nonzero", type=int, default=5)
-    parser.add_argument("--correlated_components", type=bool, default=True)
-
-    parser.add_argument("--l1_exp_low", type=int, default=-8)
-    parser.add_argument("--l1_exp_high", type=int, default=9)  # not inclusive
-    parser.add_argument("--dict_ratio_exp_low", type=int, default=-3)
-    parser.add_argument("--dict_ratio_exp_high", type=int, default=6)  # not inclusive
-
-    parser.add_argument("--seed", type=int, default=0)
-
-    args = parser.parse_args()
-    cfg = dotdict(vars(args))  # convert to dotdict via dict
+    cfg = ToyArgs()
     cfg.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     torch.manual_seed(cfg.seed)

@@ -22,9 +22,8 @@ from datasets import load_dataset
 from transformer_lens import HookedTransformer
 
 from activation_dataset import check_use_baukit, make_tensor_name
-from argparser import parse_args
+from config import BaseArgs, InterpArgs, InterpGraphArgs
 from autoencoders.learned_dict import LearnedDict
-from utils import dotdict
 
 # set OPENAI_API_KEY environment variable from secrets.json['openai_key']
 # needs to be done before importing openai interp bits
@@ -386,7 +385,7 @@ async def interpret(base_df: pd.DataFrame, save_folder: str, n_feats_to_explain:
             f.write(f"Random only score: {random_only_score:.2f}\n")
 
 
-def run(dict: LearnedDict, cfg: dotdict):
+def run(dict: LearnedDict, cfg: InterpArgs):
     assert cfg.df_n_feats >= cfg.n_feats_explain
     df = get_df(
         feature_dict=dict,
@@ -412,7 +411,7 @@ def get_score(lines: List[str], mode: str):
         raise ValueError(f"Unknown mode: {mode}")
 
 
-def run_folder(cfg: dotdict):
+def run_folder(cfg: InterpArgs):
     base_folder = cfg.load_interpret_autoencoder
     all_encoders = os.listdir(cfg.load_interpret_autoencoder)
     all_encoders = [x for x in all_encoders if (x.endswith(".pt") or x.endswith(".pkl"))]
@@ -437,7 +436,7 @@ def make_tag_name(hparams: Dict) -> str:
     return tag
 
 
-def run_from_grouped(cfg: dotdict, results_loc: str):
+def run_from_grouped(cfg: InterpArgs, results_loc: str):
     """
     Run autointerpretation across a file of learned dicts as outputted by big_sweep.py or similar.
     Expects results_loc to a .pt file containing a list of tuples of (learned_dict, hparams_dict)
@@ -543,7 +542,7 @@ def interpret_across_baselines(n_gpus: int = 3):
     baselines_dir = "/mnt/ssd-cluster/baselines"
     save_dir = "/mnt/ssd-cluster/auto_interp_results/"
     os.makedirs(save_dir, exist_ok=True)
-    base_cfg = parse_args()
+    base_cfg = InterpArgs()
 
     if n_gpus > 1:
         job_queue: mp.Queue = mp.Queue()
@@ -582,7 +581,7 @@ def interpret_across_baselines(n_gpus: int = 3):
 
 
 def interpret_across_big_sweep(l1_val: float, n_gpus: int = 1):
-    base_cfg = parse_args()
+    base_cfg = InterpArgs()
     base_dir = "/mnt/ssd-cluster/bigrun0308"
     save_dir = "/mnt/ssd-cluster/auto_interp_results/"
     
@@ -591,7 +590,7 @@ def interpret_across_big_sweep(l1_val: float, n_gpus: int = 1):
 
     all_folders = os.listdir(base_dir)
     if n_gpus != 1:
-        job_queue: List[Tuple[Callable, dotdict]] = []
+        job_queue: List[Tuple[Callable, InterpArgs]] = []
 
     for folder in all_folders:
         try:
@@ -642,14 +641,14 @@ def interpret_across_big_sweep(l1_val: float, n_gpus: int = 1):
 
 
 def interpret_across_chunks(l1_val: float, n_gpus: int = 1):
-    base_cfg = parse_args()
+    base_cfg = InterpArgs()
     base_dir = "/mnt/ssd-cluster/longrun2408"
     save_dir = "/mnt/ssd-cluster/auto_interp_results_overtime/"
     os.makedirs(save_dir, exist_ok=True)
 
     all_folders = os.listdir(base_dir)
     if n_gpus != 1:
-        job_queue: List[Tuple[Callable, dotdict]] = []
+        job_queue: List[Tuple[Callable, InterpArgs]] = []
 
     for folder in all_folders:
         for n_chunks in [1, 4, 16, 32]:
@@ -763,22 +762,14 @@ def read_results(activation_name: str, score_mode: str) -> None:
 
 
 if __name__ == "__main__":
-    cfg: Union[argparse.Namespace, dotdict]
+    cfg: BaseArgs
     if len(sys.argv) > 1 and sys.argv[1] == "read_results":
-        # parse --layer and --model_name from command line using custom parser
-        argparser = argparse.ArgumentParser()
-        argparser.add_argument("--layer", type=int, default=1)
-        argparser.add_argument("--model_name", type=str, default="EleutherAI/pythia-70m-deduped")
-        argparser.add_argument("--layer_loc", type=str, default="mlp")
-        argparser.add_argument("--score_mode", type=str, default="all")  # can be "top", "random", "top_random", "all"
-        argparser.add_argument("--run_all", type=bool, default=False)
-        cfg = argparser.parse_args(sys.argv[2:])
-
+        cfg = InterpGraphArgs()
         if cfg.score_mode == "all":
             score_modes = ["top", "random", "top_random"]
         else:
             score_modes = [cfg.score_mode]
-
+ 
         base_path = "/mnt/ssd-cluster/auto_interp_results"
 
         if cfg.run_all:
@@ -791,9 +782,8 @@ if __name__ == "__main__":
                 read_results(activation_name, score_mode)
 
     elif len(sys.argv) > 1 and sys.argv[1] == "run_group":
-        sys.argv.pop(1)
-        default_cfg = parse_args()
-        run_from_grouped(default_cfg, default_cfg.load_interpret_autoencoder)
+        cfg = InterpArgs()
+        run_from_grouped(cfg, cfg.load_interpret_autoencoder)
 
     elif len(sys.argv) > 1 and sys.argv[1] == "big_sweep":
         sys.argv.pop(1)
@@ -815,11 +805,9 @@ if __name__ == "__main__":
         interpret_across_chunks(l1_val)
 
     else:
-        cfg = parse_args()
-        cfg.chunk_size_gb = 10
+        cfg = InterpArgs()
         if os.path.isdir(cfg.load_interpret_autoencoder):
             run_folder(cfg)
-
         else:
             learned_dict = torch.load(cfg.load_interpret_autoencoder, map_location=cfg.device)
             save_folder = f"/mnt/ssd-cluster/auto_interp_results/l{cfg.layer}_{cfg.layer_loc}"

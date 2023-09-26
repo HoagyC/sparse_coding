@@ -1,10 +1,8 @@
-import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import torchopt
 
-from autoencoders.sae_ensemble import SAE, SAEEnsemble
+from autoencoders.sae_ensemble import FunctionalSAE
+from autoencoders.ensemble import FunctionalEnsemble
 from sc_datasets.random_dataset import RandomDatasetGenerator
 
 # we calculate gradients functionally so disable autograd for memory
@@ -29,8 +27,8 @@ def mmcs(truth, dict):
 
 l1_coefs = [1 * l1_exp_base**i for i in range(-16, -11)]
 
-models = [SAE(d_activation, n_dict_components, l1_coef=l1_coef).to("cuda") for l1_coef in l1_coefs]
-ensemble = SAEEnsemble(models, torchopt.adam(lr=1e-3))
+models = [FunctionalSAE.init(d_activation, n_dict_components, l1_alpha=l1_coef) for l1_coef in l1_coefs]
+ensemble = FunctionalEnsemble(models, FunctionalSAE, torchopt.adam(lr=1e-3), {"lr": 1e-3})
 
 for i in range(1000):
     minibatch = dataset.__next__().unsqueeze(0).expand(len(models), -1, -1)

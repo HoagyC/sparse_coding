@@ -405,7 +405,7 @@ def setup_data(
     layer: Union[int, List[int]] = 2,
     layer_loc: str = "residual",
     start_line: int = 0,
-    n_chunks: int = 1,
+    n_chunks: int = 100,
     chunk_size_gb: float = 2,
     skip_chunks: int = 0,
     device: torch.device = torch.device("cuda:0"),

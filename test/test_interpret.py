@@ -13,15 +13,14 @@ import torch
 
 from activation_dataset import make_tensor_name
 from autoencoders.learned_dict import TiedSAE, UntiedSAE
-from argparser import parse_args
+from config import InterpArgs
 from interpret import make_feature_activation_dataset
-from utils import dotdict
 
 
 class TestMain(unittest.TestCase):
     def setUp(self) -> None:
         os.makedirs("tmp", exist_ok=True)
-        self.default_cfg = parse_args()
+        self.default_cfg = InterpArgs()
 
     def test_l1_mlp(self):
         cfg = deepcopy(self.default_cfg)
