@@ -17,7 +17,7 @@ class ShrinkageLayer(nn.Module):
         in_vec = torch.cat([z, x, x_hat], dim=-1)
         h = F.gelu(self.f_in(in_vec))
         z = z + self.f_out(h)
-        return F.softplus(z)
+        return z
 
 class SparseAutoencoder(nn.Module):
     def __init__(self, d_activation, n_hidden, d_latent):
@@ -56,6 +56,41 @@ class SparseAutoencoder(nn.Module):
         l1_reg = l1_coef * torch.linalg.norm(c, ord=1, dim=-1).mean()
         return reconstr + l1_reg, reconstr, l1_reg
 
+class NonlinearSparseAutoencoder(nn.Module):
+    def __init__(self, d_activation, d_hidden, d_latent):
+        super().__init__()
+        self.d_activation = d_activation
+        self.d_latent = d_latent
+
+        self.encoder = nn.Sequential(
+            nn.Linear(d_activation, d_hidden),
+            nn.GELU(),
+            nn.Linear(d_hidden, d_hidden),
+            nn.GELU(),
+            nn.Linear(d_hidden, d_latent),
+            nn.Softplus(beta=100)
+        )
+
+        self.decoder = nn.Sequential(
+            nn.Linear(d_latent, d_hidden),
+            nn.GELU(),
+            nn.Linear(d_hidden, d_hidden),
+            nn.GELU(),
+            nn.Linear(d_hidden, d_activation)
+        )
+    
+    def forward(self, x):
+        c = self.encoder(x)
+        # scale so that c has unit norm
+        c = c / torch.linalg.norm(c, ord=2, dim=-1, keepdim=True)
+        x_hat = self.decoder(c)
+        return x_hat, c
+    
+    def losses(self, x, c, x_hat, l1_coef):
+        reconstr = F.mse_loss(x, x_hat)
+        l1_reg = l1_coef * torch.linalg.norm(c, ord=1, dim=-1).mean()
+        return reconstr + l1_reg, reconstr, l1_reg
+
 def l1_schedule(max_l1=1e-3, warmup_steps=1000):
     def schedule(step):
         if step < warmup_steps:
@@ -69,7 +104,7 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = SparseAutoencoder(512, 4, 2048).to(device)
+    model = NonlinearSparseAutoencoder(512, 1024, 2048).to(device)
 
     secrets = json.load(open("secrets.json"))
     wandb.login(key=secrets["wandb_key"])
@@ -80,7 +115,7 @@ if __name__ == "__main__":
         entity="sparse_coding",
     )
 
-    n_epochs = 10
+    n_epochs = 100
     batch_size = 256
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-5)
@@ -104,8 +139,12 @@ if __name__ == "__main__":
 
                 loss, reconstr, l1_reg = model.losses(x, c, x_hat, schedule(steps))
 
+                sparsity = {}
+
                 fvu = (x - x_hat).pow(2).sum() / (x - x.mean()).pow(2).sum()
-                sparsity = (c > 1e-5).float().sum(dim=-1).mean()
+                sparsity["1e-5"] = (c > 1e-5).float().sum(dim=-1).mean()
+                sparsity["1e-6"] = (c > 1e-6).float().sum(dim=-1).mean()
+                sparsity["1e-7"] = (c > 1e-7).float().sum(dim=-1).mean()
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -116,7 +155,9 @@ if __name__ == "__main__":
                     "reconstr": reconstr.item(),
                     "l1_reg": l1_reg.item(),
                     "fvu": fvu.item(),
-                    "sparsity": sparsity.item()
+                    "sparsity_1e-5": sparsity["1e-5"].item(),
+                    "sparsity_1e-6": sparsity["1e-6"].item(),
+                    "sparsity_1e-7": sparsity["1e-7"].item(),
                 })
             
                 steps += 1

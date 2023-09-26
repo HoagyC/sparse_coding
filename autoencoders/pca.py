@@ -1,6 +1,6 @@
 import torch
 
-from autoencoders.learned_dict import LearnedDict, Rotation
+from autoencoders.learned_dict import LearnedDict, Rotation, TiedSAE
 from autoencoders.topk_encoder import TopKLearnedDict
 
 def calc_pca(activations, batch_size=512, device="cuda:0"):
@@ -97,8 +97,17 @@ class BatchedPCA:
         eigvecs_ = torch.cat([eigvecs, -eigvecs], dim=0)
         return TopKLearnedDict(eigvecs_, sparsity)
 
-    def to_rotation_dict(self, n_components):
+    def to_rotation_dict(self, n_components=None):
+        if n_components is None:
+            n_components = self.n_dims
         return Rotation(self.get_dict()[:n_components])
+
+    def to_pve_rotation_dict(self, n_components=None):
+        if n_components is None:
+            n_components = self.n_dims
+        dirs = self.get_dict()[:n_components]
+        dirs_ = torch.cat([dirs, -dirs], dim=0)
+        return TiedSAE(dirs_, torch.zeros(2 * n_components), centering=(self.get_mean(), None, None), norm_encoder=True)
 
 
 class PCAEncoder(LearnedDict):

@@ -11,7 +11,6 @@ from autoencoders.topk_encoder import TopKLearnedDict
 
 _n_samples, _activation_size = None, None
 
-
 class ICAEncoder(LearnedDict):
     def __init__(self, activation_size, n_components: int = 0):
         self.activation_size = activation_size
@@ -51,3 +50,28 @@ class ICAEncoder(LearnedDict):
         negatives = -positives
         components = np.concatenate([positives, negatives], axis=0)
         return TopKLearnedDict(components, sparsity)
+
+    def to_nneg_dict(self):
+        return NNegICAEncoder(self.activation_size, self.ica)
+
+class NNegICAEncoder(LearnedDict):
+    def __init__(self, activation_size, ica):
+        self.activation_size = activation_size
+        self.ica = ica
+    
+    def to_device(self, device):
+        pass
+
+    def encode(self, x):
+        assert x.shape[1] == self.activation_size
+        x_standardized = self.scaler.transform(x.cpu().numpy().astype(np.float64))
+        c = self.ica.transform(x_standardized)
+        c_neg = -c
+        c = np.clamp(c, min=0)
+        c_neg = np.clamp(c_neg, min=0)
+        return torch.cat([torch.tensor(c, device=x.device), torch.tensor(c_neg, device=x.device)], dim=-1)
+    
+    def get_learned_dict(self):
+        components = torch.tensor(self.ica.components_, dtype=torch.float32)
+        components = torch.cat([components, -components], dim=0)
+        return components / torch.norm(components, dim=-1, keepdim=True)
