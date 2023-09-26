@@ -280,6 +280,7 @@ NOUNS_DICT = NOUNS_DICT = {"[PLACE]": PLACES, "[OBJECT]": OBJECTS}
 
 
 def gen_prompt_counterfact(
+    tokenizer,
     templates, names, nouns_dict, N
 ):
     nb_gen = 0
@@ -295,6 +296,15 @@ def gen_prompt_counterfact(
             name_1 = rd.choice(names)
             name_2 = rd.choice(names)
             name_3 = rd.choice(names)
+
+            for name in [name_1, name_2, name_3]:
+                if len(tokenizer(" " + name)["input_ids"]) != 1:
+                    name_1 = ""
+                    name_2 = ""
+                    name_3 = ""
+                    break
+
+        assert all([len(tokenizer(" " + name)["input_ids"]) == 1 for name in [name_1, name_2, name_3]])
 
         nouns = {}
         ioi_prompt = {}
@@ -329,19 +339,24 @@ def gen_ioi_dataset(
     tokenizer,
     n_prompts,
 ):
-    prompts, prompts_cf = gen_prompt_counterfact(
-        ABBA_TEMPLATES + BABA_TEMPLATES,
-        NAMES,
-        NOUNS_DICT,
-        n_prompts,
-    )
+    assertion = False
+    while not assertion:
+        prompts, prompts_cf = gen_prompt_counterfact(
+            tokenizer,
+            ABBA_TEMPLATES + BABA_TEMPLATES,
+            NAMES,
+            NOUNS_DICT,
+            n_prompts,
+        )
 
-    prompts = [prompt["text"] for prompt in prompts]
-    prompts_cf = [prompt["text"] for prompt in prompts_cf]
+        prompts = [prompt["text"] for prompt in prompts]
+        prompts_cf = [prompt["text"] for prompt in prompts_cf]
 
-    # ignore final token (indirect object)
-    prompts = tokenizer(prompts)["input_ids"]
-    prompts_cf = tokenizer(prompts_cf)["input_ids"]
+        # ignore final token (indirect object)
+        prompts = tokenizer(prompts)["input_ids"]
+        prompts_cf = tokenizer(prompts_cf)["input_ids"]
+
+        assertion = all([len(prompt) == len(prompt_cf) for prompt, prompt_cf in zip(prompts, prompts_cf)])
 
     # calc seq lengths & pad
     seq_lengths = torch.tensor([len(prompt)-1 for prompt in prompts])

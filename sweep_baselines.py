@@ -13,6 +13,16 @@ from autoencoders.nmf import NMFEncoder
 from autoencoders.pca import BatchedPCA
 from standard_metrics import mean_nonzero_activations
 
+def run_ica(chunk, output_file):
+    chunk = torch.load(chunk, map_location="cpu")
+
+    activation_dim = chunk.shape[1]
+
+    ica = ICAEncoder(activation_size=activation_dim)
+    print("Training ICA")
+    ica.train(chunk)
+
+    torch.save(ica, output_file)
 
 def run_layer_baselines(args) -> None:
     layer: int
@@ -161,6 +171,5 @@ def run_all() -> None:
     with mp.Pool(processes=len(layers)) as pool:
         pool.map(run_layer_baselines, args_list)
 
-
 if __name__ == "__main__":
-    run_all()
+    run_ica("activation_data/layer_12/0.pt", "ica.pt")

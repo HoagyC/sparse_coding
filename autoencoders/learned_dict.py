@@ -51,19 +51,34 @@ class LearnedDict(ABC):
 
 
 class Identity(LearnedDict):
-    def __init__(self, activation_size):
+    def __init__(self, activation_size, device=None):
         self.n_feats = activation_size
         self.activation_size = activation_size
+        self.device = "cpu" if device is None else device
 
     def get_learned_dict(self):
-        return torch.eye(self.n_feats)
+        return torch.eye(self.n_feats, device=self.device)
 
     def encode(self, batch):
         return batch
 
     def to_device(self, device):
-        pass
+        self.device = device
 
+class IdentityPositive(LearnedDict):
+    def __init__(self, activation_size, device=None):
+        self.n_feats = activation_size
+        self.activation_size = activation_size
+        self.device = "cpu" if device is None else device
+
+    def get_learned_dict(self):
+        return torch.cat([torch.eye(self.n_feats, device=self.device), -torch.eye(self.n_feats, device=self.device)], dim=0)
+
+    def encode(self, batch):
+        return torch.clamp(torch.cat([batch, -batch], dim=-1), min=0.0)
+
+    def to_device(self, device):
+        self.device = device
 
 class IdentityReLU(LearnedDict):
     def __init__(self, activation_size, bias: Optional[torch.Tensor] = None):

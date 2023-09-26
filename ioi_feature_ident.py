@@ -13,9 +13,10 @@ from transformer_lens import HookedTransformer
 import standard_metrics
 import test_datasets.ioi_counterfact
 from autoencoders.pca import BatchedPCA
-from autoencoders.learned_dict import LearnedDict, Identity
+from autoencoders.learned_dict import LearnedDict, Identity, IdentityPositive
 from utils import dotdict
 import tqdm
+import random
 
 class AttnDecomp(ABC):
     # a class to specify a decomposition of concatenated attn_out
@@ -116,31 +117,45 @@ def run_with_decomp(
 
     def intervention(tensor, hook=None):
         nonlocal activation
-        if location[1] == "attn_concat":
-            B, L, N_head, D_head = tensor.shape
-            tensor = tensor.reshape(B, L, N_head * D_head)
+        #if location[1] == "attn_concat":
+        #    B, L, N_head, D_head = tensor.shape
+        #    tensor = tensor.reshape(B, L, N_head * D_head)
+        #B, L, D = tensor.shape
+        #if all_positions:
+        #    select_mask = torch.zeros(B, L, dtype=torch.bool, device="cuda:0")
+        #    for i in range(B):
+        #        select_mask[i, :seq_lengths[i]] = True
+        #    act_clean = tensor[select_mask].reshape(-1, D)
+        #else:
+        #    act_clean = tensor[list(range(B)), seq_lengths-1].clone()
+        #clean_codes = decomposer.decompose(act_clean)
+        #codes = corrupted_codes.clone()
+        #codes[:, to_swap] = clean_codes[:, to_swap]
+        #recomposed = decomposer.recompose(act_clean, codes)
+        #activation = recomposed.clone()
+        #if all_positions:
+        #    select_mask = torch.zeros(B, L, dtype=torch.bool, device="cuda:0")
+        #    for i in range(B):
+        #        select_mask[i, :seq_lengths[i]] = True
+        #    tensor[select_mask] = recomposed
+        #else:
+        #    tensor[list(range(B)), seq_lengths-1] = recomposed
+        #if location[1] == "attn_concat":
+        #    tensor = tensor.reshape(B, L, N_head, D_head)
+        
         B, L, D = tensor.shape
-        if all_positions:
-            select_mask = torch.zeros(B, L, dtype=torch.bool, device="cuda:0")
-            for i in range(B):
-                select_mask[i, :seq_lengths[i]] = True
-            act_clean = tensor[select_mask].reshape(-1, D)
-        else:
-            act_clean = tensor[list(range(B)), seq_lengths-1].clone()
-        clean_codes = decomposer.decompose(act_clean)
-        codes = corrupted_codes.clone()
-        codes[:, to_swap] = clean_codes[:, to_swap]
-        recomposed = decomposer.recompose(act_cf, codes)
-        activation = recomposed.clone()
-        if all_positions:
-            select_mask = torch.zeros(B, L, dtype=torch.bool, device="cuda:0")
-            for i in range(B):
-                select_mask[i, :seq_lengths[i]] = True
-            tensor[select_mask] = recomposed
-        else:
-            tensor[list(range(B)), seq_lengths-1] = recomposed
-        if location[1] == "attn_concat":
-            tensor = tensor.reshape(B, L, N_head, D_head)
+
+        select_mask = torch.zeros(B, L, dtype=torch.bool, device="cuda:0")
+        for i in range(B):
+            select_mask[i, :seq_lengths[i]] = True
+        act_unpatched = tensor[select_mask]
+        codes_unpatched = decomposer.decompose(act_unpatched)
+        codes_unpatched[:, to_swap] = corrupted_codes[:, to_swap]
+        act_patched = decomposer.recompose(act_unpatched, codes_unpatched)
+        tensor[select_mask] = act_patched
+
+        activation = act_patched.clone()
+
         return tensor
     
     with torch.no_grad():
@@ -169,7 +184,7 @@ def feat_ident_run(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
     prompts: TensorType["batch", "prompt_len"],
-    prompts_cf: TensorType["batch", "prompt_len"],
+    prompts_patch: TensorType["batch", "prompt_len"],
     seq_lengths: TensorType["batch"],
     decomposer: AttnDecomp,
     thresholds: List[float],
@@ -186,10 +201,10 @@ def feat_ident_run(
     if start_feats is None:
         start_feats = list(range(decomposer.n_decomp))
     
-    feats_clean = start_feats[:]
-    feats_cf = [i for i in range(decomposer.n_decomp) if i not in feats_clean]
+    feats_patched = start_feats[:]
+    feats_clean = [i for i in range(decomposer.n_decomp) if i not in feats_patched]
 
-    clean_logits, act_cache_clean = model.run_with_cache(
+    base_logits, act_cache_clean = model.run_with_cache(
         prompts,
         return_type="logits",
         names_filter=lambda name: name == tensor_name,
@@ -203,8 +218,8 @@ def feat_ident_run(
     else:
         act_clean = act_cache_clean[tensor_name][list(range(B)), seq_lengths-1].reshape(B, -1).clone()
 
-    _, act_cache_cf = model.run_with_cache(
-        prompts_cf,
+    patch_logits, act_cache_patch = model.run_with_cache(
+        prompts_patch,
         return_type="logits",
         names_filter=lambda name: name == tensor_name,
     )
@@ -213,53 +228,60 @@ def feat_ident_run(
         select_mask = torch.zeros(B, L, dtype=torch.bool, device="cuda:0")
         for i in range(B):
             select_mask[i, :seq_lengths[i]] = True
-        act_cf = act_cache_cf[tensor_name][select_mask].reshape(B_all, -1).clone()
+        act_patch = act_cache_patch[tensor_name][select_mask].reshape(B_all, -1).clone()
     else:
-        act_cf = act_cache_cf[tensor_name][list(range(B)), seq_lengths-1].reshape(B, -1).clone()
+        act_patch = act_cache_patch[tensor_name][list(range(B)), seq_lengths-1].reshape(B, -1).clone()
 
     prev_div = None
 
     def eval_div(to_swap):
+        # run the model on the unpatched prompt, patching in the specified features
         logits, activation = run_with_decomp(
             model,
             tokenizer,
             prompts,
-            act_cf,
+            act_patch,
             decomposer,
             to_swap,
             location,
             seq_lengths,
             all_positions,
         )
-        div = mean_kl_divergence(clean_logits[list(range(B)), seq_lengths-1], logits[list(range(B)), seq_lengths-1])
+        div = mean_kl_divergence(patch_logits[list(range(B)), seq_lengths-1], logits[list(range(B)), seq_lengths-1])
         dist = torch.norm(act_clean - activation, dim=-1).mean().item()
         return div, dist
 
     scores = []
 
-    zero_div, zero_dist = eval_div(list(range(decomposer.n_decomp)))
-    scores.append((list(range(decomposer.n_decomp)), zero_div, zero_dist))
+    zero_div, zero_dist = eval_div([])
+    scores.append(([], zero_div, zero_dist))
 
-    all_div, all_dist = eval_div([])
-    scores.append(([], all_div, all_dist))
+    print(f"Zero div {zero_div} dist {zero_dist}")
 
-    start_div, start_dist = eval_div(feats_clean)
-    scores.append((feats_cf, start_div, start_dist))
+    all_div, all_dist = eval_div(list(range(decomposer.n_decomp)))
+    scores.append((list(range(decomposer.n_decomp)), all_div, all_dist))
+
+    print(f"All div {all_div} dist {all_dist}")
+
+    start_div, start_dist = eval_div(feats_patched)
+    scores.append((feats_patched[:], start_div, start_dist))
+
+    print(f"Start div {start_div} dist {start_dist}")
 
     prev_div = start_div
 
     for threshold in sorted(thresholds):
-        if len(feats_clean) == 0:
+        if len(feats_patched) == 0:
             break
-        for i in tqdm.tqdm(feats_clean[:]):
-            to_swap = [j for j in feats_clean if j != i]
+        for i in tqdm.tqdm(sorted(feats_patched, key=lambda x: random.random())):
+            to_swap = [j for j in feats_patched if j != i]
             div, dist = eval_div(to_swap)
             if div - prev_div < threshold:
-                feats_clean.remove(i)
-                feats_cf.append(i)
+                feats_patched.remove(i)
+                feats_clean.append(i)
                 prev_div = div
-        print(f"Threshold {threshold} changed {len(feats_clean[:])}")
-        scores.append((feats_clean[:], prev_div, dist))
+        print(f"Threshold {threshold} changed {len(feats_patched[:])} div {prev_div} dist {dist}")
+        scores.append((feats_patched[:], prev_div, dist))
 
     return scores
 
@@ -292,7 +314,7 @@ def feat_ident_run_layer(cfg):
 
     learned_dicts = torch.load(cfg.learned_dicts)
 
-    l1_vals = [1e-3, 3e-4, 1e-4]
+    l1_vals = [1e-3, 3e-4, 1e-4, 0]
 
     selected_dicts = []
 
@@ -313,12 +335,13 @@ def feat_ident_run_layer(cfg):
     thresholds = np.logspace(cfg.log_threshold_min, cfg.log_threshold_max, cfg.n_thresholds)
 
     decomps = [
+        #("neuron_pve", DictAttnDecomp(IdentityPositive(pca_rot.n_dict_components(), device="cuda:0"))),
+        #("neuron", DictAttnDecomp(Identity(pca_rot.n_dict_components(), device="cuda:0"))),
         ("pca_pve", DictAttnDecomp(pca_pve)),
         ("pca_rot", DictAttnDecomp(pca_rot)),
-        ("neuron basis", DictAttnDecomp(Identity(pca_rot.n_dict_components())))
-        ("head", HeadAttnDecomp(cfg.n_head, cfg.d_head)),
+        #("head", HeadAttnDecomp(cfg.n_head, cfg.d_head)),
     ]
-    decomps += [(name, DictAttnDecomp(dict)) for dict, name in selected_dicts]
+    decomps = [(name, DictAttnDecomp(dict)) for dict, name in selected_dicts] + decomps
 
     results = []
 
@@ -333,26 +356,28 @@ def feat_ident_run_layer(cfg):
             decomp,
             thresholds,
             cfg.location,
-            all_positions=False,
+            all_positions=True,
         )))
     
-    torch.save(results, cfg.output_file)
+        torch.save(results, cfg.output_file)
 
 if __name__ == "__main__":
     cfg = dotdict({
-        "model_name": "gpt2",
-        "activation_dataset": "activation_data/layer_9/0.pt",
-        "learned_dicts": "gpt2_small_l9_resid/learned_dicts_epoch_0.pt",
+        "model_name": "EleutherAI/pythia-410m-deduped",
+        "activation_dataset": "activation_data/layer_12/0.pt",
+        "learned_dicts": "pythia-410m-resid-l12/learned_dicts_epoch_0.pt",
         "dict_name": "dict_{l1_alpha:.2e}",
-        "location": (9, "attn_concat"),
+        "location": (12, "residual"),
         "n_prompts": 50,
         "batch_size": 100,
-        "log_threshold_min": -4,
-        "log_threshold_max": -1,
-        "n_thresholds": 10,
+        "log_threshold_min": -5,
+        "log_threshold_max": 0,
+        "n_thresholds": 50,
         "n_head": 12,
         "d_head": 64,
         "output_file": "feat_ident_results.pt",
     })
+
+    print(cfg.activation_dataset, cfg.learned_dicts, cfg.location)
 
     feat_ident_run_layer(cfg)
