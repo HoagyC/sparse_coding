@@ -122,9 +122,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    l1_values = list(np.logspace(args.l1_value_min, args.l1_value_max, args.l1_value_n))
+    #l1_values = list(np.logspace(args.l1_value_min, args.l1_value_max, args.l1_value_n))
 
-    #l1_values = [0, 1e-3, 3e-4, 1e-4]
+    l1_values = [0, 1e-3, 3e-4, 1e-4]
 
     basic_l1_sweep(
         args.dataset_dir, args.output_dir,

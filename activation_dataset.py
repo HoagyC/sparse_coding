@@ -29,6 +29,7 @@ from tqdm import tqdm
 from transformer_lens import HookedTransformer
 from transformer_lens.loading_from_pretrained import get_official_model_name, convert_hf_model_config
 from transformers import GPT2Tokenizer, PreTrainedTokenizerBase
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from utils import *
 
@@ -333,7 +334,7 @@ def make_activation_dataset(
             print(f"Saved undersized chunk {n_saved_chunks} of activations, total size:  {batch_idx * activation_size} ")
 
 
-def make_activation_dataset_hf(
+def make_activation_dataset_tl(
     sentence_dataset: DataLoader,
     model: HookedTransformer,
     activation_width: int,
@@ -404,12 +405,156 @@ def make_activation_dataset_hf(
     #return ((chunk_means, chunk_stds) if center_dataset else None, n_activations)
     return n_activations
 
+def make_activation_dataset_hf(
+    sentence_dataset: Dataset,
+    model: AutoModelForCausalLM,
+    tensor_names: List[str],
+    chunk_size: int,
+    n_chunks: int,
+    output_folder: str = "activation_data",
+    skip_chunks: int = 0,
+    device: Optional[torch.device] = torch.device("cuda:0"),
+    max_length: int = 2048,
+    model_batch_size: int = 4,
+    precision: Literal["float16", "float32"] = "float16",
+    shuffle_seed: Optional[int] = None,
+):
+    with torch.no_grad():
+        model.eval()
+
+        dtype = None
+        if precision == "float16":
+            dtype = torch.float16
+        elif precision == "float32":
+            dtype = torch.float32
+        else:
+            raise ValueError(f"Invalid precision '{precision}'")
+
+        dataset_iterator = iter(sentence_dataset)
+        chunk_batches = chunk_size // (model_batch_size * max_length)
+        batches_to_skip = skip_chunks * chunk_batches
+
+        if shuffle_seed is not None:
+            torch.manual_seed(shuffle_seed)
+
+        dataloader = DataLoader(
+            sentence_dataset,
+            batch_size=model_batch_size,
+            shuffle=shuffle_seed is not None,
+        )
+
+        dataloader_iter = iter(dataloader)
+
+        for _ in range(batches_to_skip):
+            dataloader_iter.__next__()
+        
+        # configure hooks for the model
+        tensor_buffer = {}
+
+        hook_handles = []
+
+        for tensor_name in tensor_names:
+            tensor_buffer[tensor_name] = []
+
+            def hook(module, output, tensor_name=tensor_name):
+                if type(output) == tuple:
+                    out = output[0]
+                else:
+                    out = output
+                tensor_buffer[tensor_name].append(rearrange(out, "b l ... -> (b l) (...)").to(dtype=dtype).cpu())
+                return output
+
+            for name, module in net.named_modules():
+                if name == tensor_name:
+                    handle = module.register_forward_hook(hook)
+                    hook_handles.append(handle)
+
+        def reset_buffers():
+            for tensor_name in tensor_names:
+                tensor_buffer[tensor_name] = []
+
+        reset_buffers()
+
+        chunk_idx = 0
+
+        progress_bar = tqdm(total=chunk_size * n_chunks)
+
+        for batch_idx, batch in enumerate(dataloader_iter):
+            batch = batch["input_ids"].to(device)
+
+            _ = model(batch)
+
+            progress_bar.update(batch_size)
+
+            if batch_idx+1 % chunk_batches == 0:
+                for tensor_name in tensor_names:
+                    save_activation_chunk(tensor_buffer[tensor_name], chunk_idx, os.path.join(output_folder, tensor_name))
+                
+                n_act = batch_idx * batch_size * max_length
+                print(f"Saved chunk {chunk_idx} of activations, total size: {n_act / 1e6:.2f}M activations")
+
+                chunk_idx += 1
+                
+                reset_buffers()
+                if chunk_idx >= n_chunks:
+                    break
+        
+        # undersized final chunk
+        if chunk_idx < n_chunks:
+            for tensor_name in tensor_names:
+                save_activation_chunk(tensor_buffer[tensor_name], chunk_idx, os.path.join(output_folder, tensor_name))
+            
+            n_act = batch_idx * batch_size * max_length
+            print(f"Saved undersized chunk {chunk_idx} of activations, total size: {n_act / 1e6:.2f}M activations")
+
+        for hook_handle in hook_handles:
+            hook_handle.remove()
+        
+
 def save_activation_chunk(dataset, n_saved_chunks, dataset_folder):
     dataset_t = torch.cat(dataset, dim=0).to("cpu")
     os.makedirs(dataset_folder, exist_ok=True)
     with open(dataset_folder + "/" + str(n_saved_chunks) + ".pt", "wb") as f:
         torch.save(dataset_t, f)
 
+def setup_data_new(
+    model_name: str,
+    dataset_name: str,
+    dataset_folder: str,
+    tensor_names: List[str],
+    chunk_size: int,
+    n_chunks: int,
+    skip_chunks: int = 0,
+    device: Optional[torch.device] = torch.device("cuda:0"),
+    max_length: int = 2048,
+    model_batch_size: int = 4,
+    precision: Literal["float16", "float32"] = "float16",
+    shuffle_seed: Optional[int] = None,
+):
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(model_name).to(device=device)
+
+    # weak upper bound on number of lines
+    max_lines = int((chunk_size * (n_chunks + skip_chunks)) / max_length) * 2
+
+    print(f"Processing first {max_lines} lines of dataset...")
+
+    sentence_dataset = make_sentence_dataset(dataset_name, max_lines=max_lines)
+    tokenized_sentence_dataset, _ = chunk_and_tokenize(sentence_dataset, tokenizer, max_length=max_length)
+    make_activation_dataset_hf(
+        tokenized_sentence_dataset,
+        model,
+        tensor_names,
+        chunk_size,
+        n_chunks,
+        output_folder=output_folder,
+        skip_chunks=skip_chunks,
+        device=device,
+        max_length=max_length,
+        model_batch_size=model_batch_size,
+        precision=precision,
+        shuffle_seed=shuffle_seed,
+    )
 
 def setup_data(
     tokenizer,
@@ -456,7 +601,7 @@ def setup_data(
         )
     else:
         dataset_folder = [dataset_folder] if isinstance(dataset_folder, str) else dataset_folder
-        n_datapoints = make_activation_dataset_hf(
+        n_datapoints = make_activation_dataset_tl(
             sentence_dataset=token_loader,
             model=model,
             activation_width=activation_width,

@@ -20,9 +20,9 @@ stylemap = {
     "pca_pve": ("Nonneg. PCA", ("dashdot", "o"), "Oranges", 0.7),
 }
 
-def plot_bottleneck_scores():
+def plot_bottleneck_scores(layer, title=False):
     base_folder = "sparse_coding_aidan"
-    scores = torch.load(f"feat_ident_results_410m_l11.pt")
+    scores = torch.load(f"ioi_feat/feat_ident_results_l{layer}.pt")
 
     xs, ys, zs, keys = [], [], [], []
     for key, score in scores:
@@ -43,10 +43,13 @@ def plot_bottleneck_scores():
 
     #diff_mean_scores = torch.load("diff_mean_scores_layer_2.pt")
 
-    fig, ax = plt.subplots()
+    fig, (ax1, ax2) = plt.subplots(ncols=2, sharey=True, figsize=(6.0 * 2 if not title else 4.8 * 2, 4.8))
 
-    ax.grid(True, alpha=0.5, linestyle="dashed")
-    ax.set_axisbelow(True)
+    if title:
+        fig.suptitle(f"Layer {layer}")
+
+    ax1.grid(True, alpha=0.5, linestyle="dashed")
+    ax1.set_axisbelow(True)
 
     for key, x, y, (style, color) in zip(keys, xs, ys, product(styles, colors)):
         #style = "dashed"
@@ -76,38 +79,24 @@ def plot_bottleneck_scores():
         cmap = plt.get_cmap(color)
         c = cmap(c)
 
-        ax.plot(x, y, color=c, linestyle=style, label=label, alpha=1)
+        ax1.plot(x, y, color=c, linestyle=style, label=label, alpha=1)
 
-    ax.set_xlabel("Number of Patched Features")
-    ax.set_ylabel("KL-Divergence From Variant")
-
-    ax.set_title(f"Task Divergence versus Number of Patched Features - Layer 11")
+    ax1.set_xlabel("Number of Patched Features")
+    ax1.set_ylabel("KL Divergence From Target")
 
     #ax.set_xscale("log")
 
     #ax.set_yscale("log")
 
-    ax.set_xlim(0, 512)
+    ax1.set_xlim(0, 512)
 
     #ax.set_ylim(0, 1.2)
-
-    ax.legend(
-        #loc="upper left",
-        framealpha=1,
-    )
 
     #shutil.rmtree("graphs", ignore_errors=True)
     #os.mkdir("graphs", exist_ok=True)
 
-    plt.savefig(f"graphs/feature_ident_curve.png")
-
-    plt.close(fig)
-    del fig, ax
-
-    fig, ax = plt.subplots()
-
-    ax.grid(True, alpha=0.5, linestyle="dashed")
-    ax.set_axisbelow(True)
+    ax2.grid(True, alpha=0.5, linestyle="dashed")
+    ax2.set_axisbelow(True)
 
     for key, x, y, (marker, color) in zip(keys, zs, ys, product(markers, colors)):
         #c = 0.5
@@ -118,12 +107,10 @@ def plot_bottleneck_scores():
         cmap = plt.get_cmap(color)
         c = cmap(c)
 
-        ax.plot(x, y, color=c, linestyle=style, marker=matplotlib.markers.MarkerStyle(marker).scaled(0.75), alpha=0.5, label=label)
+        ax2.plot(x, y, color=c, linestyle=style, marker=matplotlib.markers.MarkerStyle(marker).scaled(0.75), alpha=0.5, label=label)
 
-    ax.set_xlabel("Mean Edit Magnitude")
-    ax.set_ylabel("KL-Divergence From Variant")
-
-    ax.set_title(f"Task Divergence versus Edit Magnitude - Layer 11")
+    ax2.set_xlabel("Mean Edit Magnitude")
+    #ax2.set_ylabel("KL Divergence From Target")
 
     #ax.set_xscale("log")
 
@@ -133,7 +120,7 @@ def plot_bottleneck_scores():
 
     #ax.set_ylim(0, 1.2)
 
-    ax.legend(
+    ax2.legend(
         #loc="upper left",
         framealpha=1,
     )
@@ -141,10 +128,18 @@ def plot_bottleneck_scores():
     #shutil.rmtree("graphs", ignore_errors=True)
     #os.mkdir("graphs", exist_ok=True)
 
-    plt.savefig(f"graphs/feature_ident_curve_edit.png")
+    plt.tight_layout()
+
+    plt.savefig(f"graphs_ioi/feature_ident_curve_l{layer}.png")
 
     plt.close(fig)
-    del fig, ax
 
 if __name__ == "__main__":
-    plot_bottleneck_scores()
+    TITLE = True
+    plot_bottleneck_scores(3, title=TITLE)
+    plot_bottleneck_scores(5, title=TITLE)
+    plot_bottleneck_scores(7, title=TITLE)
+    plot_bottleneck_scores(11, title=TITLE)
+    plot_bottleneck_scores(15, title=TITLE)
+    plot_bottleneck_scores(19, title=TITLE)
+    plot_bottleneck_scores(23, title=TITLE)

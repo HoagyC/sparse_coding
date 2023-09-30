@@ -362,12 +362,16 @@ def feat_ident_run_layer(cfg):
         torch.save(results, cfg.output_file)
 
 if __name__ == "__main__":
+    import sys
+
+    layer = int(sys.argv[1])
+
     cfg = dotdict({
         "model_name": "EleutherAI/pythia-410m-deduped",
-        "activation_dataset": "activation_data/layer_12/0.pt",
-        "learned_dicts": "pythia-410m-resid-l12/learned_dicts_epoch_0.pt",
+        "activation_dataset": f"activation_data/layer_{layer}/0.pt",
+        "learned_dicts": f"dicts_l{layer}/learned_dicts_epoch_0.pt",
         "dict_name": "dict_{l1_alpha:.2e}",
-        "location": (12, "residual"),
+        "location": (layer, "residual"),
         "n_prompts": 50,
         "batch_size": 100,
         "log_threshold_min": -5,
@@ -375,9 +379,9 @@ if __name__ == "__main__":
         "n_thresholds": 50,
         "n_head": 12,
         "d_head": 64,
-        "output_file": "feat_ident_results.pt",
+        "output_file": f"feat_ident_results_l{layer}.pt",
     })
 
-    print(cfg.activation_dataset, cfg.learned_dicts, cfg.location)
+    print(cfg.activation_dataset, cfg.learned_dicts, cfg.location, cfg.output_file)
 
     feat_ident_run_layer(cfg)
