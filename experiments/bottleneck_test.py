@@ -611,7 +611,7 @@ def new_bottleneck_test(cfg, layer, device, done_flag):
         pca.train_batch(activation_dataset[i:j])
 
     pca_dict = pca.to_rotation_dict(activation_dataset.shape[-1])
-    pca_dict_nz = 
+    #pca_dict_nz = 
 
     pca_dict.to_device(device)
 

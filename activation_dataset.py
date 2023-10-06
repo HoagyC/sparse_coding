@@ -10,7 +10,7 @@ from collections.abc import Generator
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union
+from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union, Literal
 
 import numpy as np
 import numpy.typing as npt
@@ -464,7 +464,7 @@ def make_activation_dataset_hf(
                 tensor_buffer[tensor_name].append(rearrange(out, "b l ... -> (b l) (...)").to(dtype=dtype).cpu())
                 return output
 
-            for name, module in net.named_modules():
+            for name, module in model.named_modules():
                 if name == tensor_name:
                     handle = module.register_forward_hook(hook)
                     hook_handles.append(handle)
@@ -484,13 +484,13 @@ def make_activation_dataset_hf(
 
             _ = model(batch)
 
-            progress_bar.update(batch_size)
+            progress_bar.update(model_batch_size)
 
             if batch_idx+1 % chunk_batches == 0:
                 for tensor_name in tensor_names:
                     save_activation_chunk(tensor_buffer[tensor_name], chunk_idx, os.path.join(output_folder, tensor_name))
                 
-                n_act = batch_idx * batch_size * max_length
+                n_act = batch_idx * model_batch_size * max_length
                 print(f"Saved chunk {chunk_idx} of activations, total size: {n_act / 1e6:.2f}M activations")
 
                 chunk_idx += 1
@@ -504,7 +504,7 @@ def make_activation_dataset_hf(
             for tensor_name in tensor_names:
                 save_activation_chunk(tensor_buffer[tensor_name], chunk_idx, os.path.join(output_folder, tensor_name))
             
-            n_act = batch_idx * batch_size * max_length
+            n_act = batch_idx * model_batch_size * max_length
             print(f"Saved undersized chunk {chunk_idx} of activations, total size: {n_act / 1e6:.2f}M activations")
 
         for hook_handle in hook_handles:
@@ -520,7 +520,7 @@ def save_activation_chunk(dataset, n_saved_chunks, dataset_folder):
 def setup_data_new(
     model_name: str,
     dataset_name: str,
-    dataset_folder: str,
+    output_folder: str,
     tensor_names: List[str],
     chunk_size: int,
     n_chunks: int,
