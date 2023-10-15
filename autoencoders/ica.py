@@ -6,10 +6,14 @@ from sklearn.decomposition import FastICA
 from sklearn.preprocessing import StandardScaler
 from torchtyping import TensorType
 
+from typing import Tuple
+
 from autoencoders.learned_dict import LearnedDict
 from autoencoders.topk_encoder import TopKLearnedDict
 
-_n_samples, _activation_size = None, None
+_n_samples, _activation_size = (
+    None, None
+) # type: Tuple[None, None]
 
 class ICAEncoder(LearnedDict):
     def __init__(self, activation_size, n_components: int = 0):

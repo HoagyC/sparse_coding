@@ -24,7 +24,7 @@ from tqdm import tqdm
 
 from utils import dotdict
 
-n_ground_truth_components, activation_dim, dataset_size = None, None, None
+n_ground_truth_components, activation_dim, dataset_size = None, None, None # type: Tuple[None, None, None]
 
 
 @dataclass

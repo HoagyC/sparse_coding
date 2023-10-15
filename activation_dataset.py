@@ -449,7 +449,7 @@ def make_activation_dataset_hf(
             dataloader_iter.__next__()
         
         # configure hooks for the model
-        tensor_buffer = {}
+        tensor_buffer: Dict[str, Any] = {}
 
         hook_handles = []
 

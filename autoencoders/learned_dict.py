@@ -5,10 +5,13 @@ import torch
 from torch import nn
 from torchtyping import TensorType
 
+from typing import Tuple
+
 from autoencoders.ensemble import DictSignature
 
-_n_dict_components, _activation_size, _batch_size = None, None, None
-
+_n_dict_components, _activation_size, _batch_size = (
+    None, None, None
+ ) # type: Tuple[None, None, None]
 
 class LearnedDict(ABC):
     n_feats: int

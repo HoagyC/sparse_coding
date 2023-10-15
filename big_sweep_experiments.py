@@ -24,6 +24,8 @@ from big_sweep import sweep
 from cluster_runs import dispatch_job_on_chunk
 from utils import dotdict
 
+from typing import Optional
+
 # an example function that builds a list of ensembles to run
 # you could this as a template for other experiments
 
@@ -34,7 +36,7 @@ from utils import dotdict
 # - a list of hyperparameters that vary between models in the same ensemble
 # - a dict of hyperparameter ranges
 
-DICT_RATIO = None
+DICT_RATIO: Optional[int] = None
 
 def tied_vs_not_experiment(cfg: dotdict):
     l1_values = list(np.logspace(-3.5, -2, 4))
@@ -92,7 +94,6 @@ def tied_vs_not_experiment(cfg: dotdict):
                 cfg.activation_width,
                 cfg.activation_width * 8,
                 l1_alpha,
-                bias_decay=bias_decay,
                 dtype=cfg.dtype,
             )
             for l1_alpha, bias_decay in cfgs
@@ -140,7 +141,6 @@ def tied_vs_not_experiment(cfg: dotdict):
                 cfg.activation_width,
                 cfg.activation_width * 4,
                 l1_alpha,
-                bias_decay=bias_decay,
                 dtype=cfg.dtype,
             )
             for l1_alpha, bias_decay in cfgs
@@ -188,7 +188,6 @@ def tied_vs_not_experiment(cfg: dotdict):
                 cfg.activation_width,
                 cfg.activation_width * 2,
                 l1_alpha,
-                bias_decay=bias_decay,
                 dtype=cfg.dtype,
             )
             for l1_alpha, bias_decay in cfgs
@@ -305,7 +304,6 @@ def dense_l1_range_experiment(cfg: dotdict):
                     cfg.activation_width,
                     dict_size,
                     l1_alpha,
-                    bias_decay=0.0,
                     dtype=cfg.dtype,
                 )
                 for l1_alpha in cfgs
@@ -507,7 +505,6 @@ def zero_l1_baseline(cfg: dotdict):
                 cfg.activation_width,
                 dict_size,
                 l1_alpha,
-                bias_decay=0.0,
                 dtype=cfg.dtype,
             )
             for l1_alpha in cfgs
@@ -874,7 +871,7 @@ def pythia_1_4_b_dict(cfg: dotdict):
             },
             device=device
         )
-        args = {"batch_size": cfg.batch_size, "device": device, "dict_size": dict_sizes[i]}
+        args = {"batch_size": cfg.batch_size, "device": device, "dict_size": dict_size}
         name = f"l1_{i}"
         ensembles.append((ensemble, args, name))
 
@@ -926,7 +923,6 @@ def run_zeros_only(cfg: dotdict):
                 cfg.activation_width,
                 dict_size,
                 l1_alpha,
-                bias_decay=0.0,
                 dtype=cfg.dtype,
             )
             for l1_alpha in l1_values
@@ -974,7 +970,6 @@ def long_mlp_sweep(cfg: dotdict):
                 cfg.activation_width,
                 dict_size,
                 l1_alpha,
-                bias_decay=0.0,
                 dtype=cfg.dtype,
             )
             for l1_alpha in l1_values
@@ -1112,7 +1107,6 @@ def simple_setoff(cfg: dotdict) -> Tuple[List[Tuple[FunctionalEnsemble, dict, st
                 cfg.activation_width,
                 dict_size,
                 l1_alpha,
-                bias_decay=0.0,
                 dtype=cfg.dtype,
             )
             for l1_alpha in l1_values

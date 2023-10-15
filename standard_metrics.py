@@ -31,7 +31,7 @@ from sklearn import metrics
 
 matplotlib.use('Agg')
 
-_batch_size, _activation_size, _n_dict_components, _fragment_len, _n_sentences, _n_dicts = None, None, None, None, None, None
+_batch_size, _activation_size, _n_dict_components, _fragment_len, _n_sentences, _n_dicts = None, None, None, None, None, None # type: Tuple[None, None, None, None, None, None]
 
 def run_with_model_intervention(transformer: HookedTransformer, model: LearnedDict, tensor_name, tokens, other_hooks=[], **kwargs):
     def intervention(tensor, hook=None):

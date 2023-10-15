@@ -37,7 +37,7 @@ _batch, _sequence, _n_dict_components, _d_activation, _vocab_size = (
     None,
     None,
     None,
-)
+) # type: Tuple[None, None, None, None, None]
 
 BASE_FOLDER = "~/sparse_coding_aidan"
 
@@ -464,7 +464,7 @@ def acdc_test(
     ] = scaled_distance_to_clean,
     initial_directions: Optional[List[int]] = None,
 ) -> List[Tuple[List[int], float, float]]:
-    ablation_type = "ablation"
+    ablation_type: Literal["ablation"] = "ablation"
 
     if initial_directions is None:
         initial_directions = list(range(lens.n_dict_components()))
@@ -493,7 +493,7 @@ def acdc_test(
         return_type="logits",
     )
 
-    scores = []
+    scores: List[Any] = []
 
     zero_logits, zero_activation = acdc_intervention(
         model,

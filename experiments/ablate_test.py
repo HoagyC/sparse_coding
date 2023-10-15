@@ -33,11 +33,13 @@ from neuron_explainer.explanations.prompt_builder import PromptFormat
 from neuron_explainer.explanations.simulator import ExplanationNeuronSimulator
 
 REPLACEMENT_CHAR = "�"
-MAX_CONCURRENT = None
+MAX_CONCURRENT = None # type: None
 EXPLAINER_MODEL_NAME = "gpt-4"  # "gpt-3.5-turbo"
 SIMULATOR_MODEL_NAME = "text-davinci-003"
 
-_n_dict_components, _n_sentences, _fragment_len = None, None, None
+_n_dict_components, _n_sentences, _fragment_len = (
+    None, None, None
+) # type: Tuple[None, None, None]
 
 
 def run_ablating_model_directions(
