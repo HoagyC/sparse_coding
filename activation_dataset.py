@@ -1,34 +1,22 @@
-import argparse
-import importlib
-import itertools
 import json
 import math
 import multiprocessing as mp
 import os
-import pickle
-from collections.abc import Generator
-from copy import deepcopy
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union
+from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union, Literal
 
-import numpy as np
-import numpy.typing as npt
 import pandas as pd
 import torch
 import torch.nn as nn
-import torch.optim as optim
-import wandb
 
 from baukit import Trace
 from datasets import Dataset, DatasetDict, load_dataset
 from einops import rearrange
 from torch.utils.data import DataLoader
-from torchtyping import TensorType
 from tqdm import tqdm
 from transformer_lens import HookedTransformer
 from transformer_lens.loading_from_pretrained import get_official_model_name, convert_hf_model_config
-from transformers import GPT2Tokenizer, PreTrainedTokenizerBase
+from transformers import PreTrainedTokenizerBase
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from utils import *
 
@@ -54,6 +42,7 @@ def get_activation_size(model_name: str, layer_loc: str):
         "residual",
         "mlp",
         "attn",
+        "attn_concat",
         "mlpout",
     ], f"Layer location {layer_loc} not supported"
     model_cfg = convert_hf_model_config(model_name)
@@ -65,6 +54,8 @@ def get_activation_size(model_name: str, layer_loc: str):
         return model_cfg["d_head"] * model_cfg["n_heads"]
     elif layer_loc == "mlpout":
         return model_cfg["d_model"]
+    elif layer_loc == "attn_concat":
+        return model_cfg["d_head"] * model_cfg["n_heads"]
 
 
 def check_transformerlens_model(model_name: str):
@@ -81,6 +72,7 @@ def make_tensor_name(layer: int, layer_loc: str, model_name: str) -> str:
         "residual",
         "mlp",
         "attn",
+        "attn_concat",
         "mlpout",
     ], f"Layer location {layer_loc} not supported"
     if layer_loc == "residual":
@@ -88,6 +80,11 @@ def make_tensor_name(layer: int, layer_loc: str, model_name: str) -> str:
             tensor_name = f"blocks.{layer}.hook_resid_post"
         else:
             raise NotImplementedError(f"Model {model_name} not supported for residual stream")
+    elif layer_loc == "attn_concat":
+        if check_transformerlens_model(model_name):
+            tensor_name = f"blocks.{layer}.attn.hook_z"
+        else:
+            raise NotImplementedError(f"Model {model_name} not supported for attention output")
     elif layer_loc == "mlp":
         if check_transformerlens_model(model_name):
             tensor_name = f"blocks.{layer}.mlp.hook_post"
@@ -323,7 +320,7 @@ def make_activation_dataset(
             print(f"Saved undersized chunk {n_saved_chunks} of activations, total size:  {batch_idx * activation_size} ")
 
 
-def make_activation_dataset_hf(
+def make_activation_dataset_tl(
     sentence_dataset: DataLoader,
     model: HookedTransformer,
     activation_width: int,
@@ -365,7 +362,10 @@ def make_activation_dataset_hf(
                 for layer in layers:
                     tensor_name = make_tensor_name(layer, tensor_loc, model.cfg.model_name)
                     activation_data = cache[tensor_name].to(torch.float16)
-                    activation_data = rearrange(activation_data, "b s n -> (b s) n")
+                    if tensor_loc == "attn_concat":
+                        activation_data = rearrange(activation_data, "b s n d -> (b s) (n d)")
+                    else:
+                        activation_data = rearrange(activation_data, "b s n -> (b s) n")
                     if layer == layers[0]:
                         n_activations += activation_data.shape[0]
                     datasets[layer].append(activation_data)
@@ -390,12 +390,156 @@ def make_activation_dataset_hf(
     #return ((chunk_means, chunk_stds) if center_dataset else None, n_activations)
     return n_activations
 
+def make_activation_dataset_hf(
+    sentence_dataset: Dataset,
+    model: AutoModelForCausalLM,
+    tensor_names: List[str],
+    chunk_size: int,
+    n_chunks: int,
+    output_folder: str = "activation_data",
+    skip_chunks: int = 0,
+    device: Optional[torch.device] = torch.device("cuda:0"),
+    max_length: int = 2048,
+    model_batch_size: int = 4,
+    precision: Literal["float16", "float32"] = "float16",
+    shuffle_seed: Optional[int] = None,
+):
+    with torch.no_grad():
+        model.eval()
+
+        dtype = None
+        if precision == "float16":
+            dtype = torch.float16
+        elif precision == "float32":
+            dtype = torch.float32
+        else:
+            raise ValueError(f"Invalid precision '{precision}'")
+
+        dataset_iterator = iter(sentence_dataset)
+        chunk_batches = chunk_size // (model_batch_size * max_length)
+        batches_to_skip = skip_chunks * chunk_batches
+
+        if shuffle_seed is not None:
+            torch.manual_seed(shuffle_seed)
+
+        dataloader = DataLoader(
+            sentence_dataset,
+            batch_size=model_batch_size,
+            shuffle=shuffle_seed is not None,
+        )
+
+        dataloader_iter = iter(dataloader)
+
+        for _ in range(batches_to_skip):
+            dataloader_iter.__next__()
+        
+        # configure hooks for the model
+        tensor_buffer: Dict[str, Any] = {}
+
+        hook_handles = []
+
+        for tensor_name in tensor_names:
+            tensor_buffer[tensor_name] = []
+
+            def hook(module, output, tensor_name=tensor_name):
+                if type(output) == tuple:
+                    out = output[0]
+                else:
+                    out = output
+                tensor_buffer[tensor_name].append(rearrange(out, "b l ... -> (b l) (...)").to(dtype=dtype).cpu())
+                return output
+
+            for name, module in model.named_modules():
+                if name == tensor_name:
+                    handle = module.register_forward_hook(hook)
+                    hook_handles.append(handle)
+
+        def reset_buffers():
+            for tensor_name in tensor_names:
+                tensor_buffer[tensor_name] = []
+
+        reset_buffers()
+
+        chunk_idx = 0
+
+        progress_bar = tqdm(total=chunk_size * n_chunks)
+
+        for batch_idx, batch in enumerate(dataloader_iter):
+            batch = batch["input_ids"].to(device)
+
+            _ = model(batch)
+
+            progress_bar.update(model_batch_size)
+
+            if batch_idx+1 % chunk_batches == 0:
+                for tensor_name in tensor_names:
+                    save_activation_chunk(tensor_buffer[tensor_name], chunk_idx, os.path.join(output_folder, tensor_name))
+                
+                n_act = batch_idx * model_batch_size * max_length
+                print(f"Saved chunk {chunk_idx} of activations, total size: {n_act / 1e6:.2f}M activations")
+
+                chunk_idx += 1
+                
+                reset_buffers()
+                if chunk_idx >= n_chunks:
+                    break
+        
+        # undersized final chunk
+        if chunk_idx < n_chunks:
+            for tensor_name in tensor_names:
+                save_activation_chunk(tensor_buffer[tensor_name], chunk_idx, os.path.join(output_folder, tensor_name))
+            
+            n_act = batch_idx * model_batch_size * max_length
+            print(f"Saved undersized chunk {chunk_idx} of activations, total size: {n_act / 1e6:.2f}M activations")
+
+        for hook_handle in hook_handles:
+            hook_handle.remove()
+        
+
 def save_activation_chunk(dataset, n_saved_chunks, dataset_folder):
     dataset_t = torch.cat(dataset, dim=0).to("cpu")
     os.makedirs(dataset_folder, exist_ok=True)
     with open(dataset_folder + "/" + str(n_saved_chunks) + ".pt", "wb") as f:
         torch.save(dataset_t, f)
 
+def setup_data_new(
+    model_name: str,
+    dataset_name: str,
+    output_folder: str,
+    tensor_names: List[str],
+    chunk_size: int,
+    n_chunks: int,
+    skip_chunks: int = 0,
+    device: Optional[torch.device] = torch.device("cuda:0"),
+    max_length: int = 2048,
+    model_batch_size: int = 4,
+    precision: Literal["float16", "float32"] = "float16",
+    shuffle_seed: Optional[int] = None,
+):
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(model_name).to(device=device)
+
+    # weak upper bound on number of lines
+    max_lines = int((chunk_size * (n_chunks + skip_chunks)) / max_length) * 2
+
+    print(f"Processing first {max_lines} lines of dataset...")
+
+    sentence_dataset = make_sentence_dataset(dataset_name, max_lines=max_lines)
+    tokenized_sentence_dataset, _ = chunk_and_tokenize(sentence_dataset, tokenizer, max_length=max_length)
+    make_activation_dataset_hf(
+        tokenized_sentence_dataset,
+        model,
+        tensor_names,
+        chunk_size,
+        n_chunks,
+        output_folder=output_folder,
+        skip_chunks=skip_chunks,
+        device=device,
+        max_length=max_length,
+        model_batch_size=model_batch_size,
+        precision=precision,
+        shuffle_seed=shuffle_seed,
+    )
 
 def setup_data(
     tokenizer,
@@ -442,7 +586,7 @@ def setup_data(
         )
     else:
         dataset_folder = [dataset_folder] if isinstance(dataset_folder, str) else dataset_folder
-        n_datapoints = make_activation_dataset_hf(
+        n_datapoints = make_activation_dataset_tl(
             sentence_dataset=token_loader,
             model=model,
             activation_width=activation_width,

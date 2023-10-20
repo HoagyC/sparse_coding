@@ -29,7 +29,6 @@ def single_setoff(cfg):
                 cfg.activation_width,
                 dict_size,
                 l1_alpha,
-                bias_decay=0.0,
                 dtype=cfg.dtype,
             )
             for l1_alpha in l1_values

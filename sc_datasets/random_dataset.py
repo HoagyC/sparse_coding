@@ -10,7 +10,7 @@ n_ground_truth_components_, activation_dim_, dataset_size_ = (
     None,
     None,
     None,
-)  # for tensortype vars
+) # type: Tuple[None, None, None]
 
 
 @dataclass

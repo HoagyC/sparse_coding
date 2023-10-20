@@ -5,10 +5,13 @@ import torch
 from torch import nn
 from torchtyping import TensorType
 
+from typing import Tuple
+
 from autoencoders.ensemble import DictSignature
 
-_n_dict_components, _activation_size, _batch_size = None, None, None
-
+_n_dict_components, _activation_size, _batch_size = (
+    None, None, None
+ ) # type: Tuple[None, None, None]
 
 class LearnedDict(ABC):
     n_feats: int
@@ -51,19 +54,34 @@ class LearnedDict(ABC):
 
 
 class Identity(LearnedDict):
-    def __init__(self, activation_size):
+    def __init__(self, activation_size, device=None):
         self.n_feats = activation_size
         self.activation_size = activation_size
+        self.device = "cpu" if device is None else device
 
     def get_learned_dict(self):
-        return torch.eye(self.n_feats)
+        return torch.eye(self.n_feats, device=self.device)
 
     def encode(self, batch):
         return batch
 
     def to_device(self, device):
-        pass
+        self.device = device
 
+class IdentityPositive(LearnedDict):
+    def __init__(self, activation_size, device=None):
+        self.n_feats = activation_size
+        self.activation_size = activation_size
+        self.device = "cpu" if device is None else device
+
+    def get_learned_dict(self):
+        return torch.cat([torch.eye(self.n_feats, device=self.device), -torch.eye(self.n_feats, device=self.device)], dim=0)
+
+    def encode(self, batch):
+        return torch.clamp(torch.cat([batch, -batch], dim=-1), min=0.0)
+
+    def to_device(self, device):
+        self.device = device
 
 class IdentityReLU(LearnedDict):
     def __init__(self, activation_size, bias: Optional[torch.Tensor] = None):
@@ -132,7 +150,7 @@ class UntiedSAE(LearnedDict):
 
 
 class TiedSAE(LearnedDict):
-    def __init__(self, encoder, encoder_bias, centering=(None, None, None), norm_encoder=False):
+    def __init__(self, encoder, encoder_bias, centering=(None, None, None), norm_encoder=True):
         self.encoder = encoder
         self.encoder_bias = encoder_bias
         self.norm_encoder = norm_encoder
@@ -145,6 +163,7 @@ class TiedSAE(LearnedDict):
         
         if center_rot is None:
             center_rot = torch.eye(self.activation_size)
+            print(center_rot)
         
         if center_scale is None:
             center_scale = torch.ones(self.activation_size)

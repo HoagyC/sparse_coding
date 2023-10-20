@@ -31,7 +31,7 @@ from sklearn import metrics
 
 matplotlib.use('Agg')
 
-_batch_size, _activation_size, _n_dict_components, _fragment_len, _n_sentences, _n_dicts = None, None, None, None, None, None
+_batch_size, _activation_size, _n_dict_components, _fragment_len, _n_sentences, _n_dicts = None, None, None, None, None, None # type: Tuple[None, None, None, None, None, None]
 
 def run_with_model_intervention(transformer: HookedTransformer, model: LearnedDict, tensor_name, tokens, other_hooks=[], **kwargs):
     def intervention(tensor, hook=None):
@@ -60,6 +60,8 @@ def get_model_tensor_name(location: Location) -> str:
         return f"blocks.{location[0]}.hook_resid_post"
     elif location[1] == "mlp":
         return f"blocks.{location[0]}.mlp.hook_post"
+    elif location[1] == "attn_concat":
+        return f"blocks.{location[0]}.attn.hook_z"
     else:
         raise ValueError(f"Location '{location[1]}' not supported")
 

@@ -4,6 +4,8 @@ __pycache__/**
 **.pyc
 .pre-commit-config.yaml
 tmp
+mypy.ini
+Python-3*
 
 .env
 .config
