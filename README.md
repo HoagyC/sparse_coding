@@ -12,4 +12,4 @@ If you run `interpret.py read_results --kwargs..` and select the `--model_name`,
 
 ## Training Your Own Sparse Autoencoders
 
-If you'd like to train your own sparse autoencoders, we recommend using the [sparse_autoencoder](https://github.com/ai-safety-foundation/sparse_autoencoder) library which is currenty under development and should be easier to use and keep up with best practices as they developd.
+If you'd like to train your own sparse autoencoders, we recommend using the [sparse_autoencoder](https://github.com/ai-safety-foundation/sparse_autoencoder) library which is currenty under development and should be easier to use and keep up with best practices as they develop.
